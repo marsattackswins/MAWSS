@@ -8,6 +8,15 @@ This block is written and re-added by `next dev` — verify at `node_modules/nex
 
 <!-- END:nextjs-agent-rules -->
 
+## Charting engine (`lib/charting`)
+
+Vendored source of LuxAlgo's vela charting library (Apache-2.0 — keep `lib/charting/LICENSE` and `NOTICE`), consumed as source: there is no npm package or build step for it.
+
+- App code imports it as `@/lib/charting` (and `@/lib/charting/data/providers/binance`).
+- Its own vitest suite runs via `npm run test:charting`; jest ignores the folder and stubs it through `__mocks__/vela.js` + `__mocks__/vela-providers-binance.js`.
+- The folder is excluded from the app's eslint rules — follow upstream's style there, keep the attribution mark intact (NOTICE obligation), and document local fixes in `lib/charting/README.md`.
+- The npm package `@luxalgo/vela` in dependencies exists only to satisfy `@luxalgo/vela-pinets`' peer dependency — app code never imports the registry copy.
+
 ## Function design
 
 - Prefer small, single-purpose functions; treat roughly 40 logical lines as a review prompt, not a hard limit.

@@ -1,41 +1,49 @@
-import type { IChartApi, ISeriesApi, LogicalRange, SeriesType, Time } from "lightweight-charts";
-import type { Candle } from "@/types";
+import type { Vela, NativeRenderer } from "@/lib/charting";
 
+/**
+ * Per-chart-pane Vela handle registry (Vela migration).
+ *
+ * `renderer` is the chart's own NativeRenderer instance — kept so overlay
+ * owners (order blocks, session breaks, trade zones) can push layer payloads
+ * via `renderer.setNativeData(id, data)`.
+ */
 export type ChartHandle = {
-  chart: IChartApi;
-  series: ISeriesApi<SeriesType>;
-  /** Client-space hit test for plotted indicators (vwap/volume/rsi/atr). */
-  hitTestIndicator?: (clientX: number, clientY: number) => string | null;
-  /** Bars applied to `series` — as displayed, so Heikin Ashi rewrites OHLC (times are untouched). */
-  candles?: Candle[];
+  vela: Vela;
+  renderer: NativeRenderer;
+  /** The DOM element the chart mounted on. */
+  el: HTMLElement;
 };
 
 const handles = new Map<string, ChartHandle>();
 
+// Dev-only debugging aid: `__mawsCharts.get('<paneId>').vela` in the console.
+if (process.env.NODE_ENV !== "production" && typeof window !== "undefined") {
+  (window as unknown as { __mawsCharts?: unknown }).__mawsCharts = handles;
+}
+
+// ── workspace engine handle (VelaWorkspace migration) ──────────────────────
+// When the workspace engine hosts the grid, shell surfaces (TopBar screenshot,
+// AppShell shortcuts) reach the shared VelaWorkspace through this accessor.
+type WorkspaceHandle = {
+  /** Composite screenshot of the whole grid → PNG data URL (null when empty). */
+  screenshot(): string | null;
+  /** Download the composite screenshot (workspace's own filename). */
+  downloadScreenshot(): void;
+  /** Maximize one cell over the grid (null restores). */
+  maximizeCell(id: string | null): void;
+};
+
+let workspaceHandle: WorkspaceHandle | null = null;
+
+export function setWorkspaceHandle(handle: WorkspaceHandle | null): void {
+  workspaceHandle = handle;
+}
+
+export function getWorkspace(): WorkspaceHandle | null {
+  return workspaceHandle;
+}
+
 let syncing = false;
-let scaleWidthRaf = 0;
-
-export function registerChart(paneId: string, handle: ChartHandle) {
-  handles.set(paneId, handle);
-  schedulePriceScaleWidthSync(true);
-}
-
-export function unregisterChart(paneId: string) {
-  handles.delete(paneId);
-  schedulePriceScaleWidthSync(true);
-}
-
-export function getChart(paneId: string): ChartHandle | undefined {
-  return handles.get(paneId);
-}
-
-export function forEachChart(fn: (paneId: string, handle: ChartHandle) => void) {
-  handles.forEach((handle, paneId) => fn(paneId, handle));
-}
-
-export function isChartSyncing() {
-  return syncing;
-}
 
 function withChartSync(fn: () => void) {
   if (syncing) return;
@@ -47,144 +55,65 @@ function withChartSync(fn: () => void) {
   }
 }
 
-/** Keep right (and left) price scales the same width across multi-chart panes. */
-export function syncPriceScaleWidths(forceRemeasure = false) {
-  const charts = [...handles.values()];
-  if (charts.length === 0) return;
-
-  if (charts.length === 1) {
-    try {
-      charts[0].chart.priceScale("right").applyOptions({ minimumWidth: 0 });
-    } catch {
-      /* ignore */
-    }
-    try {
-      charts[0].chart.priceScale("left").applyOptions({ minimumWidth: 0 });
-    } catch {
-      /* ignore */
-    }
-    return;
-  }
-
-  if (forceRemeasure) {
-    for (const handle of charts) {
-      try {
-        handle.chart.priceScale("right").applyOptions({ minimumWidth: 0 });
-      } catch {
-        /* ignore */
-      }
-      try {
-        handle.chart.priceScale("left").applyOptions({ minimumWidth: 0 });
-      } catch {
-        /* ignore */
-      }
-    }
-  }
-
-  let maxRight = 0;
-  let maxLeft = 0;
-  for (const handle of charts) {
-    try {
-      maxRight = Math.max(maxRight, handle.chart.priceScale("right").width());
-    } catch {
-      /* ignore */
-    }
-    try {
-      maxLeft = Math.max(maxLeft, handle.chart.priceScale("left").width());
-    } catch {
-      /* ignore */
-    }
-  }
-
-  maxRight = Math.ceil(maxRight);
-  maxLeft = Math.ceil(maxLeft);
-
-  for (const handle of charts) {
-    try {
-      handle.chart.priceScale("right").applyOptions({ minimumWidth: maxRight });
-    } catch {
-      /* ignore */
-    }
-    if (maxLeft > 0) {
-      try {
-        handle.chart.priceScale("left").applyOptions({ minimumWidth: maxLeft });
-      } catch {
-        /* ignore */
-      }
-    }
-  }
+export function registerChart(paneId: string, handle: ChartHandle) {
+  handles.set(paneId, handle);
 }
 
-export function schedulePriceScaleWidthSync(forceRemeasure = false) {
-  if (typeof requestAnimationFrame === "undefined") {
-    syncPriceScaleWidths(forceRemeasure);
-    return;
-  }
-  if (scaleWidthRaf) cancelAnimationFrame(scaleWidthRaf);
-  scaleWidthRaf = requestAnimationFrame(() => {
-    scaleWidthRaf = 0;
-    if (forceRemeasure) {
-      requestAnimationFrame(() => syncPriceScaleWidths(true));
-    } else {
-      syncPriceScaleWidths(false);
-    }
-  });
+export function unregisterChart(paneId: string) {
+  handles.delete(paneId);
 }
 
-export function syncCrosshairToOthers(sourcePaneId: string, time: Time, price: number) {
-  withChartSync(() => {
-    forEachChart((paneId, handle) => {
-      if (paneId === sourcePaneId) return;
-      try {
-        handle.chart.setCrosshairPosition(price, time, handle.series);
-      } catch {
-        /* series may not have that time */
-      }
-    });
-  });
+export function getChart(paneId: string): ChartHandle | undefined {
+  return handles.get(paneId);
 }
 
-export function clearSyncedCrosshair(sourcePaneId: string) {
-  withChartSync(() => {
-    forEachChart((paneId, handle) => {
-      if (paneId === sourcePaneId) return;
-      try {
-        handle.chart.clearCrosshairPosition();
-      } catch {
-        /* ignore */
-      }
-    });
-  });
+/** The live Vela instance for a pane (or null). */
+export function getVela(paneId: string): Vela | null {
+  return handles.get(paneId)?.vela ?? null;
 }
 
-export function syncLogicalRangeToOthers(sourcePaneId: string, range: LogicalRange) {
-  withChartSync(() => {
-    forEachChart((paneId, handle) => {
-      if (paneId === sourcePaneId) return;
-      try {
-        handle.chart.timeScale().setVisibleLogicalRange(range);
-      } catch {
-        /* ignore */
-      }
-    });
-  });
+export function forEachChart(fn: (paneId: string, handle: ChartHandle) => void) {
+  handles.forEach((handle, paneId) => fn(paneId, handle));
 }
 
-export function syncVisibleRangeToOthers(
+// ── multi-chart sync (crosshair + viewport), via Vela's public seams ─────────
+
+/** Mirror the crosshair of `sourcePaneId` onto every other chart. `time` is epoch-ms. */
+export function syncCrosshairToOthers(
   sourcePaneId: string,
-  range: { from: Time; to: Time },
+  time: number | null,
+  price: number | null,
 ) {
   withChartSync(() => {
     forEachChart((paneId, handle) => {
       if (paneId === sourcePaneId) return;
       try {
-        handle.chart.timeScale().setVisibleRange(range);
+        handle.vela.renderer.setExternalCrosshair(time, price);
+      } catch {
+        /* renderer may not support the seam */
+      }
+    });
+  });
+}
+
+/** Mirror the visible time range of `sourcePaneId` onto every other chart (epoch-ms). */
+export function syncVisibleRangeToOthers(
+  sourcePaneId: string,
+  range: { from: number; to: number },
+) {
+  withChartSync(() => {
+    forEachChart((paneId, handle) => {
+      if (paneId === sourcePaneId) return;
+      try {
+        handle.vela.setVisibleRange(range);
       } catch {
         /* ignore */
       }
     });
   });
 }
+
+// ── last crosshair (drives context menu / shortcuts) ────────────────────────
 
 export type LastCrosshair = {
   paneId: string;

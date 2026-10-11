@@ -186,8 +186,8 @@ export function SettingsBtn({
     variant === "primary"
       ? "bg-white text-black hover:bg-[#e0e3eb]"
       : variant === "ghost"
-        ? "border border-[#4c525e] text-[#d1d4dc] hover:border-[#787b86] hover:bg-[#222222]"
-        : "border border-[#4c525e] text-[#d1d4dc] hover:border-[#787b86] hover:bg-[#222222]";
+        ? "border border-[#4c525e] text-(--app-text) hover:border-[#787b86] hover:bg-(--app-hover)"
+        : "border border-[#4c525e] text-(--app-text) hover:border-[#787b86] hover:bg-(--app-hover)";
   return <button type="button" className={`${base} ${styles} ${className}`} {...rest} />;
 }
 
@@ -295,7 +295,7 @@ export function SettingsSelectWrap({ children }: { children: ReactNode }) {
   return (
     <div className="relative">
       {children}
-      <span className="pointer-events-none absolute top-1/2 right-2 -translate-y-1/2 text-[10px] text-[#787b86]">
+      <span className="pointer-events-none absolute top-1/2 right-2 -translate-y-1/2 text-[10px] text-(--app-muted)">
         ▾
       </span>
     </div>

@@ -1,10 +1,8 @@
 "use client";
 
 import { getChart } from "@/lib/chart-registry";
-import { zoomInRightAnchored, zoomOutRightAnchored } from "@/lib/chart-zoom";
 import { mawsFeed } from "@/lib/maws/feed";
 import { useAppStore } from "@/lib/store";
-import { chartOptions } from "@/lib/theme";
 import type { ChartSettings } from "@/types";
 import { ChevronLeft, ChevronRight, Minus, Plus, RotateCcw } from "lucide-react";
 import { useState, type MouseEvent as ReactMouseEvent, type ReactNode } from "react";
@@ -19,26 +17,15 @@ type Props = {
 
 const PAN_FRAC = 0.28;
 const DEFAULT_VISIBLE_BARS = 90;
-const MIN_SPAN = 8;
 
-function panLogical(paneId: string, direction: -1 | 1) {
-  const ts = getChart(paneId)?.chart.timeScale();
-  if (!ts) return;
-  const range = ts.getVisibleLogicalRange();
+/** Right-anchored zoom over Vela's visible time range (epoch-ms). */
+function zoom(paneId: string, factor: number) {
+  const handle = getChart(paneId);
+  if (!handle) return;
+  const range = handle.vela.getVisibleRange();
   if (!range) return;
-  const span = Math.max(MIN_SPAN, range.to - range.from);
-  const delta = span * PAN_FRAC * direction;
-  ts.setVisibleLogicalRange({ from: range.from + delta, to: range.to + delta });
-}
-
-function zoomIn(paneId: string) {
-  const ts = getChart(paneId)?.chart.timeScale();
-  if (ts) zoomInRightAnchored(ts);
-}
-
-function zoomOut(paneId: string) {
-  const ts = getChart(paneId)?.chart.timeScale();
-  if (ts) zoomOutRightAnchored(ts);
+  const span = Math.max(60_000, (range.to - range.from) * factor);
+  handle.vela.setVisibleRange({ from: range.to - span, to: range.to });
 }
 
 function resetChartView(paneId: string) {
@@ -46,26 +33,18 @@ function resetChartView(paneId: string) {
   if (!handle) return;
   const pane = useAppStore.getState().panes.find((p) => p.id === paneId);
   if (!pane) return;
-  const settings = useAppStore.getState().chartSettings;
   const candles = mawsFeed.getCandles(pane.symbol, pane.timeframe);
   const n = candles.length;
-  const right = settings.marginRightBars;
-  const barSpacing = chartOptions.timeScale?.barSpacing ?? 7;
-  const ts = handle.chart.timeScale();
-  ts.applyOptions({ barSpacing, rightOffset: right });
   if (n > 0) {
-    ts.setVisibleLogicalRange({
-      from: Math.max(-right, n - DEFAULT_VISIBLE_BARS),
-      to: n + right,
-    });
+    const from = candles[Math.max(0, n - DEFAULT_VISIBLE_BARS)].time * 1000;
+    handle.vela.setVisibleRange({ from, to: Date.now() + 60_000 });
   } else {
-    ts.resetTimeScale();
+    handle.vela.setVisibleRangePreset("ALL");
   }
-  handle.chart.priceScale("right").setAutoScale(true);
   try {
-    handle.chart.priceScale("left").setAutoScale(true);
+    handle.vela.renderer.set("autoScale", true);
   } catch {
-    /* left scale may be hidden */
+    /* ignore */
   }
   useAppStore.getState().setPaneAutoScale(paneId, true);
 }
@@ -84,7 +63,7 @@ function NavBtn({
       type="button"
       title={label}
       aria-label={label}
-      className="flex h-7 w-7 items-center justify-center rounded-[4px] bg-[#2a2e39] text-[#d1d4dc] shadow-[0_1px_3px_rgba(0,0,0,0.45)] hover:bg-[#363a45] hover:text-white"
+      className="flex h-7 w-7 items-center justify-center rounded-[4px] bg-(--app-hover) text-(--app-text) shadow-[0_1px_3px_rgba(0,0,0,0.45)] hover:bg-(--app-hover) hover:text-white"
       onMouseDown={(e: ReactMouseEvent) => {
         e.preventDefault();
         e.stopPropagation();
@@ -113,16 +92,16 @@ export function ChartNavigation({ paneId, mode, onViewReset }: Props) {
 
   const bar = (
     <div className="flex items-center gap-1" onMouseDown={(e) => e.stopPropagation()}>
-      <NavBtn label="Zoom out" onClick={() => run(() => zoomOut(paneId))}>
+      <NavBtn label="Zoom out" onClick={() => run(() => zoom(paneId, 1.087))}>
         <Minus size={14} strokeWidth={2.25} />
       </NavBtn>
-      <NavBtn label="Zoom in" onClick={() => run(() => zoomIn(paneId))}>
+      <NavBtn label="Zoom in" onClick={() => run(() => zoom(paneId, 0.92))}>
         <Plus size={14} strokeWidth={2.25} />
       </NavBtn>
-      <NavBtn label="Scroll left" onClick={() => run(() => panLogical(paneId, -1))}>
+      <NavBtn label="Scroll left" onClick={() => run(() => getChart(paneId)?.vela.panBy(-PAN_FRAC))}>
         <ChevronLeft size={15} strokeWidth={2.25} />
       </NavBtn>
-      <NavBtn label="Scroll right" onClick={() => run(() => panLogical(paneId, 1))}>
+      <NavBtn label="Scroll right" onClick={() => run(() => getChart(paneId)?.vela.panBy(PAN_FRAC))}>
         <ChevronRight size={15} strokeWidth={2.25} />
       </NavBtn>
       <NavBtn
