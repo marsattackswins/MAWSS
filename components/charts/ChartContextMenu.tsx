@@ -3,6 +3,7 @@
 import { getChart } from "@/lib/chart-registry";
 import { formatPrice } from "@/lib/maws/feed";
 import { useAppStore } from "@/lib/store";
+import { getTemplates, applyTemplate, saveTemplate } from "@/lib/vela-templates";
 import { newClientOrderId, submitOrderFromUi } from "@/lib/trading/ui-orders";
 import { resolveOrderQty, formatMarginLabel } from "@/lib/trading/symbol-settings";
 import { TV } from "@/lib/theme";
@@ -62,7 +63,6 @@ function BuyIcon() {
 export function ChartContextMenu() {
   const menu = useAppStore((s) => s.contextMenu);
   const setContextMenu = useAppStore((s) => s.setContextMenu);
-  const setSettingsOpen = useAppStore((s) => s.setSettingsOpen);
   const setRightDock = useAppStore((s) => s.setRightDock);
   const addAlert = useAppStore((s) => s.addAlert);
   const setClipboardPrice = useAppStore((s) => s.setClipboardPrice);
@@ -74,9 +74,6 @@ export function ChartContextMenu() {
   const vertCursorLocked = useAppStore((s) => s.vertCursorLocked);
   const setVertCursorLocked = useAppStore((s) => s.setVertCursorLocked);
   const setLockedCursorTime = useAppStore((s) => s.setLockedCursorTime);
-  const templates = useAppStore((s) => s.chartTemplates);
-  const applyChartTemplate = useAppStore((s) => s.applyChartTemplate);
-  const saveChartTemplate = useAppStore((s) => s.saveChartTemplate);
   const [tplOpen, setTplOpen] = useState(false);
   const pane = useAppStore((s) =>
     menu ? s.panes.find((p) => p.id === menu.paneId) : undefined,
@@ -107,8 +104,12 @@ export function ChartContextMenu() {
   const indicators = pane.studies.length;
 
   const resetChart = () => {
-    getChart(pane.id)?.chart.timeScale().fitContent();
-    getChart(pane.id)?.chart.priceScale("right").setAutoScale(true);
+    getChart(pane.id)?.vela.setVisibleRangePreset("ALL");
+    try {
+      getChart(pane.id)?.vela.renderer.set("autoScale", true);
+    } catch {
+      /* ignore */
+    }
     setRange("All");
   };
 
@@ -272,13 +273,22 @@ export function ChartContextMenu() {
         />
         {tplOpen && (
           <div className="ctx-sub">
-            {templates.map((t) => (
+            {getTemplates().length === 0 && (
+              <button type="button" className="ctx-item" disabled>
+                <span className="ctx-body">
+                  <span className="ctx-label" style={{ opacity: 0.5 }}>
+                    No chart templates yet
+                  </span>
+                </span>
+              </button>
+            )}
+            {getTemplates().map((t) => (
               <button
                 key={t.id}
                 type="button"
                 className="ctx-item"
                 onClick={() => {
-                  applyChartTemplate(t.id);
+                  applyTemplate(t.id);
                   close();
                 }}
               >
@@ -291,8 +301,8 @@ export function ChartContextMenu() {
               type="button"
               className="ctx-item"
               onClick={() => {
-                const name = window.prompt("Template name", "My template");
-                if (name) saveChartTemplate(name);
+                const name = window.prompt("Chart template name", "My template");
+                if (name?.trim()) saveTemplate(name.trim());
                 close();
               }}
             >
@@ -323,7 +333,8 @@ export function ChartContextMenu() {
         icon={<Settings size={15} />}
         label="Settings…"
         onClick={() => {
-          setSettingsOpen(true);
+          // One settings system: the pane's Vela chart-settings dialog.
+          (getChart(pane.id)?.renderer as unknown as { openSettings?: (s?: string) => void }).openSettings?.();
           close();
         }}
       />
