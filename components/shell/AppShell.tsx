@@ -15,6 +15,7 @@ import { BottomPanel } from "@/components/shell/BottomPanel";
 import { RightDock } from "@/components/shell/RightDock";
 import { RightSidebar } from "@/components/shell/RightSidebar";
 import { TopBar } from "@/components/shell/TopBar";
+import { JournalOverlay } from "@/components/shell/JournalOverlay";
 import { getChart, getLastCrosshair, getWorkspace } from "@/lib/chart-registry";
 import { restoreServerProfile } from "@/lib/live/bridge";
 import { useLiveStore } from "@/lib/live/store";
@@ -135,6 +136,7 @@ export function AppShell() {
   const setDrawingSettingsTarget = useAppStore((s) => s.setDrawingSettingsTarget);
   const setBrokerDialogOpen = useAppStore((s) => s.setBrokerDialogOpen);
   const setAccountSettingsOpen = useAppStore((s) => s.setAccountSettingsOpen);
+  const setJournalOverlayOpen = useAppStore((s) => s.setJournalOverlayOpen);
   const setMaximizedPane = useAppStore((s) => s.setMaximizedPane);
 
   useSyncHotSymbols(ready);
@@ -175,6 +177,9 @@ export function AppShell() {
           // Vela's own dialog (the same one the symbol button and bare typing open);
           // the shell popover it used to raise no longer exists.
           getWorkspace()?.openSymbolSearch();
+          break;
+        case "toggleJournal":
+          s.setJournalOverlayOpen(!s.journalOverlayOpen);
           break;
         case "fitChart": {
           if (!pane) return;
@@ -263,6 +268,10 @@ export function AppShell() {
       const s = useAppStore.getState();
 
       if (e.key === "Escape") {
+        if (s.journalOverlayOpen) {
+          setJournalOverlayOpen(false);
+          return;
+        }
         if (s.settingsOpen) {
           setSettingsOpen(false);
           return;
@@ -327,6 +336,7 @@ export function AppShell() {
     setIndicatorSettingsOpen,
     setBrokerDialogOpen,
     setAccountSettingsOpen,
+    setJournalOverlayOpen,
     setMaximizedPane,
     setDrawingSettingsTarget,
   ]);
@@ -352,10 +362,14 @@ export function AppShell() {
           <ReplayBar />
         </div>
         <RightSidebar />
+        {/* The shortcut rail hides with the whole right side: the top-bar arrow
+            stows panel + rail together (RightDock returns null on !rightOpen),
+            while a rail icon itself folds only its own panel body. */}
         <RightDock />
       </div>
 
       <SettingsModal />
+      <JournalOverlay />
       <IndicatorSettingsModal />
       <DrawingSettingsModal />
       <BrokerDialog />

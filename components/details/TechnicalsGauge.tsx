@@ -1,17 +1,6 @@
 "use client";
 
-import { useId } from "react";
-
-function polar(cx: number, cy: number, deg: number, radius: number) {
-  const rad = (deg * Math.PI) / 180;
-  return { x: cx + Math.cos(rad) * radius, y: cy - Math.sin(rad) * radius };
-}
-
-function arcPath(cx: number, cy: number, radius: number, startDeg: number, endDeg: number) {
-  const s = polar(cx, cy, startDeg, radius);
-  const e = polar(cx, cy, endDeg, radius);
-  return `M ${s.x.toFixed(2)} ${s.y.toFixed(2)} A ${radius} ${radius} 0 0 1 ${e.x.toFixed(2)} ${e.y.toFixed(2)}`;
-}
+import type { ReactNode } from "react";
 
 export type GaugeLean =
   | "strongShort"
@@ -28,7 +17,7 @@ const LEAN_LABEL: Record<GaugeLean, string> = {
   strongLong: "Strong buy",
 };
 
-/** Needle score 0 (strong sell) → 100 (strong buy). */
+/** Needle position 0 (strong sell) → 100 (strong buy). */
 const LEAN_SCORE: Record<GaugeLean, number> = {
   strongShort: 10,
   short: 30,
@@ -36,26 +25,6 @@ const LEAN_SCORE: Record<GaugeLean, number> = {
   long: 70,
   strongLong: 90,
 };
-
-/**
- * Gauge lean from HTF-independent bullish/bearish confluence (0–5 each).
- * HTF bias is visual-only and never feeds this.
- * 0–2 → Neutral; 3–4 → Long/Short; 5 → Strong long/short.
- * If both sides qualify, the stronger side wins; ties stay Neutral.
- */
-export function leanFromScreener(bullishMet: number, bearishMet: number): GaugeLean {
-  const longLean: GaugeLean | null =
-    bullishMet >= 5 ? "strongLong" : bullishMet >= 3 ? "long" : null;
-  const shortLean: GaugeLean | null =
-    bearishMet >= 5 ? "strongShort" : bearishMet >= 3 ? "short" : null;
-
-  if (longLean && shortLean) {
-    if (bullishMet > bearishMet) return longLean;
-    if (bearishMet > bullishMet) return shortLean;
-    return "neutral";
-  }
-  return longLean ?? shortLean ?? "neutral";
-}
 
 /** Legacy RSI fallback for the details dock (not strategy-pegged). */
 export function leanFromRsi(rsi: number): GaugeLean {
@@ -67,96 +36,126 @@ export function leanFromRsi(rsi: number): GaugeLean {
   return "strongShort";
 }
 
-/**
- * Technicals dial — five rounded segments (deep red → soft red → silver →
- * soft blue → deep blue) around a 200° sweep with clear gaps, a slim tapered
- * gradient needle and ONE bold label under the dial (the current lean).
- */
-/** Dial sweep: SWEEP_HI (left end) down to SWEEP_LO (right end), symmetric
- *  about 90° (straight up) so Neutral sits dead-center. */
-const SWEEP_HI = 190;
-const SWEEP_LO = -10;
-const SWEEP = SWEEP_HI - SWEEP_LO; // 200°
-/** Segment colors: red (sell) → grey (neutral) → blue (buy). */
-const COLORS = ["#f0334b", "#eb5f6d", "#c2c6cc", "#57a0f8", "#2962ff"];
+/* Needle travel: the track spans the full card width, the needle is inset by
+ * NUB% so it never leaves the rounded caps. */
+const NUB = 2;
 
-export function TechnicalsGauge({
+/** The red→grey→blue lean track, shared by the full gauge and the dock's tiny meter. */
+const TRACK_GRADIENT =
+  "linear-gradient(90deg, rgba(175,104,112,.9) 0%, rgba(175,104,112,.45) 28%, rgba(122,124,134,.5) 46%, rgba(122,124,134,.5) 54%, rgba(78,122,214,.55) 72%, rgba(78,122,214,.95) 100%)";
+
+/** Needle position as a left-inset percentage of the track. */
+function needleLeft(lean: GaugeLean): number {
+  return NUB + (LEAN_SCORE[lean] / 100) * (100 - 2 * NUB);
+}
+
+/**
+ * The lean track on its own — no label, no card. The docked strip uses this tiny
+ * form in place of the Open/Overlap pill; `width`/`height` size it for that row.
+ */
+export function TechnicalsMeter({
   lean,
-  size = 265,
-  stroke = 8,
+  width = 44,
+  height = 4,
 }: {
   lean: GaugeLean;
-  /** Rendered arc width (px) — pass a smaller number for a smaller dial. */
-  size?: number;
-  /** Segment stroke width — pass a smaller number for a thinner dial. */
-  stroke?: number;
+  width?: number;
+  height?: number;
 }) {
-  const gid = useId().replaceAll(":", "");
-  const score = LEAN_SCORE[lean];
-  // Needle: 0 (left end) → 100 (right end) across the sweep.
-  const angle = SWEEP_HI - (score / 100) * SWEEP;
+  return (
+    <span
+      role="img"
+      aria-label={`Technicals: ${LEAN_LABEL[lean]}`}
+      className="relative inline-block shrink-0 rounded-full align-middle"
+      style={{ width, height, background: TRACK_GRADIENT }}
+    >
+      <span
+        className="absolute top-1/2 -translate-y-1/2 rounded-full bg-[#eef0f4]"
+        style={{ left: `${needleLeft(lean)}%`, width: 2, height: height + 4 }}
+      />
+    </span>
+  );
+}
+
+/**
+ * Technicals block — an elevated, bordered card. Its top line carries the label
+ * + lean word ("Technicals" + lean); the thin desaturated red→grey→blue track
+ * and its small white needle sit below as the FOLDED preview, always visible.
+ * No Sell/Buy captions.
+ *
+ * Anything passed as `children` is the folded-out detail: it animates open with
+ * `expanded` (the Sessions/News drawer pattern) and turns the header into a
+ * toggle. With no `children` there is nothing to fold out, so the card stays a
+ * static gauge readout — the fold lights up once more content is added.
+ */
+export function TechnicalsGauge({
+  lean,
+  expanded = true,
+  onToggle,
+  children,
+}: {
+  lean: GaugeLean;
+  expanded?: boolean;
+  onToggle?: () => void;
+  children?: ReactNode;
+}) {
   const label = LEAN_LABEL[lean];
-
-  const cx = 150;
-  const cy = 115;
-  const r = 86;
-  const STROKE = stroke;
-  const GAP = 8;
-  // Segment pitch centers the 5 segments on the sweep: segment i's center is
-  // at SWEEP_HI − STEP·(i + 0.5); center 2 (the grey one) lands exactly on 90°.
-  const STEP = SWEEP / 5;
-  const segments = COLORS.map((color, i) => {
-    const center = SWEEP_HI - STEP * (i + 0.5);
-    const half = (STEP - GAP) / 2;
-    return { color, from: center + half, to: center - half };
-  });
-
-  // Slim tapered needle: sharp tip inside the arc, short symmetric base at
-  // the hub, tiny tail behind it.
-  const tip = polar(cx, cy, angle, r - 18);
-  const bl = polar(cx, cy, angle + 90, 3.25);
-  const tail = polar(cx, cy, angle, -7);
-  const br = polar(cx, cy, angle - 90, 3.25);
-  const needle = [
-    `M ${tip.x.toFixed(2)} ${tip.y.toFixed(2)}`,
-    `L ${bl.x.toFixed(2)} ${bl.y.toFixed(2)}`,
-    `L ${tail.x.toFixed(2)} ${tail.y.toFixed(2)}`,
-    `L ${br.x.toFixed(2)} ${br.y.toFixed(2)}`,
-    "Z",
-  ].join(" ");
+  const collapsible = onToggle !== undefined && children !== undefined;
 
   return (
-    <div className="px-3 pb-3 pt-1">
-      <div className="mb-0.5 text-[13px] font-semibold text-(--app-text)">Technicals</div>
-      <svg viewBox="0 0 300 190" width="100%" style={{ maxWidth: size }} className="mx-auto block shrink-0">
-        <defs>
-          <linearGradient id={`${gid}-needle`} x1="0%" y1="0%" x2="0%" y2="100%">
-            <stop offset="0%" stopColor="#f7f8fa" />
-            <stop offset="100%" stopColor="#d4d7dc" />
-          </linearGradient>
-        </defs>
-        {segments.map((s) => (
-          <path
-            key={s.from}
-            d={arcPath(cx, cy, r, s.from, s.to)}
-            fill="none"
-            stroke={s.color}
-            strokeWidth={STROKE}
-            strokeLinecap="round"
-          />
-        ))}
-        <path d={needle} fill={`url(#${gid}-needle)`} />
-        <text
-          x={cx}
-          y={cy + 48}
-          fill="#ffffff"
-          fontSize="22"
-          fontWeight="700"
-          textAnchor="middle"
-        >
-          {label}
-        </text>
-      </svg>
+    <div className="px-3 pt-3">
+      <div
+        role={collapsible ? "button" : undefined}
+        tabIndex={collapsible ? 0 : undefined}
+        aria-expanded={collapsible ? expanded : undefined}
+        title={collapsible ? (expanded ? "Collapse technicals" : "Show technicals") : undefined}
+        onClick={collapsible ? onToggle : undefined}
+        onKeyDown={
+          collapsible
+            ? (e) => {
+                if (e.key === "Enter" || e.key === " ") {
+                  e.preventDefault();
+                  onToggle?.();
+                }
+              }
+            : undefined
+        }
+        className={`rounded-[8px] border border-(--app-border) bg-(--app-elevated) px-3 py-2.5 ${
+          collapsible ? "cursor-pointer" : ""
+        }`}
+      >
+        <div className="flex items-center justify-between gap-2">
+          <div className="text-[13px] font-semibold text-(--app-text)">Technicals</div>
+          <span className="text-[13px] font-semibold text-(--app-text)">{label}</span>
+        </div>
+
+        {/* Folded preview — the lean track, always visible. */}
+        <div className="pt-4 pb-1">
+          <div
+            role="img"
+            aria-label={`Technicals: ${label}`}
+            className="relative h-[5px] rounded-full"
+            style={{ background: TRACK_GRADIENT }}
+          >
+            <span
+              className="absolute top-1/2 h-[11px] w-[3px] -translate-y-1/2 rounded-full bg-[#eef0f4]"
+              style={{ left: `${needleLeft(lean)}%` }}
+            />
+          </div>
+        </div>
+
+        {/* Folded-out detail — future rows land here; collapses with the drawer. */}
+        {children !== undefined && (
+          <div
+            className="grid transition-[grid-template-rows] duration-200 ease-out"
+            style={{ gridTemplateRows: expanded ? "1fr" : "0fr" }}
+          >
+            <div className="overflow-hidden">
+              <div className="pt-2 pb-1">{children}</div>
+            </div>
+          </div>
+        )}
+      </div>
     </div>
   );
 }

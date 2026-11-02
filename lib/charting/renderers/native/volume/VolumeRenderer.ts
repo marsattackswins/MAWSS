@@ -37,6 +37,8 @@ interface VolumeRenderArgs {
 export class VolumeRenderer {
     private canvas: HTMLCanvasElement | null = null;
     private ctx: CanvasRenderingContext2D | null = null;
+    /** No volume to paint: the canvas is cleared and removed from the compositor. */
+    private blank = true;
 
     mount(canvas: HTMLCanvasElement): void {
         this.canvas = canvas;
@@ -46,6 +48,7 @@ export class VolumeRenderer {
     destroy(): void {
         this.canvas = null;
         this.ctx = null;
+        this.blank = true;
     }
 
     render(args: VolumeRenderArgs): void {
@@ -54,25 +57,35 @@ export class VolumeRenderer {
         if (!ctx || !canvas) return;
         const { bars, data, visible, coords, bounds, fillPane } = args;
 
-        const dpr = coords.dpr;
-        ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-        ctx.clearRect(0, 0, canvas.width / dpr, canvas.height / dpr); // always clear — a hide/remove must wipe the last frame
-        if (!data || !visible || bars.length === 0 || bounds.height <= 0) return;
+        if (!data || !visible || bars.length === 0 || bounds.height <= 0) {
+            this.clearBlank();
+            return;
+        }
 
         // Visible bar-index window (bar index = logical index), padded nowhere — a half-off
         // column at either edge is included via the floor/ceil.
         const r = coords.visibleLogicalRange();
         const i0 = Math.max(0, Math.floor(r.from));
         const i1 = Math.min(bars.length - 1, Math.ceil(r.to));
-        if (i0 > i1) return;
+        if (i0 > i1) {
+            this.clearBlank();
+            return;
+        }
 
         let maxVol = 0;
         for (let i = i0; i <= i1; i += 1) {
             const v = bars[i]?.volume;
             if (v != null && v > maxVol) maxVol = v;
         }
-        if (maxVol <= 0) return;
+        if (maxVol <= 0) {
+            this.clearBlank();
+            return;
+        }
 
+        this.show(); // put the layer back in the stack before replacing its pixels
+        const dpr = coords.dpr;
+        ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+        ctx.clearRect(0, 0, canvas.width / dpr, canvas.height / dpr);
         ctx.save();
         ctx.beginPath();
         ctx.rect(0, bounds.top, coords.width, bounds.height); // clip to the host pane's data area
@@ -89,5 +102,19 @@ export class VolumeRenderer {
             maxVol,
         }, { up: data.upColor, down: data.downColor });
         ctx.restore();
+    }
+
+    /** Clear the stale frame once, then hide the (fully transparent) canvas. */
+    private clearBlank(): void {
+        const ctx = this.ctx;
+        const canvas = this.canvas;
+        if (!ctx || !canvas || this.blank) return;
+        ctx.setTransform(1, 0, 0, 1, 0, 0);
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
+        this.blank = true;
+    }
+
+    private show(): void {
+        this.blank = false;
     }
 }

@@ -88,6 +88,21 @@ export class RendererControl {
         return this;
     }
 
+    /**
+     * HOST OVERLAY SEAM (local fix): the CSS-pixel Y of a price inside the chart, so a
+     * host overlay (MAWS's on-chart trade manager) can stay glued to a price line
+     * through pan/zoom/scale. Null on a renderer without the seam, or before layout —
+     * the same graceful degradation as {@link setNativeData}.
+     */
+    priceToPixelY(price: number): number | null {
+        return this.renderer.priceToPixelY?.(price) ?? null;
+    }
+
+    /** The inverse of {@link priceToPixelY}: the price under a CSS-pixel Y (null without the seam). */
+    pixelYToPrice(y: number): number | null {
+        return this.renderer.pixelYToPrice?.(y) ?? null;
+    }
+
     /** Whether the active renderer can open a per-indicator settings dialog. */
     get supportsIndicatorSettings(): boolean {
         return typeof this.renderer.openIndicatorSettings === 'function';

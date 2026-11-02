@@ -17,6 +17,7 @@ export interface ServerProfileConfig {
   environment: ProfileEnvironment;
   configured: boolean;
   executionEnabled: boolean;
+  confirmOrders?: boolean;
   apiKey: string | null;
   apiSecret: string | null;
   restEndpoint: string;
@@ -32,6 +33,7 @@ export interface SafeProfileMetadata {
   configured: boolean;
   requiresProductionConfirmation: boolean;
   executionEnabled: boolean;
+  confirmOrders?: boolean;
 }
 
 export interface EnvConfig {
@@ -187,6 +189,7 @@ function makeProfile(
   environment: ProfileEnvironment,
   source: CredentialPair,
   executionEnabled: boolean,
+  confirmOrders?: boolean,
 ): ServerProfileConfig {
   const endpoints = profileEndpoints(profileId);
   return {
@@ -195,6 +198,7 @@ function makeProfile(
     environment,
     configured: isComplete(source),
     executionEnabled,
+    confirmOrders,
     apiKey: source.apiKey,
     apiSecret: source.apiSecret,
     restEndpoint: endpoints.rest,
@@ -234,6 +238,7 @@ function buildProfiles(
       "testnet",
       testnetCredentials,
       isComplete(testnetCredentials),
+      source.MAWS_BINANCE_TESTNET_CONFIRM_ORDERS === "true" || false,
     ),
     "binance-production": makeProfile(
       "binance-production",
@@ -241,6 +246,7 @@ function buildProfiles(
       "production",
       productionCredentials,
       isComplete(productionCredentials),
+      source.MAWS_BINANCE_PRODUCTION_CONFIRM_ORDERS === "true" || false,
     ),
   };
 }
@@ -256,6 +262,7 @@ export function safeProfileMetadata(profiles: ProfileRegistry): SafeProfileMetad
       configured: profile.configured,
       requiresProductionConfirmation: profile.profileId === "binance-production",
       executionEnabled: profile.executionEnabled,
+      confirmOrders: profile.confirmOrders ?? false,
     };
   });
 }

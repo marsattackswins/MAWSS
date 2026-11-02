@@ -42,15 +42,36 @@ export const CLASSIC_THEME: VelaTheme = {
     textMuted: '#787b86',
 };
 
-// ── 3. Light Palette ──
+// ── 3. Gruvbox Dark Palette (hardcoded gruvbox colorscheme: bg0/fg1 + neutral greens/reds) ──
+export const GRUVBOX_THEME: VelaTheme = {
+    name: 'gruvbox',
+    background: '#282828',
+    textColor: '#bdae93',
+    gridColor: '#32302f',
+    borderColor: '#3c3836',
+    upColor: '#98971a',
+    downColor: '#cc241d',
+    fontFamily: 'sans-serif',
+    bgPanel: '#282828',
+    bgCard: '#3c3836',
+    bgBar: '#1d2021',
+    bgChip: '#3c3836',
+    bgHover: '#504945',
+    border: '#3c3836',
+    textPrimary: '#ebdbb2',
+    textSecondary: '#bdae93',
+    textMuted: '#665c54',
+};
+
+// ── 4. Light Palette ──
 export const LIGHT_THEME: VelaTheme = {
     name: 'light',
     background: '#ffffff',
     textColor: '#1e293b',
     gridColor: '#e0e3eb',
     borderColor: '#d4dae3',
-    upColor: '#a7be94',  // BULLISH
-    downColor: '#af6870',  // BEARISH
+    upColor: '#26a69a',  // BULLISH — standard green
+    downColor: '#ef5350',  // BEARISH — standard red
     fontFamily: 'sans-serif',
     bgPanel: '#f8f9fa',
     bgCard: '#ffffff',
@@ -66,6 +87,7 @@ export const LIGHT_THEME: VelaTheme = {
 export function resolveTheme(theme?: ThemeName | VelaTheme): VelaTheme {
     if (!theme || theme === 'dark' || theme === 'vela') return DARK_THEME;
     if (theme === 'classic' || theme === 'standard') return CLASSIC_THEME;
+    if (theme === 'gruvbox') return GRUVBOX_THEME;
     if (theme === 'light') return LIGHT_THEME;
     return {
         ...DARK_THEME,

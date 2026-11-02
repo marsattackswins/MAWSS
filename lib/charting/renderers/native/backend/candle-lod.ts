@@ -15,6 +15,14 @@ export type CandleTier = 'full' | 'wick' | 'aggregate';
 
 /** Below this spacing a candle has no body (wick-only). */
 export const CANDLE_BODY_MIN_SPACING = 3;
+/**
+ * Center-to-center spacing (CSS px) below which a round line join/cap is skipped.
+ * A join is a full triangle fan (6–20 triangles) at EVERY vertex of every series,
+ * so at 2–4 px spacing it dominated dense-navigation CPU (42% of non-idle samples
+ * in a Firefox profile) while its ~1 px radius was visually indistinguishable from
+ * the overlapping AA quads. Joins return once bars are wide enough to see the corner.
+ */
+export const LINE_JOIN_MIN_SPACING = 4;
 /** Wick line width in CSS px at wide zoom — rounded to whole device pixels per frame so it stays crisp. */
 export const CANDLE_WICK_W = 1.5;
 /** Below this spacing bars are bucketed per pixel column (aggregated). */
@@ -36,6 +44,17 @@ export function candleTier(spacing: number): CandleTier {
     if (spacing < CANDLE_AGG_MAX_SPACING) return 'aggregate';
     if (spacing < CANDLE_BODY_MIN_SPACING) return 'wick';
     return 'full';
+}
+
+/**
+ * Whether a line series' round joins/caps are large enough to be seen at this bar spacing.
+ * Below {@link LINE_JOIN_MIN_SPACING} every join is a sub-pixel fan — pure geometry cost
+ * with no visible result — so dense frames draw the connecting segments alone. This is the
+ * line-series LOD that keeps pan/zoom cost off the bar count (see the WebGL2 backend's
+ * `emitPolyline` / `emitPriceLine`).
+ */
+export function lineJoinsVisible(spacing: number): boolean {
+    return spacing >= LINE_JOIN_MIN_SPACING;
 }
 
 /**
@@ -72,19 +91,21 @@ export interface CandleGeometry {
  * between candles is uniform to within one device pixel — the raster-grid minimum.
  * Shared by both backends so canvas2d and WebGL2 lay candles out identically.
  */
-export function candleGeometry(xCss: number, spacing: number, dpr: number, bodyScale = 1): CandleGeometry {
+export function candleGeometry(xCss: number, spacing: number, dpr: number, bodyScale = 1, out?: CandleGeometry): CandleGeometry {
     const wickDev = Math.max(1, Math.round(wickWidth(spacing) * dpr));
     const wickLeftDev = Math.round(xCss * dpr - wickDev / 2);
     let bodyDev = Math.max(wickDev, Math.round(Math.floor(spacing * 0.7 * bodyScale) * dpr));
     if ((bodyDev - wickDev) % 2 !== 0) bodyDev += 1; // parity-match so the overhang splits evenly
     const sideDev = (bodyDev - wickDev) / 2;
-    return {
-        wickX: wickLeftDev / dpr,
-        wickW: wickDev / dpr,
-        bodyX: (wickLeftDev - sideDev) / dpr,
-        bodyW: bodyDev / dpr,
-        center: (wickLeftDev + wickDev / 2) / dpr,
-    };
+    // `out` lets a render loop reuse ONE geometry object instead of allocating one
+    // per visible candle on every frame. Callers that omit it keep the old behavior.
+    const g = out ?? ({} as CandleGeometry);
+    g.wickX = wickLeftDev / dpr;
+    g.wickW = wickDev / dpr;
+    g.bodyX = (wickLeftDev - sideDev) / dpr;
+    g.bodyW = bodyDev / dpr;
+    g.center = (wickLeftDev + wickDev / 2) / dpr;
+    return g;
 }
 
 /** One aggregate-tier stick: a contiguous run of SAME-COLOR price coverage inside one pixel column. */
@@ -137,6 +158,12 @@ export function aggregateCandleColumns(
     let runs: Coverage[] = []; // the current column's runs, any color; typically length 1
     const flush = (): void => {
         if (runs.length === 0) return;
+        if (runs.length === 1) {
+            const run = runs[0]!;
+            out.push({ x: col, hi: run.hi, lo: run.lo, color: run.color });
+            runs.length = 0;
+            return;
+        }
         // Coalesce same-color runs whose void is sub-pixel — it cannot render anyway.
         // Same-color runs are disjoint (overlaps merged on insert), so in `lo` order the
         // previous run of a color is the one just below.
@@ -159,7 +186,7 @@ export function aggregateCandleColumns(
         }
         merged.sort((a, b) => a.lastIdx - b.lastIdx);
         for (const r of merged) out.push({ x: col, hi: r.hi, lo: r.lo, color: r.color });
-        runs = [];
+        runs.length = 0;
     };
     for (let i = i0; i <= i1; i += 1) {
         const b = bars[i];
@@ -169,8 +196,25 @@ export function aggregateCandleColumns(
             flush();
             col = x;
         }
-        // Merge the bar's range into every overlapping run OF ITS COLOR (usually zero or one).
+        // Dense columns normally contain one or two overlapping direction-color runs.
+        // Extend the matching run in place instead of allocating/replacing a Coverage
+        // record per bar. With two runs, only take the shortcut when the other color is
+        // distinct; same-color disjoint runs may both need merging below.
         const color = colorOf(b);
+        let matchingRun: Coverage | undefined;
+        if (runs.length === 1) {
+            matchingRun = runs[0];
+        } else if (runs.length === 2) {
+            const first = runs[0]!;
+            const second = runs[1]!;
+            if (first.color !== second.color) matchingRun = first.color === color ? first : second.color === color ? second : undefined;
+        }
+        if (matchingRun && matchingRun.color === color && matchingRun.lo <= b.high && matchingRun.hi >= b.low) {
+            if (b.low < matchingRun.lo) matchingRun.lo = b.low;
+            if (b.high > matchingRun.hi) matchingRun.hi = b.high;
+            matchingRun.lastIdx = i;
+            continue;
+        }
         let lo = b.low;
         let hi = b.high;
         for (let k = runs.length - 1; k >= 0; k -= 1) {

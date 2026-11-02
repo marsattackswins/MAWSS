@@ -48,6 +48,7 @@ export function resolveSymbolTrading(symbol: string): SymbolTradingSettings {
     margin: saved.margin ?? DEFAULT_SYMBOL_TRADING.margin,
     marginPercent: saved.marginPercent ?? DEFAULT_SYMBOL_TRADING.marginPercent,
     sizingMode: saved.sizingMode ?? DEFAULT_SYMBOL_TRADING.sizingMode,
+    confirmOrders: saved.confirmOrders ?? DEFAULT_SYMBOL_TRADING.confirmOrders,
     // No per-symbol override ⇒ the GLOBAL "Order type" row in Settings → Trading
     // governs, the same way leverage falls back to its global default.
     defaultOrderType:

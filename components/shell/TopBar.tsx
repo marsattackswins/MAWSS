@@ -2,11 +2,11 @@
 
 import { ToolbarBtn } from "@/components/ui/ToolbarBtn";
 import { getChart, getWorkspace } from "@/lib/chart-registry";
+import type { ThemeName } from "@/lib/charting";
 import { CHART_STYLES } from "@/lib/chart-style";
 import { AssetLogo } from "@/components/brand/AssetLogo";
-import { MawsLogo } from "@/components/brand/MawsLogo";
 import { VelaDrawingBar } from "@/components/drawings/VelaDrawingBar";
-import { MAWS_FULL_NAME } from "@/lib/maws/brand";
+import { MawsProductMenu } from "@/components/shell/MawsProductMenu";
 import { formatPrice, mawsFeed } from "@/lib/maws/feed";
 import { formatTicker } from "@/lib/maws/universe";
 import { useActivePane, useAppStore } from "@/lib/store";
@@ -32,10 +32,10 @@ import type { Timeframe } from "@/types";
 import { VelaTemplateMenu } from "@/components/shell/VelaTemplateMenu";
 import { VelaLayoutButton } from "@/components/shell/VelaLayoutButton";
 import {
-  Camera,
+  BookOpen,
   ChevronDown,
+  ChevronsLeft,
   Diamond,
-  Keyboard,
   Maximize,
   Moon,
   Rewind,
@@ -48,10 +48,7 @@ const MORE_TFS: Timeframe[] = ["3m", "2h"];
 const TOPBAR_ICON_ORDER_KEY = "maws.topbarIconOrder.v1";
 const TOPBAR_ICON_IDS = [
   "layout",
-  "settings",
-  "shortcuts",
   "fullscreen",
-  "screenshot",
   "theme",
 ] as const;
 type TopbarIconId = (typeof TOPBAR_ICON_IDS)[number];
@@ -71,11 +68,6 @@ function loadTopbarIconOrder(): TopbarIconId[] {
   }
 }
 
-/**
- * Feature flag mirror of AppShell's constant — the workspace's composite
- * screenshot covers the whole grid when the workspace engine hosts the grid.
- */
-const USE_VELA_WORKSPACE = process.env.NEXT_PUBLIC_MAWS_VELA_WORKSPACE === "true";
 
 function CandleIcon() {
   return (
@@ -341,6 +333,49 @@ function BuySellStrip({
   );
 }
 
+/** Switch order, and where the crescent points at each stop: the stops walk the
+ *  compass clockwise — NE → SE → SW → NW. */
+const THEME_CYCLE = ["dark", "classic", "light", "gruvbox"] as const;
+const THEME_LABEL: Record<string, string> = {
+  dark: "Vela Muted",
+  classic: "Vela Classic",
+  light: "White",
+  gruvbox: "Gruvbox",
+};
+/**
+ * Cumulative quarter-turns already made this session. Module-level on purpose:
+ * the angle must only ever increase, so a CSS clockwise sweep survives every
+ * hop including Gruvbox → Muted (270° → 360°), and it must not reset when the
+ * bar re-mounts (dev fast-refresh, panel churn).
+ */
+let themeTurns = 0;
+/** The theme the last click (or re-anchor) settled on — tells our own switches
+ *  apart from a theme chosen elsewhere, which must re-point the crescent. */
+let themeTurnedTo = "";
+
+/**
+ * The topbar theme switch's icon.
+ *
+ * ONE crescent marks the four stops: NORTH-EAST for Vela Muted, SOUTH-EAST for
+ * Vela Classic, SOUTH-WEST for White, NORTH-WEST for Gruvbox. The host feeds it
+ * a *cumulative* angle that grows by 90° per click, so every switch — and the
+ * wrap back to Muted — sweeps clockwise; a per-theme angle would rewind the
+ * long way on the last hop.
+ */
+function ThemeIcon({ rotation }: { rotation: number }) {
+  return (
+    <Moon
+      aria-hidden="true"
+      size={15}
+      style={{
+        transform: `rotate(${rotation}deg)`,
+        // One quick quarter turn: most of the arc in the first frames, a short settle.
+        transition: "transform 190ms cubic-bezier(0.2, 0.9, 0.2, 1)",
+      }}
+    />
+  );
+}
+
 export function TopBar() {
   const pane = useActivePane();
   const setTimeframe = useAppStore((s) => s.setTimeframe);
@@ -348,21 +383,35 @@ export function TopBar() {
   const setIndicatorMenuOpen = useAppStore((s) => s.setIndicatorMenuOpen);
   const closeMenus = useAppStore((s) => s.closeMenus);
   const setSettingsOpen = useAppStore((s) => s.setSettingsOpen);
-  const setBrokerDialogOpen = useAppStore((s) => s.setBrokerDialogOpen);
-  const connectedBroker = useAppStore((s) => s.connectedBroker);
-  const liveEnvironment = useLiveStore((s) => s.environment);
-  const liveProfileId = useLiveStore((s) => s.profileId);
-  const tradingMode = getTradingMode(connectedBroker, liveEnvironment, liveProfileId);
-  const setBottomTab = useAppStore((s) => s.setBottomTab);
+  // The arrow folds the ENTIRE right side — panel body AND the shortcut rail.
+  const rightOpen = useAppStore((s) => s.rightOpen);
+  const setRightOpen = useAppStore((s) => s.setRightOpen);
   const setBuySellMenu = useAppStore((s) => s.setBuySellMenu);
   const showBuySell = useAppStore((s) => s.chartSettings.showBuySell);
   // The topbar theme switch reads the resolved app theme (string selector — no
   // re-render on unrelated color tweaks).
   const themeName = useAppStore((s) => velaThemeNameFromAppSettings(s.appSettings));
+  // Crescent angle in degrees; only ever grows — see `themeTurns`.
+  const [themeAngle, setThemeAngle] = useState(0);
+  useEffect(() => {
+    const step = Math.max(
+      0,
+      THEME_CYCLE.indexOf(themeName as (typeof THEME_CYCLE)[number]),
+    );
+    if (themeTurnedTo === themeName) {
+      // Our own click: keep the cumulative angle so the sweep stays clockwise.
+      setThemeAngle(90 * themeTurns);
+      return;
+    }
+    // Mounted on a persisted theme, or one picked in the chart-settings dialog:
+    // re-anchor the crescent to that theme's resting bearing.
+    themeTurnedTo = themeName;
+    themeTurns = Math.max(themeTurns, step);
+    setThemeAngle(90 * themeTurns);
+  }, [themeName]);
   const watchlist = useAppStore((s) => s.watchlist);
   const addToWatchlist = useAppStore((s) => s.addToWatchlist);
   const removeFromWatchlist = useAppStore((s) => s.removeFromWatchlist);
-  const alerts = useAppStore((s) => s.alerts);
   const patchChartSettings = useAppStore((s) => s.patchChartSettings);
   const candleStyle = useAppStore((s) => s.chartSettings.candleStyle);
   const replay = useAppStore((s) => s.replay);
@@ -373,6 +422,7 @@ export function TopBar() {
   const indicatorSettingsId = useAppStore((s) => s.indicatorSettingsId);
   const drawingSettingsTarget = useAppStore((s) => s.drawingSettingsTarget);
   const brokerDialogOpen = useAppStore((s) => s.brokerDialogOpen);
+  const setJournalOverlayOpen = useAppStore((s) => s.setJournalOverlayOpen);
   const tfRef = useRef<HTMLDivElement>(null);
   const styleRef = useRef<HTMLDivElement>(null);
   const draggedIconRef = useRef<TopbarIconId | null>(null);
@@ -479,25 +529,6 @@ export function TopBar() {
         <VelaLayoutButton />
       </div>
     ),
-    settings: (
-      <ToolbarBtn label="Settings" className="rounded-full" onClick={toggleSettings}>
-        <Settings size={15} />
-      </ToolbarBtn>
-    ),
-    shortcuts: (
-      <ToolbarBtn
-        label="Keyboard shortcuts"
-        className="rounded-full"
-        active={settingsOpen}
-        data-settings-trigger
-        onClick={() => {
-          closeAllMenus();
-          setSettingsOpen(!settingsOpen);
-        }}
-      >
-        <Keyboard size={15} />
-      </ToolbarBtn>
-    ),
     fullscreen: (
       <ToolbarBtn
         label="Fullscreen"
@@ -511,36 +542,20 @@ export function TopBar() {
         <Maximize size={15} />
       </ToolbarBtn>
     ),
-    screenshot: (
-      <ToolbarBtn
-        label="Screenshot"
-        className="rounded-full"
-        onClick={() => {
-          closeAllMenus();
-          if (USE_VELA_WORKSPACE) {
-            getWorkspace()?.downloadScreenshot();
-            return;
-          }
-          const handle = getChart(pane.id);
-          if (!handle) return;
-          const dataUrl = handle.vela.renderer.screenshot();
-          if (!dataUrl) return;
-          const a = document.createElement("a");
-          a.href = dataUrl;
-          a.download = `${pane.symbol}-${pane.timeframe}.png`;
-          a.click();
-        }}
-      >
-        <Camera size={15} />
-      </ToolbarBtn>
-    ),
     theme: (
       <ToolbarBtn
-        label={themeName === "classic" ? "Theme · Vela Classic" : "Theme · Vela Muted"}
+        label={`Theme · ${THEME_LABEL[themeName] ?? "Vela Muted"}`}
         className="rounded-full"
         onClick={() => {
           closeAllMenus();
-          const next = themeName === "classic" ? "dark" : "classic";
+          const current = Math.max(0, THEME_CYCLE.indexOf(themeName as (typeof THEME_CYCLE)[number]));
+          const step = (current + 1) % THEME_CYCLE.length;
+          // Advance the cumulative turn to the next stop, keeping the angle
+          // strictly decreasing (never the 3-turn rewind back to 0°).
+          themeTurns = Math.max(themeTurns + 1, step);
+          themeTurnedTo = THEME_CYCLE[step];
+          setThemeAngle(90 * themeTurns);
+          const next = THEME_CYCLE[step] as ThemeName;
           const nextSettings = applyVelaThemeEverywhere(next);
           useAppStore
             .getState()
@@ -551,7 +566,7 @@ export function TopBar() {
           applyThemeToCharts(next);
         }}
       >
-        <Moon size={15} />
+        <ThemeIcon rotation={themeAngle} />
       </ToolbarBtn>
     ),
   };
@@ -599,18 +614,8 @@ export function TopBar() {
 
   return (
     <header className="relative z-40 flex h-[40px] shrink-0 items-center gap-0.5 overflow-visible bg-[var(--app-bg)] px-2 text-[var(--app-text)]">
-      <div
-        className="relative z-[2] mr-1 flex h-[28px] w-[28px] shrink-0 items-center justify-center rounded-full bg-[var(--app-elevated)]"
-        title={MAWS_FULL_NAME}
-        aria-label={MAWS_FULL_NAME}
-      >
-        <MawsLogo size={14} title={MAWS_FULL_NAME} />
-        {alerts.length > 0 && (
-          <span className="absolute -top-0.5 -right-0.5 flex h-[14px] min-w-[14px] items-center justify-center rounded-full bg-[#f23645] px-0.5 text-[9px] font-bold text-white">
-            {alerts.length}
-          </span>
-        )}
-      </div>
+      <MawsProductMenu />
+      <span className="relative z-[2] top-sep" />
 
       <button
         type="button"
@@ -814,6 +819,19 @@ export function TopBar() {
       </div>
 
       <div className="relative z-[2] flex shrink-0 items-center gap-0.5">
+        <ToolbarBtn
+          label="Trade Journal"
+          className="gap-1 px-2 text-[13px]"
+          onClick={() => {
+            closeAllMenus();
+            if (settingsOpen) setSettingsOpen(false);
+            setJournalOverlayOpen(true);
+          }}
+        >
+          <BookOpen size={14} />
+          Journal
+        </ToolbarBtn>
+
         <VelaTemplateMenu />
 
         {iconOrder.map((id) => (
@@ -856,48 +874,22 @@ export function TopBar() {
         ) : null}
         <button
           type="button"
-          data-trade-trigger
-          className={`ml-1 flex h-[28px] items-center gap-1.5 rounded-full px-4 text-[13px] font-semibold ${tradingMode.buttonClass}`}
-          title={`Trade · Current mode: ${tradingMode.label}`}
-          aria-label={`Trade · Current mode: ${tradingMode.label}`}
-          onClick={() => {
-            closeAllMenus();
-            if (settingsOpen) setSettingsOpen(false);
-            if (connectedBroker === "mock" || connectedBroker === "binance") {
-              setBottomTab("positions");
-              useAppStore.getState().setBottomOpen(true);
-            } else {
-              setBrokerDialogOpen(true);
-            }
-          }}
+          className="ml-1 flex h-[28px] w-[30px] shrink-0 items-center justify-center rounded-[4px] text-(--app-muted) hover:bg-(--app-hover) hover:text-(--app-text)"
+          title={rightOpen ? "Hide right side" : "Show right side"}
+          aria-label={rightOpen ? "Hide right side" : "Show right side"}
+          aria-pressed={rightOpen}
+          // Hide stows whatever is on screen — full panel or just the docked
+          // icon rail; show restores the whole side (setRightOpen does both).
+          onClick={() => setRightOpen(!rightOpen)}
         >
-          <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-current" />
-          Trade
+          <ChevronsLeft
+            size={16}
+            className={`transition-transform duration-150 ease-out ${
+              rightOpen ? "rotate-180" : "rotate-0"
+            }`}
+          />
         </button>
       </div>
     </header>
   );
-}
-
-function getTradingMode(
-  connectedBroker: string | null,
-  environment: string | null,
-  profileId: string | null,
-): { label: string; buttonClass: string } {
-  const label = connectedBroker === "mock"
-    ? "Paper"
-    : environment === "testnet" || profileId === "binance-testnet"
-      ? "Testnet"
-      : environment === "production" || profileId === "binance-production"
-        ? "Production"
-        : "Chart Only";
-  const buttonClass = label === "Production"
-    ? "bg-[#f0b90b] text-black hover:bg-[#dca900]"
-    : label === "Testnet"
-      ? "bg-[#2962ff] text-white hover:bg-[#2457dc]"
-      : label === "Paper"
-        ? "bg-white text-[#111318] hover:bg-[#e5e7eb]"
-        : "bg-[#1b1e26] text-[#b0b3bc] hover:bg-[#252a33]";
-
-  return { label, buttonClass };
 }

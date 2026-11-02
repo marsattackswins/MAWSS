@@ -106,6 +106,15 @@ export interface RendererLayerDefinition {
     /** Repaint this layer when the pointer moves (hover hit-testing UIs). Off by default:
      *  pointer moves normally repaint only the crosshair overlay, not the layers. */
     repaintOnCursor?: boolean;
+    /**
+     * Cheap content probe. When it returns false the renderer clears the layer once and takes
+     * its full-viewport canvas out of the compositor until it reports content again. Layers
+     * that omit it keep painting every frame (the default contract). Use it for overlay-style
+     * layers (breaks, zones) that are usually empty on a given chart: a transparent canvas
+     * still costs Firefox a full-surface raster + composite per frame, and a dense chart
+     * otherwise stacks many of them.
+     */
+    hasContent?(args: RendererLayerArgs): boolean;
     /** Instance factory — called once per mounted renderer, plus once per mounted instance
      *  of a `multiInstance` native indicator whose type equals this id (each instance paints
      *  through its own layer instance and canvas, fed by its own channel). */

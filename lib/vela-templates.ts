@@ -17,7 +17,8 @@ import { getChart, type ChartHandle, type ChartTemplatePrefs } from "@/lib/chart
 import { useAppStore } from "@/lib/store";
 import { createStudy } from "@/lib/studies";
 import { syncPaneNativeIndicators } from "@/lib/vela-indicators";
-import { INDICATOR_ORDER } from "@/lib/indicators";
+import { INDICATOR_ORDER, indicatorTitle } from "@/lib/indicators";
+import { velaCatalogEntry } from "@/lib/vela-indicator-catalog";
 import type { IndicatorId, IndicatorInstance, PaneNative } from "@/types";
 
 type TemplateStudies = Array<Pick<IndicatorInstance, "type" | "settings" | "hidden">>;
@@ -36,6 +37,8 @@ export type VelaChartTemplate = {
   indicators?: TemplateIndicators;
   /** Host-owned display preferences; absent on older templates. */
   prefs?: ChartTemplatePrefs;
+  /** Whether this template is pinned in the chart-template menu. */
+  favorite?: boolean;
   createdAt: number;
 };
 
@@ -139,6 +142,7 @@ function parseTemplates(raw: string | null): VelaChartTemplate[] {
         config: entry.config,
         ...(indicators ? { indicators } : {}),
         ...(prefs ? { prefs } : {}),
+        ...(typeof entry.favorite === "boolean" ? { favorite: entry.favorite } : {}),
         createdAt: typeof entry.createdAt === "number" ? entry.createdAt : 0,
       }];
     });
@@ -238,6 +242,7 @@ export function saveTemplate(name: string): boolean {
         config: doc,
         ...(indicators ? { indicators } : {}),
         ...(prefs ? { prefs } : {}),
+        favorite: false,
         createdAt: now,
       },
     ];
@@ -292,6 +297,30 @@ export function removeTemplate(id: string): void {
   if (!persist(next)) return;
   templates = next;
   emit();
+}
+
+export function toggleTemplateFavorite(id: string): boolean {
+  ensureLoaded();
+  const template = templates.find((t) => t.id === id);
+  if (!template) return false;
+  const next = templates.map((t) =>
+    t.id === id ? { ...t, favorite: !t.favorite } : t,
+  );
+  if (!persist(next)) return false;
+  templates = next;
+  emit();
+  return true;
+}
+
+/** Indicator names shown beneath a template's name in the template menu. */
+export function templateIndicatorSummary(t: VelaChartTemplate): string {
+  const names = [
+    ...(t.indicators?.studies ?? []).map((study) => indicatorTitle(study.type, "")),
+    ...(t.indicators?.natives ?? []).map((native) =>
+      velaCatalogEntry(native.type)?.title ?? native.type.replace(/-/g, " "),
+    ),
+  ];
+  return [...new Set(names)].join(", ") || "No indicators";
 }
 
 /** One-line summary of what the template covers (built-in groups present). */

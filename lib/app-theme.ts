@@ -124,8 +124,10 @@ export function velaThemeNameFromAppSettings(settings: AppSettings): ThemeName {
     typeof t?.background === "string" ? t.background.trim().toLowerCase() : "";
   const light = themeBg(LIGHT_THEME);
   const classic = themeBg(resolveTheme("classic"));
+  const gruvbox = themeBg(resolveTheme("gruvbox"));
   if (light && bg === light) return "light";
   if (classic && bg === classic) return "classic";
+  if (gruvbox && bg === gruvbox) return "gruvbox";
   return "dark";
 }
 

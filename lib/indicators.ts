@@ -386,6 +386,39 @@ export function computeStochastic(
   return { k, d };
 }
 
+/** Stochastic RSI — Stochastic applied to RSI, returned as %K / %D (0–100). */
+export function computeStochRsi(
+  candles: Candle[],
+  rsiPeriod = 14,
+  length = 14,
+  kSmoothing = 3,
+  dSmoothing = 3,
+): { k: (number | null)[]; d: (number | null)[] } {
+  const rsi = computeRsi(candles, rsiPeriod);
+  const rawK: (number | null)[] = Array(candles.length).fill(null);
+  for (let i = 0; i < candles.length; i++) {
+    if (rsi[i] == null) continue;
+    let hi = -Infinity;
+    let lo = Infinity;
+    let ok = true;
+    for (let j = i - length + 1; j <= i; j++) {
+      const v = rsi[j];
+      if (v == null) {
+        ok = false;
+        break;
+      }
+      if (v > hi) hi = v;
+      if (v < lo) lo = v;
+    }
+    if (!ok) continue;
+    const range = hi - lo;
+    rawK[i] = range === 0 ? 50 : ((rsi[i]! - lo) / range) * 100;
+  }
+  const k = smaSeries(rawK, Math.max(1, kSmoothing));
+  const d = smaSeries(k, Math.max(1, dSmoothing));
+  return { k, d };
+}
+
 function trueRange(candle: Candle, prev: Candle): number {
   return Math.max(
     candle.high - candle.low,

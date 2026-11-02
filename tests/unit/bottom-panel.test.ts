@@ -171,12 +171,13 @@ describe("bottom trading panel attachment visibility", () => {
     },
   );
 
-  test("keeps all five tabs in a fixed toolbar slot with visible active state", () => {
+  test("keeps all six tabs in a fixed toolbar slot with visible active state", () => {
     expect(PANEL_TABS.map((item) => item.label)).toEqual([
       "Positions",
       "Orders",
       "Order History",
       "Balance History",
+      "Performance",
       "Trading Journal",
     ]);
     expect(PANEL_TOOLBAR_HEIGHT).toBe(32);

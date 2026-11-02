@@ -208,11 +208,101 @@ const child = spawn(process.execPath, [nextBin, "dev", "-p", port], {
   env: { ...process.env, PORT: port },
 });
 
+// ── Journal sidecar (vendored LuxAlgo Trade Journal on :3400) ───────────────
+//
+// The vendored journal app (vendor/trade-journal) is a separate Next server on
+// port 3400, proxied same-origin at /journal by the main app. It used to be a
+// manual `npm run journal` step that never came back after a dev restart, so
+// the journal button served connection-refused. dev.mjs now owns it: reuse an
+// already-running instance, otherwise start it (one-time build if needed) and
+// respawn it if it dies while the dev server runs. Died with the dev server
+// itself — Ctrl-C cleans up both.
+const JOURNAL_PORT = 3400;
+const JOURNAL_PROBE = `http://127.0.0.1:${JOURNAL_PORT}/journal`;
+const journalDir = path.resolve(process.cwd(), "vendor", "trade-journal", "apps", "web");
+const journalBin = path.join(journalDir, "node_modules", "next", "dist", "bin", "next");
+const journalLog = path.resolve(process.cwd(), ".next", "journal.log");
+
+async function journalReady() {
+  try {
+    const res = await fetch(JOURNAL_PROBE, { signal: AbortSignal.timeout(1500) });
+    return res.status < 500;
+  } catch {
+    return false;
+  }
+}
+
+function spawnJournalServer() {
+  const stream = fs.createWriteStream(journalLog, { flags: "a" });
+  const jsx = spawn(
+    process.execPath,
+    [journalBin, "start", "-p", String(JOURNAL_PORT)],
+    {
+      cwd: journalDir,
+      stdio: ["ignore", "pipe", "pipe"],
+    },
+  );
+  jsx.stdout.pipe(stream);
+  jsx.stderr.pipe(stream);
+  journalProc = jsx;
+  let respawns = 0;
+  jsx.on("exit", (code, signal) => {
+    journalProc = null;
+    stream.end();
+    if (stopping) return;
+    if (++respawns > 5) {
+      console.error(`[journal] exited ${respawns} times — giving up. Check ${journalLog}`);
+      return;
+    }
+    console.log(`[journal] server exited (code=${code ?? signal}) — restarting in ~3s.`);
+    setTimeout(() => {
+      if (!stopping) spawnJournalServer();
+    }, 3000);
+  });
+}
+
+void (async () => {
+  if (await journalReady()) {
+    console.log(`${dim}[journal] reusing the already-running Trade Journal on :${JOURNAL_PORT}.${reset}`);
+    return;
+  }
+  // A missing production build only happens on a fresh checkout: `next start`
+  // needs one. Build once (slow), then start.
+  if (!fs.existsSync(path.join(journalDir, ".next", "BUILD_ID"))) {
+    console.log(`${dim}[journal] no build found — running a one-time journal build (this can take a minute)…${reset}`);
+    await new Promise((resolve) => {
+      const build = spawn(process.execPath, [journalBin, "build"], {
+        cwd: journalDir,
+        stdio: "inherit",
+      });
+      build.on("exit", resolve);
+    });
+  }
+  spawnJournalServer();
+  const deadline = Date.now() + 30_000;
+  while (Date.now() < deadline) {
+    if (await journalReady()) {
+      console.log(`${dim}[journal] ready on :${JOURNAL_PORT} — proxied at /journal.${reset}`);
+      return;
+    }
+    await new Promise((r) => setTimeout(r, 300));
+  }
+  console.error(`[journal] did not become ready in 30s — check ${journalLog}`);
+})();
+
 let stopping = false;
+let journalProc = null;
 const stopChild = (signal = "SIGTERM") => {
   if (stopping) return;
   stopping = true;
   if (!child.killed) child.kill(signal);
+  // The sidecar is our child too: a dev-storm restart must not strand an old
+  // journal server holding port 3400.
+  if (journalProc && journalProc.exitCode === null && platform() === "win32") {
+    exec(`taskkill /PID ${journalProc.pid} /T /F`, () => {});
+  } else if (journalProc && journalProc.exitCode === null) {
+    journalProc.kill(signal);
+  }
   const fallback = setTimeout(() => {
     if (child.exitCode === null) child.kill();
   }, 5_000);

@@ -19,6 +19,7 @@ import {
   positionPnl,
   usedMargin,
 } from "@/lib/trading/mock";
+import { PerformancePanel } from "@/components/trading/PerformancePanel";
 import { timezoneIana } from "@/lib/timezone";
 import { useQuotes } from "@/lib/use-quotes";
 import type { BalanceHistoryEntry, OrderHistoryEntry } from "@/types";
@@ -844,6 +845,8 @@ export function PositionsPanel() {
             </div>
           )
         ) : null}
+
+        {tab === "performance" ? <PerformancePanel histRows={histRows} /> : null}
 
         {tab === "journal" ? (
           journalRows.length === 0 ? (

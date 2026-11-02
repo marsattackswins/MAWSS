@@ -38,7 +38,6 @@ import {
   SaveAll,
   SquareX,
   Trash2,
-  X,
 } from "lucide-react";
 import type { Vela } from "@/lib/charting";
 import { getChart, getWorkspace, subscribeWorkspace } from "@/lib/chart-registry";
@@ -188,7 +187,6 @@ function MenuPanel({
 export function PineScriptsPanel() {
   const pane = useActivePane();
   const activePaneId = useAppStore((s) => s.activePaneId);
-  const setRightOpen = useAppStore((s) => s.setRightOpen);
 
   // One boot read: the saved library plus the open document (a saved script, the
   // restored unsaved draft, or a fresh "My script").
@@ -561,9 +559,6 @@ export function PineScriptsPanel() {
             onClick={() => setMenu(menu === "more" ? null : "more")}
           >
             <MoreVertical size={14} />
-          </IconButton>
-          <IconButton title="Close panel" onClick={() => setRightOpen(false)}>
-            <X size={14} />
           </IconButton>
         </span>
       </div>

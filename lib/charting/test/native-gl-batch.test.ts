@@ -63,6 +63,31 @@ describe('native WebGL2 · Batch (triangle geometry)', () => {
         expect(colors.has('0,0,1,1')).toBe(true);
     });
 
+    it('quad4Gradient interpolates colors by per-vertex factor without extra allocations', () => {
+        const b = new Batch();
+        b.quad4Gradient(0, 0, 0, 10, 0, 0.5, 10, 10, 1, 0, 10, 1, RED, BLUE);
+        expect(b.vertexCount).toBe(6);
+        const v = b.view;
+        // first vertex is pure RED; the mid vertex is the 50/50 mix; the baseline is BLUE
+        expect([v[2], v[3], v[4], v[5]]).toEqual([1, 0, 0, 1]);
+        const mid = [v[STRIDE + 2], v[STRIDE + 3], v[STRIDE + 4], v[STRIDE + 5]];
+        expect(mid[0]).toBeCloseTo(0.5, 9);
+        expect(mid[1]).toBeCloseTo(0, 9);
+        expect(mid[2]).toBeCloseTo(0.5, 9);
+        expect(mid[3]).toBeCloseTo(1, 9);
+        const last = [v[5 * STRIDE + 2], v[5 * STRIDE + 3], v[5 * STRIDE + 4], v[5 * STRIDE + 5]];
+        expect(last).toEqual([0, 0, 1, 1]);
+    });
+
+    it('quad4Gradient applies the batch alpha to the interpolated alpha', () => {
+        const b = new Batch();
+        b.alpha = 0.5;
+        b.quad4Gradient(0, 0, 0, 1, 0, 1, 1, 1, 1, 0, 1, 1, RED, BLUE);
+        const v = b.view;
+        expect(v[5]).toBeCloseTo(0.5, 9); // pure RED alpha × 0.5
+        expect(v[STRIDE + 5]).toBeCloseTo(0.5, 9); // pure BLUE alpha × 0.5
+    });
+
     it('dashedSeg with a pattern emits multiple on-dash quads; solid emits one', () => {
         const solid = new Batch();
         solid.dashedSeg(0, 0, 100, 0, 1, RED, null);

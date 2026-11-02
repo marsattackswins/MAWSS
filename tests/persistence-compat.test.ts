@@ -98,6 +98,7 @@ const RUNTIME_ONLY_KEYS = [
   "brokerDialogOpen",
   "indicatorSettingsId",
   "drawingSettingsTarget",
+  "rightPanelOpen", // panel-body fold (arrow + rail icons), session-local by design
   "selectedDrawingId",
   "drawingHistory",
   "drawingHistoryIndex",

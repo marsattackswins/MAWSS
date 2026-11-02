@@ -198,6 +198,37 @@ export function sessionDayRuns(
   return runs;
 }
 
+/**
+ * First future instant this venue stops trading, minute-resolved, or null when it stays
+ * open through the horizon. Only meaningful for a venue that is currently open — a closed
+ * venue returns its own `at` (the first minute it is already not trading).
+ */
+export function nextClosing(
+  session: Pick<SessionDef, "tz" | "window" | "weekdaysOnly">,
+  at: number,
+): number | null {
+  const start = Math.floor(at / MINUTE_MS) * MINUTE_MS;
+  for (let i = 0; i <= NEXT_OPEN_HORIZON_MINUTES; i++) {
+    const t = start + i * MINUTE_MS;
+    if (!isSessionOpen(session, t)) return t;
+  }
+  return null;
+}
+
+/**
+ * Among the venues trading at `at`, the one that closes soonest — what the card's
+ * "Current · …" line counts down to. Null when every venue is shut.
+ */
+export function currentClosing(at: number): { session: SessionDef; at: number } | null {
+  let best: { session: SessionDef; at: number } | null = null;
+  for (const session of openSessions(at)) {
+    const closing = nextClosing(session, at);
+    if (closing == null) continue;
+    if (!best || closing < best.at) best = { session, at: closing };
+  }
+  return best;
+}
+
 export type SessionBadge = "Open" | "Overlap" | "Closed";
 
 export type SessionState = {
@@ -205,6 +236,12 @@ export type SessionState = {
   next: { session: SessionDef; at: number } | null;
   /** Minutes until `next` opens (0 when there is no next). */
   nextInMinutes: number;
+  /** Venues trading right now, in card order (empty when Closed). */
+  current: SessionDef[];
+  /** The live venue that stops trading soonest, and when. Null when none is open. */
+  currentClosing: { session: SessionDef; at: number } | null;
+  /** Minutes until `currentClosing` (0 when there is none). */
+  closesInMinutes: number;
 };
 
 /**
@@ -234,13 +271,17 @@ export function clockLabel(at: number): string {
  * strip names the sessions itself, so there is no text headline to build here.
  */
 export function sessionState(at: number): SessionState {
-  const openCount = openSessions(at).length;
+  const open = openSessions(at);
   const next = nextSessionOpening(at);
+  const closing = currentClosing(at);
   // "Overlap" is the interesting state — two cash venues running at once.
-  const badge: SessionBadge = openCount === 0 ? "Closed" : openCount > 1 ? "Overlap" : "Open";
+  const badge: SessionBadge = open.length === 0 ? "Closed" : open.length > 1 ? "Overlap" : "Open";
   return {
     badge,
     next,
     nextInMinutes: next ? Math.max(0, Math.round((next.at - at) / MINUTE_MS)) : 0,
+    current: open,
+    currentClosing: closing,
+    closesInMinutes: closing ? Math.max(0, Math.round((closing.at - at) / MINUTE_MS)) : 0,
   };
 }

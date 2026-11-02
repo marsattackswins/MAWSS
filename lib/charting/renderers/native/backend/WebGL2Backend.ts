@@ -6,10 +6,10 @@ import type { SeriesSpec, LineLikeSeries, CandleSeries, LineStyle, CandleBarColo
 import { isLineLikeSeries, seriesShownOn } from '../../../core/model/series';
 import type { CoordinateSystem } from '../core/CoordinateSystem';
 import type { SceneGraph, PaneNode } from '../core/SceneGraph';
-import { candleTier, wickWidth, candleGeometry, snapY, aggregateCandleColumns } from './candle-lod';
+import { candleTier, wickWidth, candleGeometry, lineJoinsVisible, snapY, aggregateCandleColumns, type CandleGeometry } from './candle-lod';
 import { BASELINE_TOP_LINE, BASELINE_BOTTOM_LINE, BASELINE_FILL_ALPHA, BASELINE_FILL_ALPHA_FAR, withAlpha as cssWithAlpha, effectiveCandlePaint } from '../core/chartConfig';
 import type { IRenderBackend } from './IRenderBackend';
-import { Batch, type RGBA } from './gl/Batch';
+import { Batch, StripBatch, type RGBA } from './gl/Batch';
 import { parseColor } from './gl/color';
 
 const VERT_SRC = `#version 300 es
@@ -73,6 +73,16 @@ void main() {
     frag = sum;
 }`;
 
+type FrameCmd =
+    | { pane: number; kind: 'tri' | 'fill' | 'line'; first: number; count: number }
+    | { pane: number; kind: 'slice'; canvas: HTMLCanvasElement };
+
+interface PaneBases {
+    tri: number;
+    fill: number;
+    line: number;
+}
+
 const DASH: Record<string, readonly [number, number] | null> = {
     solid: null,
     dashed: [6, 4],
@@ -82,6 +92,123 @@ const DASH: Record<string, readonly [number, number] | null> = {
 /** Triangle-fan segment count for a round line join/cap of half-width `hw` (round enough, not over-tessellated). */
 function joinSegments(hw: number): number {
     return Math.max(6, Math.min(20, Math.round(hw * 4)));
+}
+
+/**
+ * Emit one line-like series into the triangle batch. Exported for the geometry
+ * regression test: dense frames must emit only the connecting quads (no per-vertex
+ * round-join fans), which is what keeps pan/zoom cost bounded by the screen width.
+ */
+export function emitPolylineGeometry(
+    b: Batch,
+    s: LineLikeSeries,
+    pane: PaneNode,
+    coords: CoordinateSystem,
+    i0: number,
+    i1: number,
+    step: boolean,
+    off = 0,
+    thin?: Batch,
+): void {
+    const w = Math.max(1, s.style.width);
+    const hw = w / 2;
+    const pattern = DASH[s.style.lineStyle] ?? null;
+    // Round joins/caps for solid straight lines only — the butt-capped segments otherwise leave a
+    // hard notch/kink at every vertex (visible when zoomed in). Dashed + step keep their corners.
+    // At dense (sub-pixel) zoom the fans are invisible and dominate the frame cost: drop them.
+    const rounded = !pattern && !step && lineJoinsVisible(coords.pxPerBar());
+    // Dense-zoom hairline path: below the join threshold a 1px solid line's AA quads are
+    // 6 vertices per bar (~99% of a dense frame's series geometry). GL_LINES needs only
+    // 2 (or 4 on a HiDPI surface, via two parallel device-pixel lines that add up to the
+    // same 1 CSS px). Same points, same color, same z tier — only the tessellation changes.
+    // GL_LINES can only represent whole device-pixel widths. At fractional DPR, keep
+    // the analytic-AA quad so the stroke remains one CSS pixel rather than rounding up.
+    const lineBatch = thin !== undefined && Number.isInteger(coords.dpr) && w <= 1 && !pattern && !step && !rounded
+        ? thin
+        : undefined;
+    // A GL line is one DEVICE pixel; emit round(dpr) parallel lines so the dense
+    // stroke stays ~1 CSS px at fractional/HiDPI ratios instead of shrinking.
+    const lineCount = Math.max(1, Math.round(coords.dpr));
+    const segs = joinSegments(hw);
+    const baseColor = parseColor(s.style.color);
+    let have = false;
+    let px = 0;
+    let py = 0;
+    for (let i = Math.max(1, i0 - 1); i <= i1; i += 1) {
+        const p = s.points[i - off];
+        const pv = s.points[i - 1 - off];
+        if (!p || p.value === null || !pv || pv.value === null) { have = false; continue; }
+        const x = coords.logicalToX(i);
+        const y = coords.priceToY(p.value, pane.scale, pane.bounds);
+        const c = p.color ? parseColor(p.color) : baseColor;
+        if (!have) {
+            px = coords.logicalToX(i - 1);
+            py = coords.priceToY(pv.value, pane.scale, pane.bounds);
+            if (rounded) b.circle(px, py, hw, pv.color ? parseColor(pv.color) : baseColor, segs); // cap at a run's start
+            have = true;
+        }
+        if (step) {
+            b.dashedSeg(px, py, x, py, w, c, pattern);
+            b.dashedSeg(x, py, x, y, w, c, pattern);
+        } else if (lineBatch) {
+            if (lineCount > 1) {
+                const dx = x - px;
+                const dy = y - py;
+                const len = Math.sqrt(dx * dx + dy * dy);
+                if (len > 1e-6) {
+                    const ox = -dy / len;
+                    const oy = dx / len;
+                    for (let k = 0; k < lineCount; k += 1) {
+                        const off = (k - (lineCount - 1) / 2) / coords.dpr;
+                        lineBatch.line(px + ox * off, py + oy * off, x + ox * off, y + oy * off, c);
+                    }
+                }
+            } else {
+                lineBatch.line(px, py, x, y, c);
+            }
+        } else {
+            b.dashedSeg(px, py, x, y, w, c, pattern);
+        }
+        if (rounded) b.circle(x, y, hw, c, segs); // round join at this vertex (cap at a run's end)
+        px = x;
+        py = y;
+    }
+}
+
+/**
+ * Emit a single-color fill band as a TRIANGLE_STRIP: two vertices (top/bottom) per
+ * column instead of a 6-vertex quad. Null points break the strip into runs so gaps
+ * and discontinuities are preserved; every bar is still sampled, so spikes and
+ * extrema are unchanged. Returns false for per-bar colors or gradients, which keep
+ * the quad path and its flat-per-bar color semantics. Exported for the geometry test.
+ */
+export function emitFillStripGeometry(
+    strip: StripBatch,
+    model: IndicatorModel,
+    fill: Fill,
+    pane: PaneNode,
+    coords: CoordinateSystem,
+    i0: number,
+    i1: number,
+    off = 0,
+): boolean {
+    if (!fill.color || fill.colors || fill.gradient) return false;
+    const from = findPoints(model, fill.fromSeriesId);
+    const to = findPoints(model, fill.toSeriesId);
+    if (!from || !to) return false;
+    const c = parseColor(fill.color);
+    for (let i = Math.max(0, i0 - 1); i <= i1; i += 1) {
+        const a = from[i - off];
+        const b = to[i - off];
+        if (!a || !b || a.value === null || b.value === null) {
+            strip.gap();
+            continue;
+        }
+        const x = coords.logicalToX(i);
+        strip.column(x, coords.priceToY(a.value, pane.scale, pane.bounds), coords.priceToY(b.value, pane.scale, pane.bounds), c);
+    }
+    strip.gap(); // never bridge the next fill into this one
+    return true;
 }
 
 /**
@@ -119,6 +246,27 @@ export class WebGL2Backend implements IRenderBackend {
     private vbo: WebGLBuffer | null = null;
     private uRes: WebGLUniformLocation | null = null;
     private readonly batch = new Batch();
+    /** Reused scratch for area fills — keeps dense frames from allocating a point
+     *  object per bar (and an RGBA array per vertex) on every pan/zoom frame. */
+    private readonly areaXs: number[] = [];
+    private readonly areaYs: number[] = [];
+    /** Reused candle layout — see {@link candleGeometry}'s `out` parameter. */
+    private readonly candleGeom: CandleGeometry = { wickX: 0, wickW: 0, bodyX: 0, bodyW: 0, center: 0 };
+    /** Dense-zoom 1px series hairlines (GL_LINES, 2 vertices per point) — see
+     *  {@link emitPolylineGeometry}. Drawn after the pane's triangles so the triangle
+     *  batch never has to interleave a different primitive mode. */
+    private readonly lineBatch = new Batch();
+    /** Dense single-color fill bands as strips (2 vertices per column) — see
+     *  {@link emitFillStripGeometry}. Drawn at the fill's z, between triangle flushes. */
+    private readonly fillStrip = new StripBatch();
+    /** One combined vertex buffer + ordered draw list for the whole frame. Geometry is
+     *  built into the reusable scratch arrays above, appended here once per pane, then
+     *  uploaded with a single bufferData. The previous code orphaned/uploaded the GPU
+     *  buffer at every flush (nine-plus driver calls per dense frame); Firefox/ANGLE
+     *  spent ~2 ms/frame in those calls alone. */
+    private readonly frameGeom = { buf: new Float32Array(1 << 20), n: 0 };
+    private readonly frameCmds: FrameCmd[] = [];
+    private readonly paneBases: PaneBases[] = [];
     private contextLost = false;
 
     // glow/bloom post-process (lazy; only when glow > 0)
@@ -158,11 +306,14 @@ export class WebGL2Backend implements IRenderBackend {
         this.canvas = canvas;
         // alpha:true keeps the canvas transparent where nothing is drawn, so a layer behind it (the
         // reveal-layer background) shows through; the chart background is painted by the wrapper element.
-        // antialias smooths line-quad + polygon edges. premultipliedAlpha:TRUE is REQUIRED: the SRC_ALPHA
+        // antialias is OFF: every line edge is already feathered analytically in the shader
+        // (edgeDist/edgeHalf), and candle/fill edges are axis-aligned. A multisampled
+        // default framebuffer made Firefox/ANGLE pay for resolve work with no visible gain.
+        // premultipliedAlpha:TRUE is REQUIRED: the SRC_ALPHA
         // over-blend writes PREMULTIPLIED pixels (rgb·a) to the framebuffer, so the compositor must be
         // told so — otherwise it re-applies alpha and double-darkens every semi-transparent pixel
         // (faint fills, and a darkened line-AA feather that reads as jaggies). Matches canvas2d exactly.
-        this.gl = canvas.getContext('webgl2', { alpha: true, antialias: true, depth: false, stencil: false, premultipliedAlpha: true });
+        this.gl = canvas.getContext('webgl2', { alpha: true, antialias: false, depth: false, stencil: false, premultipliedAlpha: true, desynchronized: true });
         if (!this.gl) return;
         if (!this.initGL()) {
             this.gl = null; // shaders/program failed → ok=false → renderer uses canvas2d
@@ -305,6 +456,22 @@ export class WebGL2Backend implements IRenderBackend {
         this.fboW = this.fboH = 0;
     }
 
+    /** Append one pane buffer to this frame's combined upload; returns its first vertex. */
+    private appendFrameGeom(view: Float32Array): number {
+        const g = this.frameGeom;
+        if (g.n + view.length > g.buf.length) {
+            let cap = g.buf.length;
+            while (cap < g.n + view.length) cap *= 2;
+            const next = new Float32Array(cap);
+            next.set(g.buf.subarray(0, g.n));
+            g.buf = next;
+        }
+        const first = g.n / 8; // 8 floats per vertex
+        g.buf.set(view, g.n);
+        g.n += view.length;
+        return first;
+    }
+
     render(scene: SceneGraph, coords: CoordinateSystem, theme: VelaTheme): void {
         const gl = this.gl;
         const canvas = this.canvas;
@@ -335,26 +502,50 @@ export class WebGL2Backend implements IRenderBackend {
         const barColorMap = mergeBarColors(scene.indicators);
         const panes = scene.orderedPanes();
         const liveSlices = new Set<HTMLCanvasElement>();
-        for (const pane of panes) {
+        const frameGeom = this.frameGeom;
+        frameGeom.n = 0;
+        this.frameCmds.length = 0;
+        this.paneBases.length = 0;
+        const cmds = this.frameCmds;
+        const bindGeometry = (): void => {
+            gl.blendFuncSeparate(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA, gl.ONE, gl.ONE_MINUS_SRC_ALPHA);
+            gl.useProgram(this.program);
+            gl.bindVertexArray(this.vao);
+            gl.uniform2f(this.uRes, canvas.width / dpr, canvas.height / dpr);
+            gl.bindBuffer(gl.ARRAY_BUFFER, this.vbo);
+        };
+        for (let pi = 0; pi < panes.length; pi += 1) {
+            const pane = panes[pi]!;
             const b = this.batch;
             b.reset();
-            // Pane scissor up-front: geometry flushes AND interleave-layer quads clip to it.
-            const topDev = Math.round(pane.bounds.top * dpr);
-            const botDev = Math.round((pane.bounds.top + pane.bounds.height) * dpr);
-            gl.scissor(0, canvas.height - botDev, Math.round(dataW * dpr), botDev - topDev);
-            // Draw whatever geometry accumulated so far — called at each interleave point (a
-            // texture quad has to land BETWEEN geometry draws) and once at the pane's end. The
-            // quad pass swaps program/VAO/blend, so every flush rebinds the geometry pipeline.
+            this.lineBatch.reset();
+            this.fillStrip.reset();
+            // Record painter-ordered ranges now; the single upload happens after every pane
+            // is built. No GL call (or buffer reallocation) is made per series/fill.
+            let triRecorded = 0;
+            let lineRecorded = 0;
+            let fillRunRecorded = 0;
             const flush = (): void => {
-                if (b.vertexCount === 0) return;
-                gl.blendFuncSeparate(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA, gl.ONE, gl.ONE_MINUS_SRC_ALPHA);
-                gl.useProgram(this.program);
-                gl.bindVertexArray(this.vao);
-                gl.uniform2f(this.uRes, canvas.width / dpr, canvas.height / dpr);
-                gl.bindBuffer(gl.ARRAY_BUFFER, this.vbo);
-                gl.bufferData(gl.ARRAY_BUFFER, b.view, gl.DYNAMIC_DRAW);
-                gl.drawArrays(gl.TRIANGLES, 0, b.vertexCount);
-                b.reset();
+                const count = b.vertexCount - triRecorded;
+                if (count <= 0) return;
+                cmds.push({ pane: pi, kind: 'tri', first: triRecorded, count });
+                triRecorded = b.vertexCount;
+            };
+            const flushFills = (): void => {
+                const s = this.fillStrip;
+                const starts = s.runStarts;
+                for (let k = fillRunRecorded; k < starts.length; k += 1) {
+                    const start = starts[k]!;
+                    const end = k + 1 < starts.length ? starts[k + 1]! : s.vertexCount;
+                    if (end - start >= 2) cmds.push({ pane: pi, kind: 'fill', first: start, count: end - start });
+                }
+                fillRunRecorded = starts.length;
+            };
+            const flushLines = (): void => {
+                const count = this.lineBatch.vertexCount - lineRecorded;
+                if (count <= 0) return;
+                cmds.push({ pane: pi, kind: 'line', first: lineRecorded, count });
+                lineRecorded = this.lineBatch.vertexCount;
             };
             // User-drawing interleave layers, prepainted by the renderer: each composites just
             // before the series carrying its `beforeZ` — under the candles, between indicators.
@@ -363,7 +554,7 @@ export class WebGL2Backend implements IRenderBackend {
             const drawSlicesUpTo = (z: number): void => {
                 for (; si < slices.length && slices[si]!.beforeZ <= z; si += 1) {
                     flush();
-                    if (this.drawSliceTexture(gl, slices[si]!.canvas)) liveSlices.add(slices[si]!.canvas);
+                    cmds.push({ pane: pi, kind: 'slice', canvas: slices[si]!.canvas });
                 }
             };
             // z-order within the batch (painter's): bg, then the candles + each indicator's
@@ -409,8 +600,30 @@ export class WebGL2Backend implements IRenderBackend {
                     // Fills paint at the model's z slot, under its own series — a band between
                     // two plots sits behind the plot lines, and the whole model moves as one
                     // unit when its object-tree row is reordered.
-                    for (const f of m.fills) if (f.overlay !== true) this.emitFill(b, m, f, mp, coords, i0, i1, off);
-                    for (const s of m.series) if (s.overlay !== true) this.emitSeries(b, s, mp, coords, i0, i1, theme, off);
+                    let fillsPending = false;
+                    for (const f of m.fills) {
+                        if (f.overlay === true) continue;
+                        if (emitFillStripGeometry(this.fillStrip, m, f, mp, coords, i0, i1, off)) {
+                            flush();
+                            fillsPending = true;
+                        } else {
+                            if (fillsPending) {
+                                flushFills();
+                                fillsPending = false;
+                            }
+                            this.emitFill(b, m, f, mp, coords, i0, i1, off);
+                        }
+                    }
+                    if (fillsPending) flushFills();
+                    for (const s of m.series) {
+                        if (s.overlay === true) continue;
+                        this.emitSeries(b, s, mp, coords, i0, i1, theme, off);
+                        // Keep the GL_LINES pass at this series' painter-order slot.
+                        if (this.lineBatch.vertexCount > 0) {
+                            flush();
+                            flushLines();
+                        }
+                    }
                 }
                 if (drawCandles && !candleDrawn) {
                     drawSlicesUpTo(scene.candleZ);
@@ -424,21 +637,74 @@ export class WebGL2Backend implements IRenderBackend {
                 if (isPrice) {
                     for (const m of scene.indicators.values()) {
                         const off = scene.offsetOf(m.id);
-                        for (const f of m.fills) if (f.overlay === true) this.emitFill(b, m, f, pane, coords, i0, i1, off);
+                        let fillsPending = false;
+                        for (const f of m.fills) {
+                            if (f.overlay !== true) continue;
+                            if (emitFillStripGeometry(this.fillStrip, m, f, pane, coords, i0, i1, off)) {
+                                flush();
+                                fillsPending = true;
+                            } else {
+                                if (fillsPending) {
+                                    flushFills();
+                                    fillsPending = false;
+                                }
+                                this.emitFill(b, m, f, pane, coords, i0, i1, off);
+                            }
+                        }
+                        if (fillsPending) flushFills();
                     }
                     for (const m of scene.indicators.values()) {
                         const off = scene.offsetOf(m.id);
-                        for (const s of m.series) if (s.overlay === true) this.emitSeries(b, s, pane, coords, i0, i1, theme, off);
+                        for (const s of m.series) {
+                            if (s.overlay !== true) continue;
+                            this.emitSeries(b, s, pane, coords, i0, i1, theme, off);
+                            if (this.lineBatch.vertexCount > 0) {
+                                flush();
+                                flushLines();
+                            }
+                        }
                     }
                 }
                 // Stack-top slices: the topmost indicator's drawings, force_overlay drawings,
                 // and layers bound to a hidden/removed series — above the forced series too,
                 // since drawings always paint over their own plots.
                 drawSlicesUpTo(Infinity);
+                // Any line left above the forced series but below hlines/price lines.
+                if (this.lineBatch.vertexCount > 0) {
+                    flush();
+                    flushLines();
+                }
                 for (const m of models) { const mp = effPane(m); for (const pl of m.priceLines) this.emitHline(b, pl, mp, coords, dataW, theme); }
                 b.alpha = 1;
             }
             flush();
+            flushFills();
+            flushLines();
+            const bases: PaneBases = { tri: 0, fill: 0, line: 0 };
+            bases.tri = this.appendFrameGeom(b.view);
+            bases.fill = this.appendFrameGeom(this.fillStrip.view);
+            bases.line = this.appendFrameGeom(this.lineBatch.view);
+            this.paneBases[pi] = bases;
+        }
+        // One upload for the whole frame, then obey the recorded painter's order.
+        if (frameGeom.n > 0) {
+            bindGeometry();
+            gl.bufferData(gl.ARRAY_BUFFER, frameGeom.buf.subarray(0, frameGeom.n), gl.DYNAMIC_DRAW);
+            for (const cmd of cmds) {
+                const pane = panes[cmd.pane]!;
+                const topDev = Math.round(pane.bounds.top * dpr);
+                const botDev = Math.round((pane.bounds.top + pane.bounds.height) * dpr);
+                gl.scissor(0, canvas.height - botDev, Math.round(dataW * dpr), botDev - topDev);
+                if (cmd.kind === 'slice') {
+                    if (this.drawSliceTexture(gl, cmd.canvas)) liveSlices.add(cmd.canvas);
+                    continue;
+                }
+                const base = this.paneBases[cmd.pane]!;
+                bindGeometry();
+                const mode = cmd.kind === 'tri' ? gl.TRIANGLES : cmd.kind === 'fill' ? gl.TRIANGLE_STRIP : gl.LINES;
+                const first = cmd.kind === 'tri' ? base.tri : cmd.kind === 'fill' ? base.fill : base.line;
+                gl.drawArrays(mode, first + cmd.first, cmd.count);
+            }
         }
         gl.disable(gl.SCISSOR_TEST);
         // Drop textures whose layer disappeared this frame (the canvas cache in the drawings
@@ -569,7 +835,7 @@ export class WebGL2Backend implements IRenderBackend {
             if (!isLineLikeSeries(s) || !seriesShownOn(s, 'pane')) return;
             if (s.kind === 'histogram' || s.kind === 'columns') return;
             if (s.kind === 'circles' || s.kind === 'cross') this.emitPointMarkers(b, s, pane, coords, i0, i1, off);
-            else this.emitPolyline(b, s, pane, coords, i0, i1, s.kind === 'step', off);
+            else emitPolylineGeometry(b, s, pane, coords, i0, i1, s.kind === 'step', off);
         };
         for (const m of scene.indicatorsForPane(pane.id)) {
             const off = scene.offsetOf(m.id);
@@ -726,6 +992,11 @@ export class WebGL2Backend implements IRenderBackend {
     private emitPriceLine(b: Batch, bars: OHLCV[], i0: number, i1: number, coords: CoordinateSystem, pane: PaneNode, c: RGBA, width: number): void {
         const hw = Math.max(1, width) / 2;
         const segs = joinSegments(hw);
+        // A round join/cap is a full triangle fan per vertex. Once candles are sub-pixel
+        // dense those fans land inside a single screen pixel, so they cost the most and
+        // show nothing — keep only the connecting quads at that zoom (the dense-polyline
+        // LOD; see emitPolyline).
+        const joins = lineJoinsVisible(coords.pxPerBar());
         let have = false;
         let px = 0;
         let py = 0;
@@ -738,7 +1009,7 @@ export class WebGL2Backend implements IRenderBackend {
             const x = coords.logicalToX(i);
             const y = coords.priceToY(bar.close, pane.scale, pane.bounds);
             if (have) b.seg(px, py, x, y, width, c);
-            b.circle(x, y, hw, c, segs); // round join at each vertex (round cap at run ends) — no faceted kinks
+            if (joins) b.circle(x, y, hw, c, segs); // round join at each vertex (round cap at run ends) — no faceted kinks
             px = x;
             py = y;
             have = true;
@@ -749,19 +1020,26 @@ export class WebGL2Backend implements IRenderBackend {
      *  `bottom` (at the pane floor). Defaults fade the line color out (bottom transparent). */
     private emitPriceArea(b: Batch, bars: OHLCV[], i0: number, i1: number, coords: CoordinateSystem, pane: PaneNode, top: RGBA, bottom: RGBA): void {
         const baseY = pane.bounds.top + pane.bounds.height;
-        const run: Array<{ x: number; y: number }> = [];
+        const xs = this.areaXs;
+        const ys = this.areaYs;
+        xs.length = 0;
+        ys.length = 0;
+        let runStart = 0;
         let minY = Infinity;
         const flush = (): void => {
-            if (run.length >= 2) {
+            const end = xs.length;
+            if (end - runStart >= 2) {
                 const span = baseY - minY;
-                const at = (y: number): RGBA => lerpColor(top, bottom, span < 1e-6 ? 0 : clamp01((y - minY) / span));
-                for (let k = 1; k < run.length; k += 1) {
-                    const a = run[k - 1]!;
-                    const c = run[k]!;
-                    b.quad4(a.x, a.y, at(a.y), c.x, c.y, at(c.y), c.x, baseY, bottom, a.x, baseY, bottom);
+                const tOf = (y: number): number => (span < 1e-6 ? 0 : clamp01((y - minY) / span));
+                for (let k = runStart + 1; k < end; k += 1) {
+                    const ax = xs[k - 1]!;
+                    const ay = ys[k - 1]!;
+                    const cx = xs[k]!;
+                    const cy = ys[k]!;
+                    b.quad4Gradient(ax, ay, tOf(ay), cx, cy, tOf(cy), cx, baseY, 1, ax, baseY, 1, top, bottom);
                 }
             }
-            run.length = 0;
+            runStart = end;
             minY = Infinity;
         };
         for (let i = Math.max(0, i0 - 1); i <= i1; i += 1) {
@@ -770,9 +1048,9 @@ export class WebGL2Backend implements IRenderBackend {
                 flush();
                 continue;
             }
-            const x = coords.logicalToX(i);
             const y = coords.priceToY(bar.close, pane.scale, pane.bounds);
-            run.push({ x, y });
+            xs.push(coords.logicalToX(i));
+            ys.push(y);
             if (y < minY) minY = y;
         }
         flush();
@@ -876,7 +1154,7 @@ export class WebGL2Backend implements IRenderBackend {
             if (!bar || bar.high <= bar.low) continue; // skip zero-range candles (e.g. the intro reveal's un-started state)
             // Wick + body snapped to the device grid as one unit, so the wick is always
             // dead-center in the body and the gap between candles stays uniform.
-            const g = candleGeometry(coords.logicalToX(i), spacing, coords.dpr, this.candleBodyScale);
+            const g = candleGeometry(coords.logicalToX(i), spacing, coords.dpr, this.candleBodyScale, this.candleGeom);
             const isUp = bar.close >= bar.open;
             const dir = isUp ? up : down;
             const bc = barColors.get(bar.time);
@@ -950,6 +1228,9 @@ export class WebGL2Backend implements IRenderBackend {
     }
 
     private emitSeries(b: Batch, spec: SeriesSpec, pane: PaneNode, coords: CoordinateSystem, i0: number, i1: number, theme: VelaTheme, off = 0): void {
+        // Only the main scene batch gets hairlines; the glow pass re-emits into its own
+        // offscreen batch and still needs filled quads.
+        const thin = b === this.batch ? this.lineBatch : undefined;
         // Off-pane series (legend/data-window-only readouts, hidden fill anchors) are
         // kept in the model for fills and readouts but never painted here.
         if (!seriesShownOn(spec, 'pane')) return;
@@ -965,49 +1246,17 @@ export class WebGL2Backend implements IRenderBackend {
                 break;
             case 'area':
                 this.emitArea(b, spec, pane, coords, i0, i1, off);
-                this.emitPolyline(b, spec, pane, coords, i0, i1, false, off);
+                emitPolylineGeometry(b, spec, pane, coords, i0, i1, false, off, thin);
                 break;
             case 'circles':
             case 'cross':
                 this.emitPointMarkers(b, spec, pane, coords, i0, i1, off);
                 break;
             case 'step':
-                this.emitPolyline(b, spec, pane, coords, i0, i1, true, off);
+                emitPolylineGeometry(b, spec, pane, coords, i0, i1, true, off);
                 break;
             default:
-                this.emitPolyline(b, spec, pane, coords, i0, i1, false, off);
-        }
-    }
-
-    private emitPolyline(b: Batch, s: LineLikeSeries, pane: PaneNode, coords: CoordinateSystem, i0: number, i1: number, step: boolean, off = 0): void {
-        const w = Math.max(1, s.style.width);
-        const hw = w / 2;
-        const pattern = DASH[s.style.lineStyle] ?? null;
-        // Round joins/caps for solid straight lines only — the butt-capped segments otherwise leave a
-        // hard notch/kink at every vertex (visible when zoomed in). Dashed + step keep their corners.
-        const rounded = !pattern && !step;
-        const segs = joinSegments(hw);
-        let have = false;
-        for (let i = Math.max(1, i0 - 1); i <= i1; i += 1) {
-            const p = s.points[i - off];
-            const pv = s.points[i - 1 - off];
-            if (!p || p.value === null || !pv || pv.value === null) { have = false; continue; }
-            const x = coords.logicalToX(i);
-            const y = coords.priceToY(p.value, pane.scale, pane.bounds);
-            const px = coords.logicalToX(i - 1);
-            const py = coords.priceToY(pv.value, pane.scale, pane.bounds);
-            const c = parseColor(p.color ?? s.style.color);
-            if (step) {
-                b.dashedSeg(px, py, x, py, w, c, pattern);
-                b.dashedSeg(x, py, x, y, w, c, pattern);
-            } else {
-                b.dashedSeg(px, py, x, y, w, c, pattern);
-            }
-            if (rounded) {
-                if (!have) b.circle(px, py, hw, parseColor(pv.color ?? s.style.color), segs); // cap at a run's start
-                b.circle(x, y, hw, c, segs); // round join at this vertex (cap at a run's end)
-            }
-            have = true;
+                emitPolylineGeometry(b, spec, pane, coords, i0, i1, false, off, thin);
         }
     }
 
@@ -1016,23 +1265,29 @@ export class WebGL2Backend implements IRenderBackend {
         const base = parseColor(s.style.color);
         // Per contiguous run: a baseline→line band with a top-color → transparent fade
         // (gradient via per-vertex alpha; matches the canvas2d minY→baseY gradient).
-        let run: Array<{ x: number; y: number }> = [];
+        // The x/y run is kept in reused scratch arrays and the vertex colors are
+        // interpolated in-place — no point objects or RGBA arrays per bar.
+        const xs = this.areaXs;
+        const ys = this.areaYs;
+        xs.length = 0;
+        ys.length = 0;
+        let runStart = 0;
         let minY = Infinity;
         const flush = (): void => {
-            if (run.length < 1) {
-                run = [];
-                minY = Infinity;
-                return;
+            const end = xs.length;
+            if (end - runStart >= 1) {
+                const span = baseY - minY;
+                const tOf = (y: number): number => (span < 1e-6 ? 0 : clamp01((y - minY) / span));
+                for (let k = runStart + 1; k < end; k += 1) {
+                    const ax = xs[k - 1]!;
+                    const ay = ys[k - 1]!;
+                    const cx = xs[k]!;
+                    const cy = ys[k]!;
+                    // quad: line-top (a, c) down to baseline — top verts faded by y, base verts transparent.
+                    b.quad4Gradient(ax, ay, tOf(ay), cx, cy, tOf(cy), cx, baseY, 1, ax, baseY, 1, base, ZERO);
+                }
             }
-            const span = baseY - minY;
-            const at = (y: number): RGBA => fadeAlpha(base, span < 1e-6 ? 0 : clamp01((y - minY) / span));
-            for (let k = 1; k < run.length; k += 1) {
-                const a = run[k - 1]!;
-                const c = run[k]!;
-                // quad: line-top (a, c) down to baseline — top verts faded by y, base verts transparent.
-                b.quad4(a.x, a.y, at(a.y), c.x, c.y, at(c.y), c.x, baseY, ZERO, a.x, baseY, ZERO);
-            }
-            run = [];
+            runStart = end;
             minY = Infinity;
         };
         for (let i = i0; i <= i1; i += 1) {
@@ -1041,9 +1296,9 @@ export class WebGL2Backend implements IRenderBackend {
                 flush();
                 continue;
             }
-            const x = coords.logicalToX(i);
             const y = coords.priceToY(p.value, pane.scale, pane.bounds);
-            run.push({ x, y });
+            xs.push(coords.logicalToX(i));
+            ys.push(y);
             if (y < minY) minY = y;
         }
         flush();
@@ -1147,13 +1402,6 @@ function clamp01(t: number): number {
 
 function lerpColor(a: RGBA, b: RGBA, t: number): RGBA {
     return [a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t, a[2] + (b[2] - a[2]) * t, a[3] + (b[3] - a[3]) * t];
-}
-
-function fadeAlpha(c: RGBA, t: number): RGBA {
-    // Fade toward transparent BLACK (rgb + alpha → 0) to match canvas2d's
-    // createLinearGradient(color → 'rgba(0,0,0,0)') area fill.
-    const k = 1 - t;
-    return [c[0] * k, c[1] * k, c[2] * k, c[3] * k];
 }
 
 function findPoints(model: IndicatorModel, seriesId: string): LineLikeSeries['points'] | null {

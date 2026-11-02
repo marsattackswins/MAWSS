@@ -402,10 +402,11 @@ describe('EngineOrchestrator', () => {
         chart.setTheme('light');
         expect(renderer.themes.map((t) => t.background)).toEqual(['#ffffff']);
         expect(seen).toEqual(['#ffffff']);
-        // Candle hues are shared across themes — a theme swap never recolors the series.
-        // (They come from DARK_THEME which is used as the base for all theme derivation.)
-        expect(renderer.themes[0]!.upColor).toBe(BULLISH);  // '#a7be94'
-        expect(renderer.themes[0]!.downColor).toBe(BEARISH); // '#af6870'
+        // Each palette carries its own candle hue, and setTheme hands the resolved
+        // theme straight to the renderer — so swapping to `light` recolors the series
+        // to the standard green/red (unlike the old shared-sage palettes).
+        expect(renderer.themes[0]!.upColor).toBe('#26a69a');
+        expect(renderer.themes[0]!.downColor).toBe('#ef5350');
         chart.setTheme('light'); // already active → no re-skin, no event (breaks host echo loops)
         expect(renderer.themes).toHaveLength(1);
         expect(seen).toHaveLength(1);
@@ -507,6 +508,45 @@ describe('EngineOrchestrator', () => {
         await flush();
         expect(vr.visible).toBe(true);
         expect(engine.runCount[vr.id] ?? 0).toBeGreaterThan(runsBefore);
+    });
+
+    it('a pan/zoom viewport does not recompute an indicator that does not react to it', async () => {
+        class IdleNative implements NativeIndicator {
+            calls = { start: 0, onBars: 0, onViewport: 0, setInputs: 0, suspend: 0, resume: 0, stop: 0 };
+            start(): void { this.calls.start += 1; }
+            onBars(): void { this.calls.onBars += 1; }
+            onViewport(): void { this.calls.onViewport += 1; }
+            setInputs(): void { this.calls.setInputs += 1; }
+            suspend(): void { this.calls.suspend += 1; }
+            resume(): void { this.calls.resume += 1; }
+            stop(): void { this.calls.stop += 1; }
+        }
+        let instance: IdleNative | null = null;
+        registerNativeIndicator({
+            type: 'viewport-idle-native', title: 'Idle Native', paneHint: 'price', overlay: true,
+            reactsToViewport: false, // the app's order-blocks/PMO kind: bars change ⇒ recompute, pan/zoom ⇒ no
+            inputsSchema: () => [], defaultInputs: () => ({}),
+            create: () => (instance = new IdleNative()),
+        });
+        try {
+            const renderer = new FakeRenderer();
+            const chart = new Vela({} as unknown as HTMLElement, { live: false, volume: false }, { renderer, engines: [], dataFeed: new MockDataFeed() });
+            chart.addNativeIndicator('viewport-idle-native');
+            await chart.ready();
+            await flush();
+            const before = { ...instance!.calls };
+
+            // Five pan/zoom moves inside the debounce window — a real drag emits this way.
+            for (let i = 0; i < 5; i += 1) {
+                renderer.fireViewport({ from: 1_700_000_000_000 + i * 3_600_000, to: 1_700_000_900_000 + i * 3_600_000 });
+            }
+            await new Promise((r) => setTimeout(r, 220)); // > viewport debounce
+            await flush();
+
+            expect(instance!.calls).toEqual(before); // no start/onBars/onViewport — cached output untouched
+        } finally {
+            unregisterNativeIndicator('viewport-idle-native');
+        }
     });
 
     it('addNativeIndicator: mounts via the shared pipeline, is single-instance per type, and inspect tags it', async () => {

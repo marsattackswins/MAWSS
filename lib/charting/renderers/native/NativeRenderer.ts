@@ -105,6 +105,8 @@ interface ExtLayer {
     channel: string;
     /** The indicator instance this entry is dedicated to (null = the base entry). */
     owner: string | null;
+    /** Last paint had no content: the canvas is already cleared and paint is skipped. */
+    blank: boolean;
 }
 
 const PRICE_PANE_ID = 'price';
@@ -291,6 +293,16 @@ export class NativeRenderer implements IChartRenderer {
     private candleBodyAlpha = 1; // candle body-fill opacity (constant; style layers may modulate later)
     private candleStructureAlpha = 1; // candle wick+border opacity (fades only partway, keeping a skeleton)
     private lastPointer: { x: number; y: number } | null = null; // last plot-relative pointer (re-tests the hovered row after a pan/zoom)
+    /** Latest pointer awaiting the next paint frame. Raw pointer events are coalesced:
+     *  a high-polling-rate mouse must not run the crosshair readout, the mark hit-tests
+     *  and every DOM subscriber once per EVENT — once per frame is all they can use. */
+    private pendingPointer: { x: number; y: number } | null = null;
+    private pointerPending = false;
+    /** A gesture changed the viewport; its DOM/scroll-button/subscriber notification is
+     *  deferred to the frame that paints it. Raw pointermove events arrive far faster
+     *  than the display refreshes, and running those callbacks per event both reflowed
+     *  the scroll button and fanned out to chart-sync subscribers needlessly. */
+    private viewportNotifyPending = false;
 
     // ── volume layers (bottom-anchored columns + visible-range profile; driven by their native indicators) ──
     private volumeActive = false; // a volume native indicator is mounted
@@ -523,7 +535,9 @@ export class NativeRenderer implements IChartRenderer {
                 break;
             case 'timeLabelFormat':
                 // Host label-format knobs: 12/24-hour clock, date-label style and a
-                // weekday-on-date toggle for the time axis + crosshair chip. Nulls                // reset to the built-in defaults.
+                // weekday-on-date toggle for the time axis + crosshair chip. Nulls
+
+                // reset to the built-in defaults.
                 {
                     const f = (value ?? null) as Partial<TimeLabelFormat> | null;
                     this.scene.timeLabelFormat = {
@@ -1478,7 +1492,7 @@ export class NativeRenderer implements IChartRenderer {
         Object.assign(this.plot.style, { position: 'absolute', top: '0', right: '0', bottom: '0', left: '0' });
         // SDK renderer layers: one transparent canvas each, stacked by placement —
         // 'below-data' behind the candles, 'above-data' over them (under the chrome/axes).
-        this.extLayers = rendererLayers().map((def) => ({ def, instance: def.create(), canvas: this.createLayerCanvas(), channel: def.id, owner: null }));
+        this.extLayers = rendererLayers().map((def) => ({ def, instance: def.create(), canvas: this.createLayerCanvas(), channel: def.id, owner: null, blank: false }));
         const below = this.extLayers.filter((l) => l.def.placement === 'below-data').map((l) => l.canvas);
         const above = this.extLayers.filter((l) => l.def.placement !== 'below-data').map((l) => l.canvas);
         this.plot.append(this.backdropCanvas, ...below, this.dataCanvas, this.volumeCanvas, this.vpvrCanvas, ...above, this.chromeCanvas, this.drawingsCanvas, this.cursorCanvas, this.overlayRoot);
@@ -1902,6 +1916,9 @@ export class NativeRenderer implements IChartRenderer {
         this.markPulseRaf = null;
         this.scrollButton?.remove();
         this.scrollButton = null;
+        this.pointerPending = false;
+        this.pendingPointer = null;
+        this.viewportNotifyPending = false;
         for (const l of this.extLayers) l.instance.destroy?.();
         this.extLayers = [];
         this.backdropRenderer.destroy();
@@ -2505,7 +2522,7 @@ export class NativeRenderer implements IChartRenderer {
         this.coords.setViewport(clamped);
         this.targetBarSpacing = clamped.barSpacing;
         this.scheduler.invalidate(InvalidateLevel.Full);
-        this.emitViewportChange();
+        this.viewportNotifyPending = true; // once, from the frame that paints this viewport
     }
 
     /** Eased cursor-anchored zoom: glide barSpacing → target, pinning the anchor logical at its pixel. */
@@ -2521,7 +2538,7 @@ export class NativeRenderer implements IChartRenderer {
             this.coords.setViewport(v);
             this.targetBarSpacing = v.barSpacing;
             this.scheduler.invalidate(InvalidateLevel.Full);
-            this.emitViewportChange();
+            this.viewportNotifyPending = true; // coalesced with the paint
             return;
         }
         this.targetBarSpacing = barSpacing;
@@ -2576,6 +2593,8 @@ export class NativeRenderer implements IChartRenderer {
 
     /** One animation frame: ease zoom + integrate inertia + glide autoscale, then paint. */
     private animTick(dtMs: number): boolean {
+        this.flushPointerMove(); // a drag/zoom owns the frame; keep the readout in step
+        this.flushViewportNotify();
         const vp = this.coords.getViewport();
         let barSpacing = vp.barSpacing;
         let rightOffset = vp.rightOffset;
@@ -2685,13 +2704,41 @@ export class NativeRenderer implements IChartRenderer {
         return moving;
     }
 
+    /** Run a deferred gesture viewport notification once per painted frame. */
+    private flushViewportNotify(): void {
+        if (!this.viewportNotifyPending) return;
+        this.viewportNotifyPending = false;
+        this.emitViewportChange();
+    }
+
     private emitViewportChange(): void {
         this.updateScrollToRealtimeButton(); // reveal/hide as the latest bar scrolls in/out of view
         const range = this.getVisibleRange();
         if (range) for (const cb of this.viewportCbs) cb(range);
     }
 
+    /**
+     * Record the latest pointer position for this frame. The readout, hit-tests and
+     * crosshair subscribers all run once in {@link flushPointerMove} — never once per
+     * raw event, which is what kept a 1000 Hz mouse forcing a status-line reflow
+     * (hundreds of µs each) between every paint.
+     */
     private handlePointerMove(x: number | null, y: number | null): void {
+        this.pendingPointer = x === null || y === null ? null : { x, y };
+        this.pointerPending = true;
+        this.scheduler?.invalidate(InvalidateLevel.Cursor);
+    }
+
+    /** Apply the coalesced pointer position to the scene + crosshair subscribers. Runs at
+     *  most once per frame, from the frame entry points (renderFrame/animTick). */
+    private flushPointerMove(): void {
+        if (!this.pointerPending) return;
+        this.pointerPending = false;
+        const p = this.pendingPointer;
+        this.applyPointerMove(p ? p.x : null, p ? p.y : null);
+    }
+
+    private applyPointerMove(x: number | null, y: number | null): void {
         if (x === null || y === null || this.coords.barCount === 0) {
             this.scene.crosshair = null;
             this.hoverSeparatorY = null;
@@ -2711,8 +2758,6 @@ export class NativeRenderer implements IChartRenderer {
         // The separator spans data + gutter, so its hover highlight tracks the full width (not just
         // the data area) — the divider stays a visible, grabbable handle over the scale too.
         this.hoverSeparatorY = x >= 0 && y >= 0 && y <= this.coords.height ? this.separatorHoverY(y) : null;
-        // Cursor tier: repaint only the crosshair overlay, not the data layer.
-        this.scheduler.invalidate(InvalidateLevel.Cursor);
         // A multi-group mark stack fans out while the pointer is over it (or over the gaps of its fan).
         this.setMarksExpanded(inData ? this.chrome.markStackAt(x, y) : null);
         this.setMarkHover(inData ? (this.chrome.markGlyphAt(x, y)?.cluster.key ?? null) : null);
@@ -3271,6 +3316,7 @@ export class NativeRenderer implements IChartRenderer {
     }
 
     private renderFrame(level: InvalidateLevel): void {
+        this.flushViewportNotify();
         // Cursor tier: only the crosshair moved → repaint just the overlay layer,
         // leaving the geometry (L0) + chrome (L1) layers untouched. Light/Full
         // recompute the scales then repaint L0 + L1; the crosshair always follows
@@ -3279,6 +3325,7 @@ export class NativeRenderer implements IChartRenderer {
         // + crosshair every tick and picks up live data/scale changes), so a concurrent
         // Scheduler invalidation (live tick, hover) must NOT also paint — else both run
         // each frame. The animTick will reflect the change on its next frame.
+        this.flushPointerMove(); // coalesced hover work lands in THIS frame, before the paint
         if (this.animator.active) return;
         if (repaintsData(level)) {
             this.computeScales();
@@ -3307,7 +3354,7 @@ export class NativeRenderer implements IChartRenderer {
         if (!pane) return;
         const nowMs = typeof performance !== 'undefined' ? performance.now() : Date.now();
         for (const l of this.extLayers) {
-            if (!l.def.repaintOnCursor) continue;
+            if (!l.def.repaintOnCursor || l.blank) continue;
             const lp = this.layerPane(l) ?? pane;
             if (lp.collapsed || this.layerHiddenWithCandles(l)) continue; // blanked by the data frame; nothing to hover
             l.instance.render(this.extLayerArgs(l, lp.scale, lp.bounds, nowMs));
@@ -3319,6 +3366,18 @@ export class NativeRenderer implements IChartRenderer {
     private clearLayerCanvas(canvas: HTMLCanvasElement): void {
         if (canvas.width === 0 || canvas.height === 0) return;
         canvas.getContext('2d')?.clearRect(0, 0, canvas.width, canvas.height);
+    }
+
+    /** Clear a layer once, then skip its paint until content returns. */
+    private blankLayer(l: ExtLayer): void {
+        if (l.blank) return;
+        this.clearLayerCanvas(l.canvas);
+        l.blank = true;
+    }
+
+    /** Content is back: resume painting the layer. */
+    private showLayer(l: ExtLayer): void {
+        l.blank = false;
     }
 
     /** One frame's args for an SDK renderer layer (shared by the data + cursor paint paths).
@@ -3386,11 +3445,12 @@ export class NativeRenderer implements IChartRenderer {
                 // series takes its chart type's layer with it — blank the layer for the
                 // duration (the instance isn't poked, so it can't clear itself). Skipping
                 // the modulateBase fold too: nothing is left to dim under it.
-                if (lp.collapsed || this.layerHiddenWithCandles(l)) {
-                    this.clearLayerCanvas(l.canvas);
+                const args = this.extLayerArgs(l, lp.scale, lp.bounds, nowMs);
+                if (lp.collapsed || this.layerHiddenWithCandles(l) || (l.def.hasContent && !l.def.hasContent(args))) {
+                    this.blankLayer(l);
                     continue;
                 }
-                const args = this.extLayerArgs(l, lp.scale, lp.bounds, nowMs);
+                this.showLayer(l);
                 l.instance.render(args);
                 // Any mounted layer may dim/slim the base painting (chart type or overlay)
                 // — folded this same frame, applied below before the backend paints. Only
@@ -3464,6 +3524,26 @@ export class NativeRenderer implements IChartRenderer {
     /** The interactive user-drawings surface the core DrawingController drives. */
     get userDrawingsPort(): IDrawingsRendererPort | undefined {
         return this.userDrawings ?? undefined;
+    }
+
+    /** HOST OVERLAY SEAM (local fix, see lib/charting/README.md): price → CSS pixel Y
+     *  inside the chart canvas, for app DOM overlays that must stay glued to a price
+     *  line through pan/zoom/scale. Null when the price pane has no geometry yet. */
+    priceToPixelY(price: number): number | null {
+        if (!Number.isFinite(price)) return null;
+        const pricePane = this.scene.orderedPanes().find((p) => p.kind === 'price');
+        if (!pricePane) return null;
+        const y = this.coords.priceToY(price, pricePane.scale, pricePane.bounds);
+        return Number.isFinite(y) ? y : null;
+    }
+
+    /** Inverse of {@link priceToPixelY} — the price under a canvas CSS-pixel Y (host drags). */
+    pixelYToPrice(y: number): number | null {
+        if (!Number.isFinite(y)) return null;
+        const pricePane = this.scene.orderedPanes().find((p) => p.kind === 'price');
+        if (!pricePane) return null;
+        const price = this.coords.yToPrice(y, pricePane.scale, pricePane.bounds);
+        return Number.isFinite(price) ? price : null;
     }
 
     /** Focus the data canvas — the element chart/drawing keyboard shortcuts key off
@@ -3790,7 +3870,7 @@ export class NativeRenderer implements IChartRenderer {
         canvas.height = this.dataCanvas.height;
         canvas.style.width = this.dataCanvas.style.width || '100%';
         canvas.style.height = this.dataCanvas.style.height || '100%';
-        const entry: ExtLayer = { def: base.def, instance: base.def.create(), canvas, channel, owner: model.id };
+        const entry: ExtLayer = { def: base.def, instance: base.def.create(), canvas, channel, owner: model.id, blank: false };
         this.extLayers.push(entry);
         this.plot.insertBefore(canvas, this.chromeCanvas); // re-slotted by the owner's z on the next data frame
         entry.instance.mount(canvas);

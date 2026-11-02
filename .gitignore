@@ -54,6 +54,9 @@ yarn-error.log*
 /MAWS/
 screenshots/
 
+# vendored third-party apps (LuxAlgo trade-journal checkout)
+/vendor/
+
 # typescript
 *.tsbuildinfo
 next-env.d.ts

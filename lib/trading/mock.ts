@@ -1,7 +1,7 @@
 import { MOCK_START_BALANCE } from "@/lib/brokers";
 import { mawsFeed } from "@/lib/maws/feed";
 import { useAppStore } from "@/lib/store";
-import { liquidationPrice } from "@/lib/trade-marks";
+import { clampCloseFraction, liquidationPrice } from "@/lib/trade-marks";
 import { resolveExitCondition } from "@/lib/trading/exit-conditions";
 import { playExecutionSound } from "@/lib/trading/sounds";
 import { protectFromSettings, resolveSymbolTrading } from "@/lib/trading/symbol-settings";
@@ -165,6 +165,28 @@ export function closePosition(id: string) {
   applyFill(pos.symbol, closeSide, last, pos.qty, {
     orderType: "market",
     reason: "manual",
+  });
+}
+
+/**
+ * Paper partial close: closes `fraction` of one position's quantity at the last
+ * price through the same `applyFill` netting path as a full close (the fill is
+ * bound to the position id, so it can never close an unrelated position).
+ */
+export function closePositionFraction(id: string, fraction: number) {
+  const s = useAppStore.getState();
+  const pos = s.positions.find((p) => p.id === id);
+  if (!pos) return;
+  const f = clampCloseFraction(fraction);
+  if (!(f > 0)) return;
+  const qty = pos.qty * f;
+  if (!(qty > 0)) return;
+  const last = mawsFeed.getQuote(pos.symbol).last;
+  const closeSide: "buy" | "sell" = pos.side === "long" ? "sell" : "buy";
+  applyFill(pos.symbol, closeSide, last, qty, {
+    orderType: "market",
+    reason: "manual",
+    closePositionId: pos.id,
   });
 }
 

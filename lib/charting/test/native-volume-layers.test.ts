@@ -26,8 +26,9 @@ const THEME: VelaTheme = {
 interface Rect { op: 'fill' | 'stroke'; style: string; x: number; y: number; w: number; h: number; alpha: number }
 
 /** A minimal recording CanvasRenderingContext2D: rect ops with their style/alpha/coords. */
-function recordingCtx(): { ctx: CanvasRenderingContext2D; rects: Rect[] } {
+function recordingCtx(): { ctx: CanvasRenderingContext2D; rects: Rect[]; clears: () => number } {
     const rects: Rect[] = [];
+    let clears = 0;
     const state = { fillStyle: '', strokeStyle: '', alpha: 1 };
     const noop = (): void => undefined;
     const ctx = {
@@ -38,12 +39,12 @@ function recordingCtx(): { ctx: CanvasRenderingContext2D; rects: Rect[] } {
         set globalAlpha(v: number) { state.alpha = v; },
         get globalAlpha() { return state.alpha; },
         lineWidth: 1,
-        setTransform: noop, clearRect: noop, save: noop, restore: noop,
+        setTransform: noop, clearRect: () => { clears += 1; }, save: noop, restore: noop,
         beginPath: noop, rect: noop, clip: noop,
         fillRect: (x: number, y: number, w: number, h: number) => rects.push({ op: 'fill', style: state.fillStyle, x, y, w, h, alpha: state.alpha }),
         strokeRect: (x: number, y: number, w: number, h: number) => rects.push({ op: 'stroke', style: state.strokeStyle, x, y, w, h, alpha: state.alpha }),
     } as unknown as CanvasRenderingContext2D;
-    return { ctx, rects };
+    return { ctx, rects, clears: () => clears };
 }
 
 const W = 300;
@@ -106,6 +107,25 @@ describe('VolumeRenderer (bottom-anchored volume columns)', () => {
         const tallest = Math.max(...rects.map((r) => r.h));
         expect(tallest).toBeCloseTo(H * 0.96, 6); // near-full pane height in a dedicated pane
     });
+
+    it('clears once and leaves the compositor while empty, then comes back with volume', () => {
+        const layer = new VolumeRenderer();
+        const { ctx, clears } = recordingCtx();
+        const style = { display: 'none' };
+        const canvas = { width: W, height: H, getContext: () => ctx, style } as unknown as HTMLCanvasElement;
+        layer.mount(canvas);
+        // A fresh canvas is already transparent: no full-surface clear merely to stay empty.
+        layer.render({ bars: [upBar(0, 80)], data: null, visible: true, coords: makeCoords(1), bounds: BOUNDS, fillPane: false });
+        expect(clears()).toBe(0);
+
+        layer.render({ bars: [upBar(0, 80)], data: DATA, visible: true, coords: makeCoords(1), bounds: BOUNDS, fillPane: false });
+        expect(clears()).toBe(1); // first drawable frame replaces the cleared canvas
+
+        layer.render({ bars: [upBar(0, 80)], data: DATA, visible: false, coords: makeCoords(1), bounds: BOUNDS, fillPane: false });
+        expect(clears()).toBe(2); // hiding wipes the stale columns exactly once
+        layer.render({ bars: [upBar(0, 80)], data: DATA, visible: false, coords: makeCoords(1), bounds: BOUNDS, fillPane: false });
+        expect(clears()).toBe(2); // and stays out of the paint/composite path while blank
+    });
 });
 
 describe('VpvrRenderer (visible-range volume profile)', () => {
@@ -161,5 +181,22 @@ describe('VpvrRenderer (visible-range volume profile)', () => {
         expect(render([upBar(0, 80)], DATA, false)).toHaveLength(0);
         expect(render([upBar(0, 80)], null as unknown as typeof DATA)).toHaveLength(0);
         expect(render([upBar(0)])).toHaveLength(0); // no volume anywhere → no profile
+    });
+
+    it('leaves the compositor while empty and returns when the profile has rows', () => {
+        const layer = new VpvrRenderer();
+        const { ctx, clears } = recordingCtx();
+        const style = { display: 'none' };
+        const canvas = { width: W, height: H, getContext: () => ctx, style } as unknown as HTMLCanvasElement;
+        layer.mount(canvas);
+        const args = { bars: [upBar(0, 80), upBar(1, 80)], data: null as unknown as typeof DATA, visible: true, coords: makeCoords(2), scale: SCALE, bounds: BOUNDS, theme: THEME };
+        layer.render(args);
+        expect(clears()).toBe(0); // nothing to wipe on a fresh, already-transparent canvas
+        layer.render({ ...args, data: DATA });
+        expect(clears()).toBe(1);
+        layer.render(args); // hidden again
+        expect(clears()).toBe(2);
+        layer.render(args);
+        expect(clears()).toBe(2); // no repaint while blank
     });
 });

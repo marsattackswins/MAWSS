@@ -1,5 +1,6 @@
 import { liveApi, LiveApiError, LiveAuthError } from "@/lib/live/api";
 import { redirectToLogin } from "@/lib/live/bridge";
+import { clampCloseFraction } from "@/lib/trade-marks";
 import { useLiveStore } from "@/lib/live/store";
 import { mawsFeed } from "@/lib/maws/feed";
 import { useAppStore } from "@/lib/store";
@@ -7,6 +8,7 @@ import { resolveSymbolTrading } from "@/lib/trading/symbol-settings";
 import {
   cancelOrder as mockCancelOrder,
   closePosition as mockClosePosition,
+  closePositionFraction as mockClosePositionFraction,
   submitOrder as mockSubmitOrder,
 } from "@/lib/trading/mock";
 import type { UiOrderInput } from "./ui-orders";
@@ -147,6 +149,48 @@ export async function dispatchClosePosition(idOrSymbol: string): Promise<{ ok: b
     notifyLiveError(describe(err));
     return { ok: false, error: describe(err) };
   }
+}
+
+/**
+ * Partial close. The paper engine can close a fraction of one position; the live
+ * route (`/api/live/positions/close`) closes the whole symbol and exposes no
+ * quantity, so a live partial close is refused rather than approximated.
+ */
+export async function dispatchClosePositionFraction(
+  idOrSymbol: string,
+  fraction: number,
+): Promise<{ ok: boolean; error?: string }> {
+  if (activeBrokerId() === "binance") {
+    notifyLiveError("Partial close is not available for live accounts");
+    return { ok: false, error: "partial_close_unavailable" };
+  }
+  const f = clampCloseFraction(fraction);
+  if (!(f > 0)) return { ok: false, error: "invalid_fraction" };
+  mockClosePositionFraction(idOrSymbol, f);
+  return { ok: true };
+}
+
+/**
+ * Reverse: flatten through the guarded close path, then open the opposite side
+ * at market with the same quantity. Both legs keep their own halt/feed gates; a
+ * refused second leg leaves the account flat (never a surprise new position).
+ */
+export async function dispatchReversePosition(input: {
+  idOrSymbol: string;
+  symbol: string;
+  side: "long" | "short";
+  qty: number;
+}): Promise<{ ok: boolean; error?: string }> {
+  const closed = await dispatchClosePosition(input.idOrSymbol);
+  if (!closed.ok) return closed;
+  return dispatchSubmitOrder({
+    symbol: input.symbol,
+    side: input.side === "long" ? "sell" : "buy",
+    type: "market",
+    price: 0,
+    qty: Math.abs(input.qty),
+    clientOrderId: crypto.randomUUID(),
+  });
 }
 
 export async function dispatchProtect(

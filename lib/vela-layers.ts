@@ -48,6 +48,10 @@ function prep(canvas: HTMLCanvasElement, dpr: number): CanvasRenderingContext2D 
 registerRendererLayer({
   id: "maws-session-breaks",
   placement: "above-data",
+  hasContent: ({ data, bars }) => {
+    const d = data as SessionBreaksData | undefined;
+    return !!d && d.times.length > 0 && clipBreaksToBars(d.times, bars).length > 0;
+  },
   create: () => {
     let ctx: CanvasRenderingContext2D | null = null;
     let el: HTMLCanvasElement | null = null;
@@ -94,6 +98,10 @@ registerRendererLayer({
 registerRendererLayer({
   id: "maws-events-breaks",
   placement: "above-data",
+  hasContent: ({ data }) => {
+    const d = data as EventBreaksData | undefined;
+    return !!d && d.times.length > 0;
+  },
   create: () => {
     let ctx: CanvasRenderingContext2D | null = null;
     let el: HTMLCanvasElement | null = null;
@@ -138,6 +146,10 @@ registerRendererLayer({
 registerRendererLayer({
   id: "maws-trade-zones",
   placement: "below-data",
+  hasContent: ({ data }) => {
+    const d = data as TradeZonesData | undefined;
+    return !!d && d.bands.length > 0;
+  },
   create: () => {
     let ctx: CanvasRenderingContext2D | null = null;
     let el: HTMLCanvasElement | null = null;

@@ -11,6 +11,7 @@ import type {
   PaperAccountSettings,
 } from "@/types";
 import type { Store } from "@/lib/store";
+import { useLiveStore } from "@/lib/live/store";
 
 export type PaperTradingSliceState = {
   connectedBroker: BrokerId | null;
@@ -65,7 +66,21 @@ export function createPaperTradingSlice(set: RootSet, get: RootGet): PaperTradin
     balanceHistory: [],
     journal: [],
 
-    setConnectedBroker: (id) => set({ connectedBroker: id }),
+    setConnectedBroker: (id) => {
+      // Persist testnet/prod profiles to localStorage for restoration after reload
+      if (id === "binance") {
+        const env = useLiveStore.getState().environment;
+        if (env === "testnet" || env === "production") {
+          try {
+            const lastProfileId = env === "testnet" ? "binance-testnet" : "binance-production";
+            localStorage.setItem("maws.lastLiveProfile", lastProfileId);
+          } catch {
+            // localStorage not available - ignore, user will reconnect manually
+          }
+        }
+      }
+      set({ connectedBroker: id });
+    },
     setMockBalance: (value) => set({ mockBalance: value }),
     setMockRealized: (value) => set({ mockRealized: value }),
     setPaperAccount: (value) =>
@@ -194,9 +209,22 @@ export function normalizePaperTradingRehydrate(state: Store): void {
       text: legacy.text ?? "Journal entry",
     };
   });
-  // Binance is server-authoritative and must be re-confirmed after reload;
-  // never restore a stale live attachment from browser storage.
-  state.connectedBroker = state.connectedBroker === "mock" ? "mock" : null;
+  // For live trading profiles, restore from localStorage if configured.
+  // Paper Trading (client-only) is fine without persistence. Testnet/Prod (server-backed)
+  // MUST reconnect but we remember which one was used so users don't lose their work.
+  const savedProfileId = typeof window !== "undefined" ? (() => {
+    try {
+      return localStorage.getItem("maws.lastLiveProfile");
+    } catch {
+      return null;
+    }
+  })() : null;
+  if (savedProfileId === "binance-testnet" || savedProfileId === "binance-production") {
+    state.connectedBroker = "binance";
+  } else {
+    // Paper Trading uses client-side storage via Zustand, no live broker needed.
+    state.connectedBroker = state.connectedBroker === "mock" ? "mock" : null;
+  }
   state.mockBalance = state.mockBalance ?? MOCK_START_BALANCE;
   state.mockRealized = state.mockRealized ?? 0;
 }

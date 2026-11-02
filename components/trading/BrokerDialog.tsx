@@ -172,12 +172,6 @@ export function BrokerDialog() {
     return () => window.removeEventListener("keydown", onKey, true);
   }, [authTarget, open, productionConfirmation, setOpen]);
 
-  useEffect(() => {
-    if (open) return;
-    window.requestAnimationFrame(() => {
-      document.querySelector<HTMLElement>("[data-trade-trigger]")?.focus();
-    });
-  }, [open]);
 
   const closeDialog = () => {
     setOpen(false);

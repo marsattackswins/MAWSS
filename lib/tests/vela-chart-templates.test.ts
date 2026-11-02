@@ -5,6 +5,8 @@ import {
   getTemplates,
   removeTemplate,
   saveTemplate,
+  templateIndicatorSummary,
+  toggleTemplateFavorite,
 } from "@/lib/vela-templates";
 import { useAppStore } from "@/lib/store";
 import { createStudy } from "@/lib/studies";
@@ -126,6 +128,34 @@ describe("vela-templates target resolution", () => {
       version: 1,
       candles: { upColor: "#111111" },
     });
+  });
+
+  it("persists favorites and summarizes the indicators included in a template", () => {
+    const study = createStudy("ema", { length: 21 });
+    useAppStore.setState({
+      panes: useAppStore.getState().panes.map((pane) =>
+        pane.id === "pane-0"
+          ? {
+              ...pane,
+              studies: [study],
+              natives: [{ type: "sma", inputs: { length: 50 } }],
+            }
+          : pane,
+      ),
+    });
+    registerChart("pane-0", stubHandle(TPL_DOC) as never);
+
+    expect(saveTemplate("favorites")).toBe(true);
+    const template = getTemplates().find((entry) => entry.name === "favorites");
+    expect(template).toBeDefined();
+    expect(templateIndicatorSummary(template!)).toBe("EMA, Simple Moving Average");
+    expect(template?.favorite).toBe(false);
+
+    expect(toggleTemplateFavorite(template!.id)).toBe(true);
+    expect(getTemplates().find((entry) => entry.id === template!.id)?.favorite).toBe(true);
+    expect(JSON.parse(templateStorage.get("maws.vela-templates") ?? "[]")).toContainEqual(
+      expect.objectContaining({ id: template!.id, favorite: true }),
+    );
   });
 
   it("saves and applies the chart's managed and native indicators to a selected pane", () => {

@@ -15,6 +15,7 @@ export const PANEL_TABS = [
   { id: "orders", label: "Orders" },
   { id: "orderHistory", label: "Order History" },
   { id: "balanceHistory", label: "Balance History" },
+  { id: "performance", label: "Performance" },
   { id: "journal", label: "Trading Journal" },
 ] as const;
 

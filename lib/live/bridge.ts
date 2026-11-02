@@ -112,6 +112,17 @@ async function enableAuthenticatedExecution(profileId: LiveProfileId | null): Pr
   }
 }
 
+/** Preserve client state during temporary errors if positions were previously restored */
+function shouldPreserveClient(): boolean {
+  try {
+    // If localStorage shows we had an active live profile, don't fully detach on transient errors
+    const savedProfileId = localStorage.getItem("maws.lastLiveProfile");
+    return savedProfileId === "binance-testnet" || savedProfileId === "binance-production";
+  } catch {
+    return false;
+  }
+}
+
 function detachClient(clearRuntime = true): void {
   stopSse();
   if (refreshTimer) {
@@ -122,7 +133,12 @@ function detachClient(clearRuntime = true): void {
   live.setAttached(false);
   live.clearState();
   if (clearRuntime) live.clearProfileRuntime();
-  useAppStore.getState().setConnectedBroker(null);
+  
+  // Don't reset connectedBroker if we expect to restore from localStorage
+  if (!shouldPreserveClient()) {
+    useAppStore.getState().setConnectedBroker(null);
+  }
+  // Positions are preserved via Zustand persistence even though live store is cleared
 }
 
 function isCurrentAttachment(status: ProfileRuntimeStatusDto, epoch: number): boolean {

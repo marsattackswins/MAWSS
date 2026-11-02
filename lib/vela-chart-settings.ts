@@ -443,16 +443,18 @@ export function mawsHostSections(): MawsHostSection[] {
           options: [
             ["dark", "Vela Muted (Dark)"],
             ["classic", "Standard Classic"],
-            ["light", "Light"],
+            ["light", "White"],
+            ["gruvbox", "Gruvbox"],
           ] as const,
           get: (): string => {
             const bg = stApp().backgroundColor.trim().toLowerCase();
             if (bg === "#ffffff") return "light";
             if (bg === "#131722") return "classic";
+            if (bg === "#282828") return "gruvbox";
             return "dark";
           },
           set: (v: string) => {
-            const name = (v === "classic" || v === "light" ? v : "dark") as ThemeName;
+            const name = (v === "classic" || v === "light" || v === "gruvbox" ? v : "dark") as ThemeName;
             // Apply CSS vars to shell immediately.
             const next = applyVelaThemeEverywhere(name);
             // Persist the new palette.

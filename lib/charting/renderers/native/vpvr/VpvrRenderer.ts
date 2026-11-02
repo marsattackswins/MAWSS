@@ -31,6 +31,8 @@ export class VpvrRenderer {
     private ctx: CanvasRenderingContext2D | null = null;
     private memoKey = '';
     private memo: VpvrProfile | null = null;
+    /** No profile to paint: the canvas is cleared and removed from the compositor. */
+    private blank = true;
 
     mount(canvas: HTMLCanvasElement): void {
         this.canvas = canvas;
@@ -42,6 +44,7 @@ export class VpvrRenderer {
         this.ctx = null;
         this.memoKey = '';
         this.memo = null;
+        this.blank = true;
     }
 
     render(args: VpvrRenderArgs): void {
@@ -50,15 +53,18 @@ export class VpvrRenderer {
         if (!ctx || !canvas) return;
         const { bars, data, visible, coords, scale, bounds, theme } = args;
 
-        const dpr = coords.dpr;
-        ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-        ctx.clearRect(0, 0, canvas.width / dpr, canvas.height / dpr); // always clear — a hide/remove must wipe the last frame
-        if (!data || !visible || bars.length === 0 || bounds.height <= 0) return;
+        if (!data || !visible || bars.length === 0 || bounds.height <= 0) {
+            this.clearBlank();
+            return;
+        }
 
         const r = coords.visibleLogicalRange();
         const i0 = Math.max(0, Math.floor(r.from));
         const i1 = Math.min(bars.length - 1, Math.ceil(r.to));
-        if (i0 > i1) return;
+        if (i0 > i1) {
+            this.clearBlank();
+            return;
+        }
 
         // Memoize the bucketing on the visible window + the forming bar (its OHLCV mutates
         // in place on live ticks) + the shape inputs; pans/zooms hit the cache mid-gesture
@@ -70,8 +76,15 @@ export class VpvrRenderer {
             this.memo = buildVpvrProfile(bars, i0, i1, data.rows, data.valueAreaFrac);
         }
         const profile = this.memo;
-        if (!profile) return;
+        if (!profile) {
+            this.clearBlank();
+            return;
+        }
 
+        const dpr = coords.dpr;
+        this.show(); // put the layer back in the stack before replacing its pixels
+        ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+        ctx.clearRect(0, 0, canvas.width / dpr, canvas.height / dpr);
         ctx.save();
         ctx.beginPath();
         ctx.rect(0, bounds.top, coords.width, bounds.height); // clip to the price pane's data area
@@ -82,5 +95,19 @@ export class VpvrRenderer {
             yOf: (p) => coords.priceToY(p, scale, bounds),
         }, { upColor: data.upColor, downColor: data.downColor, showPoc: data.showPoc, pocColor: theme.textColor });
         ctx.restore();
+    }
+
+    /** Clear the stale frame once, then hide the (fully transparent) canvas. */
+    private clearBlank(): void {
+        const ctx = this.ctx;
+        const canvas = this.canvas;
+        if (!ctx || !canvas || this.blank) return;
+        ctx.setTransform(1, 0, 0, 1, 0, 0);
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
+        this.blank = true;
+    }
+
+    private show(): void {
+        this.blank = false;
     }
 }

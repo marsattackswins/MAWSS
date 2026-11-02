@@ -102,6 +102,17 @@ Local changes on top of upstream v0.8.1:
   silently painted nothing. `RendererControl.setNativeData()` now forwards to the
   active renderer's optional method (no-op on renderers without native layers).
   `core/RendererControl.ts`.
+- **`renderer.priceToPixelY(price)` — the host-overlay anchor seam.** The app's
+  on-chart trade manager pins a DOM pill to a position's entry line, which needs
+  the price→pixel projection the renderer keeps private (`coords.priceToY` +
+  the price pane's scale/bounds; the same call `lib/vela-layers.ts` layers get).
+  Added as an *optional* method on `IChartRenderer`, implemented by
+  `NativeRenderer`, and forwarded by the `RendererControl` facade — a renderer
+  without the seam returns `null` and the overlay simply doesn't anchor.
+  `core/ports/IChartRenderer.ts`, `core/RendererControl.ts`,
+  `renderers/native/NativeRenderer.ts`; used by `components/charts/TradeManager.tsx`.
+  `renderer.pixelYToPrice(y)` is the inverse, for host drags that resolve a price
+  under the pointer (the trade manager's TP/SL drag handles).
 - **Context menu: Settings pinned last.** The chart-body menu rendered
   `Settings…` from `bodyItems()` and then appended the host's contributed
   actions, so a preferences verb sat mid-list ahead of
@@ -220,6 +231,56 @@ Local changes on top of upstream v0.8.1:
   control in multi-chart view. `renderers/native/chrome/PaneControls.ts` now leaves
   that action to the workspace, while study-pane maximize controls remain available.
   Covered by `test/pane-controls.test.ts`.
+- **Dense native WebGL geometry keeps painter order and DPR stroke width.** Thin
+  dense lines flush at each series boundary so later fills, candles, and series
+  cannot be reordered above them. The `GL_LINES` hairline path is used only at
+  integer DPR; fractional DPR retains the analytic-AA quads. Adjacent eligible
+  fill bands share one strip upload while keeping separate run ranges and their
+  original painter order. Covered by `test/native-polyline-lod.test.ts`.
+- **A dense frame uploads its GPU geometry once.** Each pane's triangles, fill strips and
+  hairline ranges are appended to one reusable vertex buffer with an ordered draw list, so
+  painter order (fills under their series, interleave layers between z slots) is unchanged
+  while the nine-plus per-flush `bufferData` calls collapse to one. Firefox/ANGLE was
+  spending ~2 ms per drag frame in those driver calls alone. The WebGL context also requests
+  no MSAA (line edges are already analytically feathered) and `desynchronized: true`.
+- **Round line joins are skipped below 4 px bar spacing; area fills allocate no
+  per-point objects.** A join is a 6–20-triangle fan at every vertex of every
+  series, and below 4 px spacing its ~1 px radius is invisible beside the
+  overlapping AA quads — a Firefox CPU profile showed it at 42% of non-idle
+  samples during dense dragging. `LINE_JOIN_MIN_SPACING` is now 4. Area fills
+  reuse x/y scratch arrays and interpolate vertex colors in-place (`Batch.quad4Gradient`)
+  instead of allocating a point object and RGBA arrays per bar; candle layout
+  writes into a reusable geometry object. Covered by `test/native-polyline-lod.test.ts`,
+  `test/native-gl-batch.test.ts`, and `test/native-candle-lod.test.ts`.
+- **Pointer hover work is coalesced to one pass per frame.** `NativeRenderer.handlePointerMove`
+  only records the latest position and invalidates the cursor tier; the readout, mark
+  hit-tests and `onCrosshairMove` subscribers run once from `renderFrame`/`animTick`.
+  A high-polling-rate mouse no longer runs them (and their DOM subscribers) per raw
+  event. `widget/statusline.ts` also re-walks its width ladder only when the readout's
+  digit counts (or visibility/parts/fit mode) change — a value tick with the same
+  width only rewrites the numbers, avoiding a forced layout per crosshair move.
+  Covered by `test/statusline-fit.test.ts`.
+- **Empty overlay layers skip their full-canvas paint.** The volume and VPVR layers, the user
+  drawing layer, and SDK layers that opt into `hasContent` (MAWS session/event breaks and
+  trade zones) clear once when they have nothing to show, then do no work until content
+  returns. The canvas stays in place (no layout or compositor-visibility churn), so layer
+  order and hit-testing are unchanged; layers that omit `hasContent` paint every frame as
+  before. This removes several full-viewport transparent-canvas clears per frame — work that
+  costs Firefox a main-thread surface touch even when the layer is empty. Covered by
+  `test/native-volume-layers.test.ts`.
+- **Dense sub-pixel candle aggregation reuses overlapping color runs.** The common zoomed-out
+  case now extends a pixel column's existing candle-coverage run in place instead of allocating
+  a replacement object for each overlapping bar. Gap/color handling is unchanged; a local
+  synthetic 20,000-bar microbenchmark showed about 40–55% lower median aggregation time across
+  alternating-color and trend-like inputs. Covered by `test/native-candle-lod.test.ts`.
+
+- **Gruvbox theme name.** `ThemeName` gains `'gruvbox'` and `resolveTheme`
+  maps it to a new `GRUVBOX_THEME` palette (hardcoded gruvbox dark: bg0
+  `#282828`, fg1 text, neutral green `#98971a` / red `#cc241d` candles — the
+  colorscheme's base tones, not its bright variants, so bodies/borders/wicks
+  read muted against bg0). Upstream code paths that
+  only ever see `dark`/`classic`/`light` are untouched; MAWS selects it from
+  its own theme switch and settings rows. `core/options.ts`, `core/theme.ts`.
 
 Conventions:
 
