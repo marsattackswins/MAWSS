@@ -463,6 +463,47 @@ describe("BinanceLiveManager end-to-end (fake testnet)", () => {
     expect(manager.getRiskSnapshot().marginDataFresh).toBe(false);
   });
 
+  test("failed account-update refresh retries once and restores fresh margin data", async () => {
+    let positionRows = [{
+      symbol: "BTCUSDT",
+      positionAmt: "0.001",
+      entryPrice: "50000",
+      markPrice: "50000",
+      unRealizedProfit: "0",
+      liquidationPrice: "40000",
+      leverage: "5",
+      positionSide: "BOTH",
+    }];
+    await startManager({
+      "/fapi/v2/account": () => accountFixture({ totalMaintMargin: "25" }),
+      "/fapi/v2/positionRisk": () => positionRows,
+    });
+    const accountCallsBefore = http.callsTo("/fapi/v2/account").length;
+    const positionRiskCallsBefore = http.callsTo("/fapi/v2/positionRisk").length;
+    http.scriptApiError("/fapi/v2/positionRisk", -1000, "transient refresh failure");
+
+    await applyManagerAccountUpdate({
+      e: "ACCOUNT_UPDATE",
+      E: Date.now(),
+      T: Date.now(),
+      a: {
+        B: [{ a: "USDT", wb: "1000", cw: "950", bc: "0" }],
+        P: [{ s: "BTCUSDT", pa: "0.002", ep: "50000", cr: "0", up: "0", mt: "isolated", iw: "0", ps: "BOTH" }],
+      },
+    });
+    positionRows = [{ ...positionRows[0], positionAmt: "0.002", liquidationPrice: "42000" }];
+    expect(manager.getRiskSnapshot().marginDataFresh).toBe(false);
+
+    await waitForRiskSnapshot(
+      () => manager.getRiskSnapshot().marginDataFresh === true,
+      5_000,
+    );
+    expect(liveState().positions.get("BTCUSDT")?.qty).toBe("0.002");
+    expect(liveState().positions.get("BTCUSDT")?.liquidationPrice).toBe("42000");
+    expect(http.callsTo("/fapi/v2/account")).toHaveLength(accountCallsBefore + 2);
+    expect(http.callsTo("/fapi/v2/positionRisk")).toHaveLength(positionRiskCallsBefore + 2);
+  });
+
   test("bursts of position ACCOUNT_UPDATE events coalesce into one risk snapshot refresh", async () => {
     let positionRows = [{
       symbol: "BTCUSDT",

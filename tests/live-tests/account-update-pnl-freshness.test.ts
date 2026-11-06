@@ -101,6 +101,27 @@ describe("ACCOUNT_UPDATE pnl freshness", () => {
     expect(Number(pos.unrealizedProfit)).toBeCloseTo(-0.23281818, 8);
   });
 
+  it("does not treat equivalent REST and stream quantity formatting as a size change", () => {
+    applyPositionSnapshot([
+      positionRow({
+        symbol: "BTCUSDT",
+        positionAmt: "0.001000",
+        liquidationPrice: "40000",
+      }),
+    ]);
+
+    const positionAmountChanged = applyAccountEvent(
+      accountUpdate({ symbol: "BTCUSDT", pa: "0.0010", ep: "50000", up: "0" }),
+    );
+
+    expect(positionAmountChanged).toBe(false);
+    expect(liveState().positions.get("BTCUSDT")).toMatchObject({
+      qty: "0.001",
+      liquidationPrice: "40000",
+      riskSnapshotFetchedAt: expect.any(Number),
+    });
+  });
+
   it("refreshPositionMarkAfterAccountUpdate applies a fetched mark via applyMarkPrice", async () => {
     applyAccountEvent(accountUpdate({ symbol: "BTCUSDT", pa: "-0.002", ep: "50000", up: "-0.50" }));
     const refreshed = await refreshPositionMarkAfterAccountUpdate(["BTCUSDT"], async (symbol) => {

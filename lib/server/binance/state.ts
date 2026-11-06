@@ -6,7 +6,7 @@ import {
   assertPersistenceProfile,
   type PersistenceProfile,
 } from "../profile/context";
-import { add, div, isNegative, isZero, mul, parseDec, toStr, type Dec } from "./decimal";
+import { add, div, eq, isNegative, isZero, mul, parseDec, toStr, type Dec } from "./decimal";
 import type { AccountResponse, AccountUpdateEvent, BinanceOrder, OrderTradeUpdateEvent, PositionRiskRow } from "./types";
 
 export interface LiveAccount {
@@ -511,7 +511,7 @@ export function applyAccountEvent(ev: AccountUpdateEvent): boolean {
     }
     const absQty = isNegative(amt) ? toStr({ units: -amt.units, scale: amt.scale }) : toStr(amt);
     const side = isNegative(amt) ? "short" : "long";
-    const amountChanged = !prev || prev.side !== side || prev.qty !== absQty;
+    const amountChanged = !prev || prev.side !== side || !eq(parseDec(prev.qty), parseDec(absQty));
     if (amountChanged) positionAmountChanged = true;
     // ACCOUNT_UPDATE carries no leverage field, so seed from the last
     // ACCOUNT_CONFIG_UPDATE instead of guessing 1x.

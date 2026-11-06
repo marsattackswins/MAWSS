@@ -68,6 +68,7 @@ const MARK_PRICE_REFRESH_MS_FALLBACK = 15_000;
  */
 const CLOCK_REFRESH_MS = 2.5 * 60 * 1000;
 const ACCOUNT_UPDATE_SNAPSHOT_DEBOUNCE_MS = 50;
+const ACCOUNT_UPDATE_SNAPSHOT_RETRY_MS = 2_000;
 
 export class BinanceLiveManager {
   status: ManagerStatus = "idle";
@@ -84,6 +85,7 @@ export class BinanceLiveManager {
   private recon: Reconciler;
   private reconTimer: ReturnType<typeof setInterval> | null = null;
   private accountUpdateSnapshotTimer: ReturnType<typeof setTimeout> | null = null;
+  private accountUpdateSnapshotRetryTimer: ReturnType<typeof setTimeout> | null = null;
   private accountUpdateSnapshotPromise: Promise<void> | null = null;
   private accountUpdateSnapshotPending = false;
   private accountUpdateSnapshotRevision = 0;
@@ -187,6 +189,10 @@ export class BinanceLiveManager {
     if (this.accountUpdateSnapshotTimer) {
       clearTimeout(this.accountUpdateSnapshotTimer);
       this.accountUpdateSnapshotTimer = null;
+    }
+    if (this.accountUpdateSnapshotRetryTimer) {
+      clearTimeout(this.accountUpdateSnapshotRetryTimer);
+      this.accountUpdateSnapshotRetryTimer = null;
     }
     this.markPriceStream.stop();
   }
@@ -608,16 +614,26 @@ export class BinanceLiveManager {
       this.accountUpdateSnapshotPending = true;
       return;
     }
+    if (this.accountUpdateSnapshotRetryTimer) return;
     if (this.accountUpdateSnapshotTimer) clearTimeout(this.accountUpdateSnapshotTimer);
     const generation = this.lifecycleGeneration;
     this.accountUpdateSnapshotTimer = setTimeout(() => {
       this.accountUpdateSnapshotTimer = null;
       void this.refreshAfterAccountUpdate(generation).catch((err: unknown) => {
-        if (this.isGenerationCurrent(generation)) {
-          log.warn("post-ACCOUNT_UPDATE risk snapshot refresh failed; risk data remains stale", {
-            error: String(err),
+        if (!this.isGenerationCurrent(generation)) return;
+        log.warn("post-ACCOUNT_UPDATE risk snapshot refresh failed; scheduling one retry", {
+          error: String(err),
+        });
+        this.accountUpdateSnapshotRetryTimer = setTimeout(() => {
+          this.accountUpdateSnapshotRetryTimer = null;
+          void this.refreshAfterAccountUpdate(generation).catch((retryErr: unknown) => {
+            if (this.isGenerationCurrent(generation)) {
+              log.warn("post-ACCOUNT_UPDATE risk snapshot retry failed; risk data remains stale", {
+                error: String(retryErr),
+              });
+            }
           });
-        }
+        }, ACCOUNT_UPDATE_SNAPSHOT_RETRY_MS);
       });
     }, ACCOUNT_UPDATE_SNAPSHOT_DEBOUNCE_MS);
   }
