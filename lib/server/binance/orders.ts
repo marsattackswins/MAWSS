@@ -2,7 +2,7 @@ import "server-only";
 
 import crypto from "node:crypto";
 
-import { abs, isNegative, isZero, parseDec, roundDownToStep, toStr } from "./decimal";
+import { abs, eq, gt, isNegative, isZero, lt, parseDec, roundDownToStep, toStr } from "./decimal";
 import { applySymbolLeverage } from "./state";
 import { audit } from "../audit/log";
 import { requireEmergencyActionAllowed, requireSubmissionAllowed, SubmissionBlockedError } from "../gates/execution";
@@ -38,6 +38,13 @@ import { liveState, rememberOrder } from "./state";
 import type { BinanceOrder } from "./types";
 import { trackOrderCanceled, trackOrderRejected, trackOrderSubmitted, trackOrderSubmissionDuration } from "../metrics/instrument";
 import { normalMutationBlock } from "../profile/admission";
+import { alert } from "../alerts/dispatch";
+import {
+  getProtectionIntent,
+  saveProtectionIntent,
+  setProtectionStatus,
+  type ProtectionIntent,
+} from "./protection";
 
 export interface SubmitOrderInput {
   symbol: string;
@@ -198,7 +205,7 @@ export class OrderService {
     return syncLeverageToExchange(this.deps.rest, input.symbol, leverage);
   }
 
-  private async submitOrderSerialized(input: SubmitOrderInput): Promise<OrderResult> {
+  private async submitOrderSerialized(input: SubmitOrderInput, protectionRecovery = false): Promise<OrderResult> {
     const { cfg } = this.deps;
     const clientOrderId = input.clientOrderId ?? newServerClientOrderId(input.kind === "algo" ? "alg" : "ord");
     const blocked = normalMutationBlock();
@@ -206,6 +213,10 @@ export class OrderService {
 
     try {
       if (input.emergencyClose) requireEmergencyActionAllowed(cfg);
+      else if (protectionRecovery) {
+        const recoveryBlock = this.protectionRecoveryBlock(cfg, input.symbol);
+        if (recoveryBlock) return { ok: false, clientOrderId, error: recoveryBlock };
+      }
       else requireSubmissionAllowed(cfg);
     } catch (err) {
       if (err instanceof SubmissionBlockedError) {
@@ -598,9 +609,26 @@ export class OrderService {
    * never simulated in the browser. Replacing cancels the existing one first.
    */
   async protectPosition(input: { symbol: string; tpPrice?: string; slPrice?: string }): Promise<{ tp?: OrderResult; sl?: OrderResult }> {
+    return withRiskMutation(() => this.protectPositionSerialized(input, true));
+  }
+
+  /** Reconciliation already owns the risk-mutation queue when invoking this. */
+  async restoreProtection(intent: ProtectionIntent): Promise<{ tp?: OrderResult; sl?: OrderResult }> {
+    return this.protectPositionSerialized({
+      symbol: intent.symbol,
+      tpPrice: intent.tpPrice ?? undefined,
+      slPrice: intent.slPrice ?? undefined,
+    }, false);
+  }
+
+  private async protectPositionSerialized(
+    input: { symbol: string; tpPrice?: string; slPrice?: string },
+    persistIntent: boolean,
+  ): Promise<{ tp?: OrderResult; sl?: OrderResult }> {
     const failed = (error: string): OrderResult => ({ ok: false, clientOrderId: "", error });
-    if (normalMutationBlock()) {
-      const result = failed(normalMutationBlock()!);
+    const mutationBlock = normalMutationBlock();
+    if (mutationBlock) {
+      const result = failed(mutationBlock);
       return {
         ...(input.tpPrice ? { tp: result } : {}),
         ...(input.slPrice ? { sl: result } : {}),
@@ -614,17 +642,28 @@ export class OrderService {
         ...(input.slPrice ? { sl: result } : {}),
       };
     }
-    try {
-      requireSubmissionAllowed(this.deps.cfg);
-    } catch (err) {
-      if (err instanceof SubmissionBlockedError) {
-        const result = failed(err.message);
+    if (!persistIntent) {
+      const recoveryBlock = this.protectionRecoveryBlock(this.deps.cfg, input.symbol);
+      if (recoveryBlock) {
+        const result = failed(recoveryBlock);
         return {
           ...(input.tpPrice ? { tp: result } : {}),
           ...(input.slPrice ? { sl: result } : {}),
         };
       }
-      throw err;
+    } else {
+      try {
+        requireSubmissionAllowed(this.deps.cfg);
+      } catch (err) {
+        if (err instanceof SubmissionBlockedError) {
+          const result = failed(err.message);
+          return {
+            ...(input.tpPrice ? { tp: result } : {}),
+            ...(input.slPrice ? { sl: result } : {}),
+          };
+        }
+        throw err;
+      }
     }
 
     const reference = await (this.deps.getMarkPrice?.(input.symbol) ?? this.deps.getReferencePrice(input.symbol));
@@ -643,70 +682,327 @@ export class OrderService {
       };
     }
 
-    const mark = Number(reference.price);
-    const tp = input.tpPrice == null ? null : Number(input.tpPrice);
-    const sl = input.slPrice == null ? null : Number(input.slPrice);
     const directionErrors: { tp?: string; sl?: string } = {};
-    if (tp != null && !Number.isFinite(tp)) directionErrors.tp = "TP price must be finite";
-    if (sl != null && !Number.isFinite(sl)) directionErrors.sl = "SL price must be finite";
-    if (pos.side === "long") {
-      if (tp != null && Number.isFinite(tp) && tp < mark) directionErrors.tp = `Long TP must be at or above mark price ${reference.price}`;
-      if (sl != null && Number.isFinite(sl) && sl > mark) directionErrors.sl = `Long SL must be at or below mark price ${reference.price}`;
-    } else {
-      if (tp != null && Number.isFinite(tp) && tp > mark) directionErrors.tp = `Short TP must be at or below mark price ${reference.price}`;
-      if (sl != null && Number.isFinite(sl) && sl < mark) directionErrors.sl = `Short SL must be at or above mark price ${reference.price}`;
-    }
+    const validTrigger = (price: string | undefined, kind: "TP" | "SL"): boolean => {
+      if (price == null) return true;
+      try {
+        const parsed = parseDec(price);
+        if (isNegative(parsed) || isZero(parsed)) {
+          directionErrors[kind === "TP" ? "tp" : "sl"] = `${kind} price must be greater than zero`;
+          return false;
+        }
+        const markPrice = parseDec(reference.price);
+        const favorable = kind === "TP"
+          ? (pos.side === "long" ? gt(parsed, markPrice) : lt(parsed, markPrice))
+          : (pos.side === "long" ? lt(parsed, markPrice) : gt(parsed, markPrice));
+        if (!favorable) {
+          directionErrors[kind === "TP" ? "tp" : "sl"] =
+            `${pos.side === "long" ? "Long" : "Short"} ${kind} must be ${kind === "TP" ? "beyond" : "before"} mark price ${reference.price}; immediately-triggering prices are not allowed`;
+          return false;
+        }
+        return true;
+      } catch {
+        directionErrors[kind === "TP" ? "tp" : "sl"] = `${kind} price must be a positive decimal`;
+        return false;
+      }
+    };
+    validTrigger(input.tpPrice, "TP");
+    validTrigger(input.slPrice, "SL");
     if (directionErrors.tp || directionErrors.sl) {
       return {
-        ...(input.tpPrice ? { tp: directionErrors.tp ? failed(directionErrors.tp) : undefined } : {}),
-        ...(input.slPrice ? { sl: directionErrors.sl ? failed(directionErrors.sl) : undefined } : {}),
+        ...(input.tpPrice ? { tp: failed(directionErrors.tp!) } : {}),
+        ...(input.slPrice ? { sl: failed(directionErrors.sl!) } : {}),
+      };
+    }
+
+    const currentIntent = getProtectionIntent(input.symbol, this.persistenceProfile);
+    let intendedTp = input.tpPrice ?? currentIntent?.tpPrice ?? null;
+    let intendedSl = input.slPrice ?? currentIntent?.slPrice ?? null;
+    if (persistIntent) {
+      saveProtectionIntent({
+        symbol: input.symbol,
+        side: pos.side,
+        tpPrice: intendedTp,
+        slPrice: intendedSl,
+      }, Date.now(), this.persistenceProfile);
+    }
+
+    let openOrders: BinanceOrder[];
+    try {
+      openOrders = await this.deps.rest.getOpenOrders(input.symbol);
+    } catch (err) {
+      const error = `Could not verify existing protective orders: ${String(err)}`;
+      this.markProtectionUnprotected(input.symbol, error);
+      if (err instanceof CircuitBreakerOpenError) throw err;
+      const result = failed(error);
+      return {
+        ...(input.tpPrice ? { tp: result } : {}),
+        ...(input.slPrice ? { sl: result } : {}),
       };
     }
 
     const closeSide = pos.side === "long" ? "SELL" : "BUY";
     const out: { tp?: OrderResult; sl?: OrderResult } = {};
+    const existingTp = openOrders.find((order) => this.isProtectiveOrder(order, "TAKE_PROFIT_MARKET", closeSide));
+    const existingSl = openOrders.find((order) => this.isProtectiveOrder(order, "STOP_MARKET", closeSide));
+    intendedTp = input.tpPrice ?? existingTp?.stopPrice ?? currentIntent?.tpPrice ?? null;
+    intendedSl = input.slPrice ?? existingSl?.stopPrice ?? currentIntent?.slPrice ?? null;
 
-    // Each replacement is fail-closed: a failed/uncertain cancellation leaves
-    // the old protective order in place and prevents its replacement.
-    const cancelExisting = async (type: string): Promise<string | null> => {
-      for (const o of liveState().openOrders.values()) {
-        if (o.symbol === input.symbol && o.type === type && o.closePosition) {
-          const result = await this.cancelOrder(o.clientOrderId, input.symbol);
-          if (!result.ok) return result.error ?? `Could not cancel existing ${type}`;
-        }
-      }
-      return null;
-    };
-
-    if (input.tpPrice) {
-      const cancelError = await cancelExisting("TAKE_PROFIT_MARKET");
-      out.tp = cancelError
-        ? failed(`Protective TP replacement blocked: ${cancelError}`)
-        : await this.submitOrder({
-            symbol: input.symbol,
-            side: closeSide,
-            type: "TAKE_PROFIT_MARKET",
-            stopPrice: input.tpPrice,
-            closePosition: true,
-            kind: "algo",
-            clientOrderId: newServerClientOrderId("tp"),
-          });
+    if (persistIntent && (intendedTp !== currentIntent?.tpPrice || intendedSl !== currentIntent?.slPrice)) {
+      saveProtectionIntent({
+        symbol: input.symbol,
+        side: pos.side,
+        tpPrice: intendedTp,
+        slPrice: intendedSl,
+      }, Date.now(), this.persistenceProfile);
     }
-    if (input.slPrice) {
-      const cancelError = await cancelExisting("STOP_MARKET");
-      out.sl = cancelError
-        ? failed(`Protective SL replacement blocked: ${cancelError}`)
-        : await this.submitOrder({
-            symbol: input.symbol,
-            side: closeSide,
-            type: "STOP_MARKET",
-            stopPrice: input.slPrice,
-            closePosition: true,
-            kind: "algo",
-            clientOrderId: newServerClientOrderId("sl"),
-          });
+
+    try {
+      if (input.tpPrice) {
+        out.tp = await this.replaceProtectionOrder(input.symbol, closeSide, "TAKE_PROFIT_MARKET", input.tpPrice);
+      }
+      if (input.slPrice) {
+        out.sl = await this.replaceProtectionOrder(input.symbol, closeSide, "STOP_MARKET", input.slPrice);
+      }
+
+      let finalOrders: BinanceOrder[];
+      try {
+        finalOrders = await this.deps.rest.getOpenOrders(input.symbol);
+      } catch (err) {
+        if (err instanceof CircuitBreakerOpenError) throw err;
+        const error = `Could not verify final protective orders: ${String(err)}`;
+        this.markProtectionUnprotected(input.symbol, error);
+        if (input.tpPrice) out.tp = failed(error);
+        if (input.slPrice) out.sl = failed(error);
+        return out;
+      }
+
+      const tpConfirmed = !intendedTp || !!this.findProtectiveOrder(finalOrders, "TAKE_PROFIT_MARKET", closeSide, intendedTp);
+      const slConfirmed = !intendedSl || !!this.findProtectiveOrder(finalOrders, "STOP_MARKET", closeSide, intendedSl);
+      if (tpConfirmed && slConfirmed) {
+        setProtectionStatus(input.symbol, "PROTECTED", null, this.persistenceProfile);
+        this.deps.emit("account-update", { at: Date.now(), protection: input.symbol });
+      } else {
+        const error = "Exchange open orders do not match the recorded TP/SL intent";
+        this.markProtectionUnprotected(input.symbol, error);
+        if (input.tpPrice && out.tp?.ok !== false) out.tp = failed(error);
+        if (input.slPrice && out.sl?.ok !== false) out.sl = failed(error);
+      }
+    } catch (err) {
+      this.markProtectionUnprotected(input.symbol, `Protective-order replacement failed: ${String(err)}`);
+      throw err;
     }
     return out;
+  }
+
+  private findProtectiveOrder(
+    orders: BinanceOrder[],
+    type: string,
+    side: "BUY" | "SELL",
+    price: string,
+  ): BinanceOrder | undefined {
+    return orders.find((order) => this.isProtectiveOrder(order, type, side, price));
+  }
+
+  private async cancelProtectiveOrders(
+    symbol: string,
+    type: string,
+    side: "BUY" | "SELL",
+    orders: BinanceOrder[],
+  ): Promise<string | null> {
+    for (const order of orders) {
+      if (!this.isProtectiveOrder(order, type, side)) continue;
+      const intent = this.findIntent(order.clientOrderId);
+      if (intent) this.updateIntent(order.clientOrderId, { status: "CANCEL_REQUESTED" });
+      try {
+        const canceled = await this.deps.rest.cancelOrder(symbol, undefined, order.clientOrderId);
+        if (intent) this.syncIntentFromOrder(order.clientOrderId, canceled);
+        liveState().openOrders.delete(order.clientOrderId);
+        audit("operator", "order.protection.cancelled", { symbol, clientOrderId: order.clientOrderId, type }, undefined, this.persistenceProfile);
+      } catch (err) {
+        if (err instanceof CircuitBreakerOpenError) throw err;
+        let remaining: BinanceOrder[];
+        try {
+          await this.sleep(250);
+          remaining = await this.deps.rest.getOpenOrders(symbol);
+        } catch (reconcileError) {
+          if (reconcileError instanceof CircuitBreakerOpenError) throw reconcileError;
+          return `Could not reconcile cancel outcome: ${String(reconcileError)}`;
+        }
+        if (remaining.some((candidate) => candidate.clientOrderId === order.clientOrderId)) {
+          return `Could not confirm cancellation of existing ${type}: ${String(err)}`;
+        }
+        if (intent) this.updateIntent(order.clientOrderId, { status: "CANCELED" });
+        liveState().openOrders.delete(order.clientOrderId);
+      }
+    }
+    return null;
+  }
+
+  private async reconcileProtectionPlacement(
+    symbol: string,
+    type: string,
+    side: "BUY" | "SELL",
+    price: string,
+    clientOrderId: string,
+  ): Promise<{ order: BinanceOrder | null; absent: boolean }> {
+    await this.sleep(250);
+    const orders = await this.deps.rest.getOpenOrders(symbol);
+    const openOrder = this.findProtectiveOrder(orders, type, side, price);
+    if (openOrder) return { order: openOrder, absent: false };
+    const exchangeOrder = await this.deps.rest.getOrder(symbol, undefined, clientOrderId);
+    if (exchangeOrder && !["CANCELED", "EXPIRED", "REJECTED", "FILLED"].includes(exchangeOrder.status)) {
+      return { order: null, absent: false };
+    }
+    this.updateIntent(clientOrderId, {
+      status: exchangeOrder?.status === "FILLED" ? "FILLED" : "REJECTED",
+      lastState: JSON.stringify({ resolved: "protective_order_absent", exchangeStatus: exchangeOrder?.status ?? null }),
+    });
+    this.maybeUnfreeze();
+    return { order: null, absent: true };
+  }
+
+  private async replaceProtectionOrder(
+    symbol: string,
+    side: "BUY" | "SELL",
+    type: "TAKE_PROFIT_MARKET" | "STOP_MARKET",
+    price: string,
+  ): Promise<OrderResult> {
+    const failed = (error: string): OrderResult => ({ ok: false, clientOrderId: "", error });
+    const current = await this.deps.rest.getOpenOrders(symbol);
+    const alreadyPresent = this.findProtectiveOrder(current, type, side, price);
+    if (alreadyPresent) return this.protectiveOrderResult(alreadyPresent);
+
+    const previous = current.filter((order) => this.isProtectiveOrder(order, type, side));
+    const cancelError = await this.cancelProtectiveOrders(symbol, type, side, previous);
+    if (cancelError) return failed(`Protective ${type} replacement blocked: ${cancelError}`);
+
+    const submit = (triggerPrice: string): Promise<OrderResult> => this.submitOrderSerialized({
+      symbol,
+      side,
+      type,
+      stopPrice: triggerPrice,
+      closePosition: true,
+      kind: "algo",
+      clientOrderId: newServerClientOrderId(type === "STOP_MARKET" ? "sl" : "tp"),
+    }, true);
+
+    const first = await submit(price);
+    if (first.ok) return first;
+    let reconciled: { order: BinanceOrder | null; absent: boolean };
+    try {
+      reconciled = await this.reconcileProtectionPlacement(symbol, type, side, price, first.clientOrderId);
+    } catch (err) {
+      if (err instanceof CircuitBreakerOpenError) throw err;
+      return failed(`Protective ${type} submission is uncertain and open orders could not be reconciled: ${String(err)}`);
+    }
+    if (reconciled.order) return this.protectiveOrderResult(reconciled.order);
+    if (!reconciled.absent) return failed(`Protective ${type} submission outcome remains uncertain; retry was not attempted`);
+
+    const previousPrice = previous[0]?.stopPrice;
+    let rollbackConfirmed: BinanceOrder | undefined;
+    if (previousPrice) {
+      const rollback = await submit(previousPrice);
+      const rollbackResult = await this.reconcileProtectionPlacement(symbol, type, side, previousPrice, rollback.clientOrderId).catch((err) => {
+        if (err instanceof CircuitBreakerOpenError) throw err;
+        return null;
+      });
+      rollbackConfirmed = rollbackResult?.order ?? undefined;
+    }
+
+    let currentAfterRollback: BinanceOrder[];
+    try {
+      currentAfterRollback = await this.deps.rest.getOpenOrders(symbol);
+    } catch (err) {
+      if (err instanceof CircuitBreakerOpenError) throw err;
+      return failed(`Could not reconcile protective orders before retry: ${String(err)}`);
+    }
+    const retryCancelError = await this.cancelProtectiveOrders(
+      symbol,
+      type,
+      side,
+      currentAfterRollback.filter((order) => this.isProtectiveOrder(order, type, side)),
+    );
+    if (retryCancelError) {
+      if (previousPrice && !rollbackConfirmed) {
+        const finalRollback = await submit(previousPrice);
+        const rollbackResult = await this.reconcileProtectionPlacement(symbol, type, side, previousPrice, finalRollback.clientOrderId).catch((err) => {
+          if (err instanceof CircuitBreakerOpenError) throw err;
+          return null;
+        });
+        rollbackConfirmed = rollbackResult?.order ?? undefined;
+      }
+      return failed(`Protective ${type} retry blocked: ${retryCancelError}`);
+    }
+
+    const retry = await submit(price);
+    if (retry.ok) return retry;
+    try {
+      reconciled = await this.reconcileProtectionPlacement(symbol, type, side, price, retry.clientOrderId);
+    } catch (err) {
+      if (err instanceof CircuitBreakerOpenError) throw err;
+      return failed(`Protective ${type} retry is uncertain and open orders could not be reconciled: ${String(err)}`);
+    }
+    if (reconciled.order) return this.protectiveOrderResult(reconciled.order);
+    if (!reconciled.absent) return failed(`Protective ${type} retry outcome remains uncertain; no further order was sent`);
+
+    if (previousPrice) {
+      const restore = await submit(previousPrice);
+      const rollbackResult = await this.reconcileProtectionPlacement(symbol, type, side, previousPrice, restore.clientOrderId).catch((err) => {
+        if (err instanceof CircuitBreakerOpenError) throw err;
+        return null;
+      });
+      rollbackConfirmed = rollbackResult?.order ?? undefined;
+    }
+    const suffix = rollbackConfirmed ? "; previous protection restored" : "; previous protection could not be restored";
+    return failed(`Could not confirm new ${type} protection${suffix}`);
+  }
+
+  private isProtectiveOrder(
+    order: BinanceOrder,
+    type: string,
+    side: "BUY" | "SELL",
+    price?: string,
+  ): boolean {
+    if (order.type !== type || order.side !== side || order.closePosition !== true) return false;
+    if (price == null) return true;
+    if (!order.stopPrice) return false;
+    try {
+      return eq(parseDec(order.stopPrice), parseDec(price));
+    } catch {
+      return false;
+    }
+  }
+
+  private protectiveOrderResult(order: BinanceOrder): OrderResult {
+    return {
+      ok: true,
+      clientOrderId: order.clientOrderId,
+      status: order.status,
+      exchangeOrderId: order.orderId,
+    };
+  }
+
+  private markProtectionUnprotected(symbol: string, reason: string): void {
+    setProtectionStatus(symbol, "UNPROTECTED", reason, this.persistenceProfile);
+    audit("operator", "position.protection.unprotected", { symbol, reason }, undefined, this.persistenceProfile);
+    alert("position_unprotected", { symbol, reason });
+    this.deps.emit("account-update", { at: Date.now(), protection: symbol, status: "UNPROTECTED" });
+  }
+
+  private protectionRecoveryBlock(cfg: EnvConfig, symbol: string): string | null {
+    const profileId = cfg.env === "testnet"
+      ? "binance-testnet"
+      : cfg.env === "production"
+        ? "binance-production"
+        : null;
+    if (!profileId || cfg.activeProfileId !== profileId || !cfg.profiles[profileId].configured) {
+      return "Protective-order recovery requires a configured active Binance profile";
+    }
+    if (this.uncertainIntents().some((intent) => intent.symbol === symbol)) {
+      return `Protective-order recovery for ${symbol} is blocked while an order outcome remains uncertain`;
+    }
+    return null;
   }
 }
 

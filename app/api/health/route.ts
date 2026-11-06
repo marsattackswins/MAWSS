@@ -68,6 +68,8 @@ export async function GET(req: Request): Promise<Response> {
     streamHealthy: health.streamHealthy,
     recon: health.signals.recon,
     reconHealthy: health.reconHealthy,
+    protectionHealthy: health.protectionHealthy,
+    unprotectedPositions: health.unprotectedPositions,
     positionModeHealthy: health.positionModeHealthy,
     positionMode: health.signals.positionMode,
     circuitBreakersHealthy: health.circuitBreakersHealthy,

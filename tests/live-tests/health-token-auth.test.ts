@@ -1,6 +1,8 @@
 import { describe, test, expect, beforeEach } from "@jest/globals";
 import { compareSecretTokens } from "@/lib/server/auth/token";
 import { freshEnv, makeCfg } from "./helpers";
+import { saveProtectionIntent, setProtectionStatus } from "@/lib/server/binance/protection";
+import { liveState } from "@/lib/server/binance/state";
 
 describe("health token authentication", () => {
   beforeEach(() => {
@@ -41,6 +43,26 @@ describe("health token authentication", () => {
   });
 
   describe("route-level health token behavior", () => {
+    test("health endpoint reports unprotected positions", async () => {
+      freshEnv(makeCfg({ env: "local" }));
+      liveState().positions.set("BTCUSDT", {
+        symbol: "BTCUSDT", side: "long", qty: "0.001", entryPrice: "50000", markPrice: "50000",
+        unrealizedProfit: "0", leverage: "1", liquidationPrice: "0", notional: "50", updatedAt: Date.now(),
+      });
+      saveProtectionIntent({ symbol: "BTCUSDT", side: "long", tpPrice: "52000", slPrice: "48000" });
+      setProtectionStatus("BTCUSDT", "UNPROTECTED", "protective order missing");
+      const { GET } = await import("@/app/api/health/route");
+
+      const response = await GET(new Request("http://localhost:3000/api/health"));
+      const body = await response.json();
+
+      expect(response.status).toBe(200);
+      expect(body).toMatchObject({
+        protectionHealthy: false,
+        unprotectedPositions: ["BTCUSDT"],
+      });
+    });
+
     test("valid x-maws-health-token header should authorize", () => {
       const cfg = makeCfg({ healthToken: "test-secret-token" });
       const headerToken = "test-secret-token";

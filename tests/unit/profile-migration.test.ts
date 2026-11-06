@@ -82,9 +82,11 @@ describe("profile-scoped database migration", () => {
   test("fresh schema includes profile columns and the migration is idempotent", () => {
     const db = new Database(":memory:");
     runMigrations(db);
-    expect(currentVersion(db)).toBe(8); // M0008 durable historical order log
+    expect(currentVersion(db)).toBe(9); // M0009 durable protective order intents
     for (const table of PROFILE_TABLES) expect(columnNames(db, table)).toContain("profile_id");
     expect(columnNames(db, "audit_log")).toContain("profile_id");
+    expect(columnNames(db, "protection_intents")).toContain("profile_id");
+    expect(indexNames(db, "protection_intents")).toContain("idx_protection_profile_status");
     expect(indexNames(db, "runtime_config")).toContain("idx_runtime_profile_key");
     expect(indexNames(db, "order_intents")).toEqual(expect.arrayContaining([
       "idx_intents_status_profile",
@@ -103,7 +105,7 @@ describe("profile-scoped database migration", () => {
 
     const countsBefore = Object.fromEntries([...PROFILE_TABLES, "audit_log"].map((table) => [table, rowCount(db, table)]));
     runMigrations(db);
-    expect(currentVersion(db)).toBe(8); // idempotent re-run
+    expect(currentVersion(db)).toBe(9); // idempotent re-run
     expect(Object.fromEntries([...PROFILE_TABLES, "audit_log"].map((table) => [table, rowCount(db, table)]))).toEqual(countsBefore);
     db.close();
   });

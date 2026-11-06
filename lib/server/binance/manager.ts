@@ -170,6 +170,7 @@ export class BinanceLiveManager {
         if (this.isGenerationCurrent(generation)) this.unfreezeIfClear();
       },
       isCurrent: () => this.isGenerationCurrent(generation),
+      restoreProtection: (intent) => this.orders.restoreProtection(intent),
     });
   }
 

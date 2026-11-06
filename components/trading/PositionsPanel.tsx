@@ -85,6 +85,7 @@ export function PnlCell({
 }: {
   pnl: number;
   markPriceStale?: boolean;
+  protectionStatus?: "PROTECTED" | "UNPROTECTED";
   markAgeMs?: number;
 }) {
   const ageS = markAgeMs != null ? Math.max(0, Math.round(markAgeMs / 1000)) : null;
@@ -280,10 +281,11 @@ export type PosRow = {
   /** PnL-freshness provenance from the live DTO (live branch only). */
   markAgeMs?: number;
   markPriceStale?: boolean;
+  protectionStatus?: "PROTECTED" | "UNPROTECTED";
 };
 
 export function computePosRows(
-  positions: Array<{ id: string; symbol: string; side: "long" | "short"; entry: number; qty: number; leverage: number; tp: number | null; sl: number | null; liq: number | null; mark?: number; unrealized?: number; notional?: number; marginType?: string; isolatedMargin?: number; isolatedWallet?: number; markAgeMs?: number; markPriceStale?: boolean }>,
+  positions: Array<{ id: string; symbol: string; side: "long" | "short"; entry: number; qty: number; leverage: number; tp: number | null; sl: number | null; liq: number | null; mark?: number; unrealized?: number; notional?: number; marginType?: string; isolatedMargin?: number; isolatedWallet?: number; markAgeMs?: number; markPriceStale?: boolean; protectionStatus?: "PROTECTED" | "UNPROTECTED" }>,
   live: boolean,
   lastOf: (symbol: string) => number,
 ): PosRow[] {
@@ -313,6 +315,7 @@ export function computePosRows(
           marginType: p.marginType,
           markAgeMs: p.markAgeMs,
           markPriceStale: p.markPriceStale === true,
+          protectionStatus: p.protectionStatus,
         };
       })
     : positions.map((p) => {
@@ -550,7 +553,14 @@ export function PositionsPanel() {
                   const pct = initialMargin === 0 ? 0 : (pnl / initialMargin) * 100;
                   return (
                     <tr key={p.id} className="border-t border-(--app-border) text-(--app-text)">
-                      <td className="px-2 py-1.5">{formatTicker(p.symbol)}</td>
+                      <td className="px-2 py-1.5">
+                        {formatTicker(p.symbol)}
+                        {p.protectionStatus === "UNPROTECTED" && (
+                          <span className="ml-1 text-[#f23645]" title="The recorded TP/SL protection is missing or could not be confirmed">
+                            UNPROTECTED
+                          </span>
+                        )}
+                      </td>
                       <td className={`px-2 py-1.5 ${p.side === "long" ? "text-[#2962ff]" : "text-[#f23645]"}`}>
                         {p.side === "long" ? "Buy" : "Sell"}
                       </td>

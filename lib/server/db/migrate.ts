@@ -228,6 +228,25 @@ export const MIGRATIONS: Migration[] = [
       `CREATE INDEX IF NOT EXISTS idx_orders_profile_client ON orders_log(profile_id, client_order_id)`,
     ],
   },
+  {
+    version: 9,
+    name: "M0009 durable protective order intents",
+    up: [
+      `CREATE TABLE IF NOT EXISTS protection_intents (
+         profile_id TEXT NOT NULL CHECK (profile_id IN ('paper', 'binance-testnet', 'binance-production', 'shadow', 'legacy-unknown')),
+         symbol TEXT NOT NULL,
+         side TEXT NOT NULL CHECK (side IN ('long', 'short')),
+         tp_price TEXT,
+         sl_price TEXT,
+         updated_at INTEGER NOT NULL,
+         status TEXT NOT NULL CHECK (status IN ('PROTECTED', 'UNPROTECTED')),
+         failure_reason TEXT,
+         restore_attempted_at INTEGER NOT NULL DEFAULT 0,
+         PRIMARY KEY (profile_id, symbol)
+       )`,
+      `CREATE INDEX IF NOT EXISTS idx_protection_profile_status ON protection_intents(profile_id, status)`,
+    ],
+  },
 ];
 
 const PROFILE_CHECK =

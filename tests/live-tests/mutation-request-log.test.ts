@@ -362,8 +362,28 @@ describe("POST /api/live/positions/close logs structured request lines", () => {
 describe("POST /api/live/protect logs structured request lines", () => {
   test("logs ok with symbol after placing a take-profit", async () => {
     const http = new FakeHttp();
-    http.route("/fapi/v1/order", () => jsonRes(orderFixture({ type: "TAKE_PROFIT_MARKET", status: "NEW" })));
+    const exchangeOrders: Array<Record<string, unknown>> = [];
+    http.route("/fapi/v1/order", () => {
+      const request = http.calls[http.calls.length - 1];
+      const query = new URL(request.url).searchParams;
+      if (request.method === "POST") {
+        const order = orderFixture({
+          clientOrderId: query.get("newClientOrderId") ?? "generated",
+          symbol: query.get("symbol") ?? "BTCUSDT",
+          side: "SELL",
+          type: query.get("type") ?? "TAKE_PROFIT_MARKET",
+          stopPrice: query.get("stopPrice") ?? "0",
+          closePosition: query.get("closePosition") === "true",
+          status: "NEW",
+        });
+        exchangeOrders.push(order);
+        return jsonRes(order);
+      }
+      if (request.method === "GET") return jsonRes({ code: -2013, msg: "Order does not exist." }, 404);
+      return jsonRes({ code: -2011, msg: "Unknown order sent." }, 400);
+    });
     await bootBroker(http, { withPosition: true });
+    http.route("/fapi/v1/openOrders", () => jsonRes(exchangeOrders));
     const { sessionId, csrfToken } = newSession();
     const res = await POST_protect(
       liveRequest({

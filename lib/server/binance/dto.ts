@@ -5,6 +5,7 @@ import { incomeSyncIsStale } from "./metrics-freshness";
 import { liveState } from "./state";
 import { persistenceProfileFromConfig } from "../profile/context";
 import { activeProfileConfig } from "../profile/coordinator";
+import { getProtectionIntent } from "./protection";
 
 /** DTOs shaped for the existing MAWS UI entities (ChartPosition/ChartOrder style). */
 
@@ -24,6 +25,7 @@ export interface PositionDto {
   markAgeMs?: number;
   /** True when unrealized still holds the fill-time ACCOUNT_UPDATE snapshot. Optional for builders; positionsDto always sets it. */
   markPriceStale?: boolean;
+  protectionStatus?: "PROTECTED" | "UNPROTECTED";
   openedAt: number;
   /** Exchange-reported position value; mirrors Binance's positionNotional. */
   notional: number;
@@ -133,6 +135,7 @@ export function positionsDto(): PositionDto[] {
       unrealized: Number(p.unrealizedProfit),
       markAgeMs: Math.max(0, now - p.updatedAt),
       markPriceStale: p.markPriceSource === "fill-fallback",
+      protectionStatus: getProtectionIntent(p.symbol, persistenceProfileFromConfig(activeProfileConfig()))?.status,
       openedAt: positionOpenedAt(p.symbol) ?? p.updatedAt,
       notional: Number(p.notional),
       marginType: p.marginType,

@@ -75,7 +75,17 @@ async function bootRealBroker(positionRows: unknown[] = [POSITION_RISK_ROW]): Pr
   http.route("/fapi/v1/listenKey", () => jsonRes({ listenKey: "LK-BRK" }));
   http.route("/fapi/v1/leverageBracket", () => jsonRes([]));
   http.route("/fapi/v1/userTrades", () => jsonRes([]));
-  http.route("/fapi/v1/order", () => jsonRes(orderFixture({ type: "MARKET", status: "FILLED", origQty: "0.002" })));
+  http.route("/fapi/v1/order", () => {
+    const request = http.calls[http.calls.length - 1];
+    if (request.method === "GET") return jsonRes({ code: -2013, msg: "Order does not exist." }, 404);
+    if (request.method === "POST") {
+      const query = new URL(request.url).searchParams;
+      if (query.get("closePosition") === "true") {
+        return jsonRes({ code: -2021, msg: "Order would immediately trigger" }, 400);
+      }
+    }
+    return jsonRes(orderFixture({ type: "MARKET", status: "FILLED", origQty: "0.002" }));
+  });
   await getBroker().connect();
   // The live manager runs several sockets (user-data stream, public
   // mark-price stream); open them all so the harness does not depend on

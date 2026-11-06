@@ -75,6 +75,7 @@ export interface PositionDto {
   markAgeMs?: number;
   /** True when unrealized still holds the fill-time ACCOUNT_UPDATE snapshot. */
   markPriceStale?: boolean;
+  protectionStatus?: "PROTECTED" | "UNPROTECTED";
   openedAt: number;
   notional?: number;
   marginType?: string;

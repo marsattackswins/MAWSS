@@ -12,8 +12,9 @@ import {
   resetLiveStateForTests,
 } from "@/lib/server/binance/state";
 import { accountDto, fillsDto, ordersDto, positionsDto } from "@/lib/server/binance/dto";
+import { saveProtectionIntent, setProtectionStatus } from "@/lib/server/binance/protection";
 import type { AccountUpdateEvent, OrderTradeUpdateEvent } from "@/lib/server/binance/types";
-import { accountFixture, orderEvent, orderFixture } from "./helpers";
+import { accountFixture, freshEnv, makeCfg, orderEvent, orderFixture } from "./helpers";
 import type { BinanceOrder } from "@/lib/server/binance/types";
 
 const otu = (o: Record<string, unknown>) => o as unknown as OrderTradeUpdateEvent;
@@ -185,6 +186,7 @@ describe("DTO mapping for the UI", () => {
   beforeEach(() => resetLiveStateForTests());
 
   test("positionsDto attaches native TP/SL prices from closePosition orders", () => {
+    freshEnv(makeCfg());
     applyPositionSnapshot([
       { symbol: "BTCUSDT", positionAmt: "0.001", entryPrice: "50000", markPrice: "50500", unRealizedProfit: "0.5", liquidationPrice: "40000", leverage: "3", positionSide: "BOTH", notional: "50.5" },
     ] as never);
@@ -195,6 +197,17 @@ describe("DTO mapping for the UI", () => {
     const [dto] = positionsDto();
     expect(dto).toMatchObject({ id: "BTCUSDT", side: "long", qty: 0.001, tp: 55000, sl: 48000, leverage: 3, mark: 50500 });
     expect(dto.liq).toBe(40000);
+  });
+
+  test("positionsDto exposes persisted UNPROTECTED status to the live UI", () => {
+    freshEnv(makeCfg());
+    applyPositionSnapshot([
+      { symbol: "BTCUSDT", positionAmt: "0.001", entryPrice: "50000", markPrice: "50500", unRealizedProfit: "0.5", liquidationPrice: "40000", leverage: "3", positionSide: "BOTH" },
+    ] as never);
+    saveProtectionIntent({ symbol: "BTCUSDT", side: "long", tpPrice: "55000", slPrice: "48000" });
+    setProtectionStatus("BTCUSDT", "UNPROTECTED", "missing protective order");
+
+    expect(positionsDto()[0].protectionStatus).toBe("UNPROTECTED");
   });
 
   test("ordersDto maps LIMIT and stop types for the UI", () => {

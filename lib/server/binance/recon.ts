@@ -12,6 +12,17 @@ import { isTerminalStatus } from "./types";
 import { getReconciliationBreaker } from "../resilience/breakers";
 import { withRiskMutation } from "./mutation-queue";
 import { trackReconRun, updateTradingGauges } from "../metrics/instrument";
+import { eq, parseDec } from "./decimal";
+import { audit } from "../audit/log";
+import { alert } from "../alerts/dispatch";
+import { publishLive } from "./sse";
+import {
+  deleteProtectionIntent,
+  listProtectionIntents,
+  markProtectionRestoreAttempted,
+  setProtectionStatus,
+  type ProtectionIntent,
+} from "./protection";
 import {
   activePersistenceProfile,
   assertPersistenceProfile,
@@ -35,6 +46,8 @@ export interface ReconDeps {
   unfreeze(): void;
   /** Rejects callbacks from a manager generation that is no longer current. */
   isCurrent?: () => boolean;
+  /** Called once for a persisted protection intent that has no matching order. */
+  restoreProtection?(intent: ProtectionIntent): Promise<unknown>;
 }
 
 const UNCERTAIN = new Set(["CANCEL_REQUESTED", "CANCEL_UNKNOWN", "TIMEOUT_UNKNOWN", "UNCERTAIN", "SUBMITTING", "CREATED"]);
@@ -167,6 +180,8 @@ export class Reconciler {
       const intentSync = await this.reconcileActiveIntents(openOrders, diffs);
       if (!this.isCurrent()) return this.cancelled();
       result = intentSync.result;
+      await this.reconcileProtectionIntents();
+      if (!this.isCurrent()) return this.cancelled();
 
       for (const o of openOrders.values()) {
         if (!intentSync.seenClientIds.has(o.clientOrderId)) {
@@ -198,6 +213,60 @@ export class Reconciler {
       .run(this.persistenceProfile.id, startedAt, finishedAt, trigger, result, redactJson({ diffs }));
     setLastRecon({ lastRunAt: finishedAt, lastResult: result, driftCount: result === "drift" ? 1 : 0 });
     return { result, diffs, startedAt, finishedAt };
+  }
+
+  private async reconcileProtectionIntents(): Promise<void> {
+    for (const intent of listProtectionIntents(this.persistenceProfile)) {
+      if (!this.isCurrent()) return;
+      if (!liveState().positions.has(intent.symbol)) {
+        deleteProtectionIntent(intent.symbol, this.persistenceProfile);
+        continue;
+      }
+
+      const position = liveState().positions.get(intent.symbol)!;
+      const closeSide = position.side === "long" ? "SELL" : "BUY";
+      const openOrders = [...liveState().openOrders.values()].filter(
+        (order) => order.symbol === intent.symbol && order.side === closeSide && order.closePosition,
+      );
+      const tpPrice = intent.tpPrice;
+      const slPrice = intent.slPrice;
+      const tpMatches = tpPrice == null || openOrders.some(
+        (order) => order.type === "TAKE_PROFIT_MARKET" && samePrice(order.stopPrice, tpPrice),
+      );
+      const slMatches = slPrice == null || openOrders.some(
+        (order) => order.type === "STOP_MARKET" && samePrice(order.stopPrice, slPrice),
+      );
+      if (tpMatches && slMatches) {
+        setProtectionStatus(intent.symbol, "PROTECTED", null, this.persistenceProfile);
+        publishLive("account-update", { at: Date.now(), protection: intent.symbol, status: "PROTECTED" });
+        continue;
+      }
+
+      const missing = [
+        !tpMatches ? `TP ${intent.tpPrice}` : null,
+        !slMatches ? `SL ${intent.slPrice}` : null,
+      ].filter((part): part is string => part != null);
+      const reason = `Recorded protection has no matching open order: ${missing.join(", ")}`;
+      setProtectionStatus(intent.symbol, "UNPROTECTED", reason, this.persistenceProfile);
+      publishLive("account-update", { at: Date.now(), protection: intent.symbol, status: "UNPROTECTED" });
+      if (intent.status !== "UNPROTECTED") {
+        audit("operator", "position.protection.unprotected", { symbol: intent.symbol, reason }, undefined, this.persistenceProfile);
+        alert("position_unprotected", { symbol: intent.symbol, reason });
+      }
+      log.error("position protection missing during reconciliation", { symbol: intent.symbol, missing });
+
+      if (!this.deps.restoreProtection || intent.restoreAttemptedAt >= intent.updatedAt) continue;
+      markProtectionRestoreAttempted(intent.symbol, Date.now(), this.persistenceProfile);
+      try {
+        await this.deps.restoreProtection(intent);
+      } catch (err) {
+        const restoreError = `Protection restore attempt failed: ${String(err)}`;
+        setProtectionStatus(intent.symbol, "UNPROTECTED", restoreError, this.persistenceProfile);
+        audit("operator", "position.protection.restore_failed", { symbol: intent.symbol, error: String(err) }, undefined, this.persistenceProfile);
+        alert("position_protection_restore_failed", { symbol: intent.symbol, error: String(err) });
+        log.error("position protection restore failed", { symbol: intent.symbol, error: String(err) });
+      }
+    }
   }
 
   private async reconcileActiveIntents(
@@ -332,4 +401,13 @@ export class Reconciler {
 
 function setLastRecon(patch: { lastRunAt: number; lastResult: "ok" | "drift" | "error"; driftCount: number }): void {
   setHealthSignal({ recon: { lastRunAt: patch.lastRunAt, lastResult: patch.lastResult, driftCount: patch.driftCount } });
+}
+
+function samePrice(value: string | undefined, expected: string): boolean {
+  if (!value) return false;
+  try {
+    return eq(parseDec(value), parseDec(expected));
+  } catch {
+    return false;
+  }
 }
