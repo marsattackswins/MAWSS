@@ -466,6 +466,66 @@ describe("POST /api/live/protect/remove", () => {
     await getBroker().reconcile("after-protection-removal");
     expect(http.callsTo("/fapi/v1/order").filter((call) => call.method === "POST")).toHaveLength(0);
   });
+
+  test("partial removal reports canceled and remaining orders and preserves UNPROTECTED intent", async () => {
+    const http = new FakeHttp();
+    const exchangeOrders = [
+      orderFixture({
+        clientOrderId: "partial-remove-tp",
+        type: "TAKE_PROFIT_MARKET",
+        side: "SELL",
+        stopPrice: "52000",
+        closePosition: true,
+      }),
+      orderFixture({
+        clientOrderId: "partial-remove-sl",
+        type: "STOP_MARKET",
+        side: "SELL",
+        stopPrice: "48000",
+        closePosition: true,
+      }),
+    ];
+    await bootBroker(http, { withPosition: true });
+    http.route("/fapi/v1/openOrders", () => jsonRes(exchangeOrders));
+    let cancelCount = 0;
+    http.route("/fapi/v1/order", () => {
+      const request = http.calls[http.calls.length - 1];
+      const query = new URL(request.url).searchParams;
+      if (request.method !== "DELETE") return jsonRes({ code: -2013, msg: "Order does not exist." }, 404);
+      cancelCount += 1;
+      if (cancelCount === 2) return jsonRes({ code: -1000, msg: "simulated cancellation failure" }, 400);
+      const index = exchangeOrders.findIndex((order) => order.clientOrderId === query.get("origClientOrderId"));
+      if (index < 0) return jsonRes({ code: -2011, msg: "Unknown order sent." }, 400);
+      const [canceled] = exchangeOrders.splice(index, 1);
+      return jsonRes({ ...canceled, status: "CANCELED" });
+    });
+    saveProtectionIntent({ symbol: "BTCUSDT", side: "long", tpPrice: "52000", slPrice: "48000" });
+    const { sessionId, csrfToken } = newSession();
+
+    const res = await POST_removeProtection(liveRequest({
+      path: "/api/live/protect/remove",
+      sessionId,
+      csrfToken,
+      body: { symbol: "BTCUSDT" },
+    }));
+
+    expect(res.status).toBe(422);
+    const payload = await res.json() as { error?: string };
+    expect(payload.error).toContain("partial-remove-tp");
+    expect(payload.error).toContain("partial-remove-sl");
+    expect(exchangeOrders.map((order) => order.clientOrderId)).toEqual(["partial-remove-sl"]);
+    expect(getProtectionIntent("BTCUSDT")).toMatchObject({
+      status: "CONFIRMED",
+      protectionStatus: "UNPROTECTED",
+    });
+    expect(getProtectionIntent("BTCUSDT")?.failureReason).toContain("Protection removal incomplete:");
+    expect(recentAudit(20).some((entry) => entry.action === "position.ui.protection_remove_failed")).toBe(true);
+
+    await getBroker().reconcile("after-partial-protection-removal");
+
+    expect(getProtectionIntent("BTCUSDT")?.protectionStatus).toBe("UNPROTECTED");
+    expect(http.callsTo("/fapi/v1/order").filter((call) => call.method === "POST")).toHaveLength(0);
+  });
 });
 
 // ---------------------------------------------------------------------------

@@ -46,7 +46,9 @@ import {
   markProtectionRestoreAttempted,
   revertProtectionIntent,
   savePendingProtectionIntent,
+  saveProtectionIntent,
   setProtectionStatus,
+  withProtectionIntentLock,
   type ProtectionIntent,
 } from "./protection";
 
@@ -90,6 +92,7 @@ export const PROTECTION_MARK_MAX_AGE_MS = 10_000;
 type ProtectionReplaceResult = OrderResult & {
   rollbackRestored?: boolean;
   rollbackInvalid?: boolean;
+  rollbackError?: string;
 };
 
 /**
@@ -134,6 +137,8 @@ export interface OrderResult {
   error?: string;
   /** Binance rejection code when the exchange refused the order (e.g. -2022). */
   errorCode?: number;
+  failureKind?: "definite_rejection" | "transient_or_uncertain";
+  rollbackError?: string;
   duplicate?: boolean;
 }
 
@@ -384,7 +389,12 @@ export class OrderService {
       this.deps.freeze("order submission returned HTTP 5xx; outcome must be verified");
       audit("operator", "order.unknown_outcome", { symbol, clientOrderId, httpStatus: (err as BinanceApiError).httpStatus });
       void this.resolveUnknownOutcome(clientOrderId);
-      return { ok: false, clientOrderId, error: "Order submission returned an uncertain exchange response; outcome is being resolved" };
+      return {
+        ok: false,
+        clientOrderId,
+        error: "Order submission returned an uncertain exchange response; outcome is being resolved",
+        failureKind: "transient_or_uncertain",
+      };
     }
     if (err instanceof BinanceApiError) {
       if (err.code === ERR_INVALID_API_KEY) {
@@ -392,13 +402,25 @@ export class OrderService {
         this.deps.freeze("Binance rejected the API key (-2015); check environment/key scope");
         this.updateIntent(clientOrderId, { status: "REJECTED", lastState: JSON.stringify({ code: err.code }) });
         audit("operator", "order.rejected.key", { symbol, clientOrderId, code: err.code });
-        return { ok: false, clientOrderId, error: "Exchange rejected the API key; submissions frozen" };
+        return {
+          ok: false,
+          clientOrderId,
+          error: "Exchange rejected the API key; submissions frozen",
+          errorCode: err.code,
+          failureKind: "definite_rejection",
+        };
       }
       this.updateIntent(clientOrderId, { status: "REJECTED", lastState: JSON.stringify({ code: err.code, msg: err.exchangeMsg }) });
       trackOrderRejected(clientOrderId, symbol, err.exchangeMsg);
       audit("operator", "order.rejected.exchange", { symbol, clientOrderId, code: err.code, msg: err.exchangeMsg });
       this.deps.emit("order-update", { clientOrderId, status: "REJECTED", error: err.exchangeMsg });
-      return { ok: false, clientOrderId, error: `Exchange rejected the order: ${err.exchangeMsg}`, errorCode: err.code };
+      return {
+        ok: false,
+        clientOrderId,
+        error: `Exchange rejected the order: ${err.exchangeMsg}`,
+        errorCode: err.code,
+        failureKind: "definite_rejection",
+      };
     }
     if (err instanceof TransportTimeoutError) {
       // Unknown outcome: never retry blindly. Persist uncertainty, freeze, resolve.
@@ -406,15 +428,26 @@ export class OrderService {
       this.deps.freeze("submission timeout: order outcome unknown until resolved");
       audit("operator", "order.timeout_unknown", { symbol, clientOrderId });
       void this.resolveUnknownOutcome(clientOrderId);
-      return { ok: false, clientOrderId, error: "Submission timed out; outcome is being resolved against the exchange" };
+      return {
+        ok: false,
+        clientOrderId,
+        error: "Submission timed out; outcome is being resolved against the exchange",
+        failureKind: "transient_or_uncertain",
+      };
     }
-    // Infrastructure failure, not a business rejection: rethrow untouched so
-    // runBrokerMutation can answer 503 circuit_open. Never recorded as REJECTED.
+    // Breaker state is propagated to the caller; all other transport failures
+    // remain uncertain until a later exchange query proves the order absent.
     if (err instanceof CircuitBreakerOpenError) throw err;
-    this.updateIntent(clientOrderId, { status: "REJECTED", lastState: JSON.stringify({ error: String(err) }) });
-    trackOrderRejected(clientOrderId, symbol, String(err));
-    audit("operator", "order.rejected.transport", { symbol, clientOrderId, error: String(err) });
-    return { ok: false, clientOrderId, error: `Order submission failed: ${String(err)}` };
+    this.updateIntent(clientOrderId, { status: "UNCERTAIN", lastState: uncertainState(clientOrderId, { error: String(err) }, this.persistenceProfile) });
+    this.deps.freeze("order submission transport failed; outcome must be verified");
+    audit("operator", "order.unknown_outcome", { symbol, clientOrderId, error: String(err) });
+    void this.resolveUnknownOutcome(clientOrderId);
+    return {
+      ok: false,
+      clientOrderId,
+      error: `Order submission outcome is uncertain: ${String(err)}`,
+      failureKind: "transient_or_uncertain",
+    };
   }
 
   /** Resolves TIMEOUT_UNKNOWN/CANCEL_UNKNOWN intents by querying exchange truth. */
@@ -671,34 +704,96 @@ export class OrderService {
    * never simulated in the browser. Replacing cancels the existing one first.
    */
   async protectPosition(input: { symbol: string; tpPrice?: string; slPrice?: string }): Promise<{ tp?: OrderResult; sl?: OrderResult }> {
-    return withRiskMutation(() => this.protectPositionSerialized(input, true));
+    return withRiskMutation(() =>
+      withProtectionIntentLock(
+        input.symbol,
+        () => this.protectPositionSerialized(input, true),
+        this.persistenceProfile,
+      ),
+    );
   }
 
   /** Reconciliation already owns the risk-mutation queue when invoking this. */
   async restoreProtection(intent: ProtectionIntent): Promise<{ tp?: OrderResult; sl?: OrderResult }> {
-    return this.protectPositionSerialized({
-      symbol: intent.symbol,
-      tpPrice: intent.tpPrice ?? undefined,
-      slPrice: intent.slPrice ?? undefined,
-    }, false);
+    return withProtectionIntentLock(
+      intent.symbol,
+      () => this.protectPositionSerialized({
+        symbol: intent.symbol,
+        tpPrice: intent.tpPrice ?? undefined,
+        slPrice: intent.slPrice ?? undefined,
+      }, false),
+      this.persistenceProfile,
+    );
   }
 
   async removeProtection(symbol: string): Promise<{ ok: boolean; error?: string }> {
-    return withRiskMutation(() => this.removeProtectionSerialized(symbol));
+    return withRiskMutation(() =>
+      withProtectionIntentLock(
+        symbol,
+        () => this.removeProtectionSerialized(symbol),
+        this.persistenceProfile,
+      ),
+    );
   }
 
   private async removeProtectionSerialized(symbol: string): Promise<{ ok: boolean; error?: string }> {
     const openOrders = await this.deps.rest.getOpenOrders(symbol);
+    const canceled: string[] = [];
+    const failures: string[] = [];
+    let breakerError: CircuitBreakerOpenError | undefined;
     for (const type of ["TAKE_PROFIT_MARKET", "STOP_MARKET"] as const) {
       for (const side of ["BUY", "SELL"] as const) {
-        const cancelError = await this.cancelProtectiveOrders(
-          symbol,
-          type,
-          side,
-          openOrders.filter((order) => this.isProtectiveOrder(order, type, side)),
-        );
-        if (cancelError) return { ok: false, error: `Could not remove ${type} protection: ${cancelError}` };
+        for (const order of openOrders.filter((candidate) => this.isProtectiveOrder(candidate, type, side))) {
+          try {
+            const cancelError = await this.cancelProtectiveOrders(symbol, type, side, [order]);
+            if (cancelError) failures.push(`${order.clientOrderId}: ${cancelError}`);
+            else canceled.push(order.clientOrderId);
+          } catch (err) {
+            if (!(err instanceof CircuitBreakerOpenError)) throw err;
+            breakerError = err;
+            failures.push(`${order.clientOrderId}: ${String(err)}`);
+            break;
+          }
+        }
+        if (breakerError) break;
       }
+      if (breakerError) break;
+    }
+    let remaining: BinanceOrder[];
+    try {
+      remaining = await this.deps.rest.getOpenOrders(symbol);
+    } catch (err) {
+      if (err instanceof CircuitBreakerOpenError) breakerError = err;
+      failures.push(`Could not verify remaining protection: ${String(err)}`);
+      remaining = openOrders.filter((order) => !canceled.includes(order.clientOrderId));
+    }
+    const remainingProtection = remaining.filter((order) =>
+      (order.type === "TAKE_PROFIT_MARKET" || order.type === "STOP_MARKET") && order.closePosition,
+    );
+    if (failures.length > 0 || remainingProtection.length > 0) {
+      const reason = [
+        `Protection removal incomplete: canceled [${canceled.join(", ") || "none"}]`,
+        `remaining [${remainingProtection.map((order) => order.clientOrderId).join(", ") || "none"}]`,
+        failures.length > 0 ? `failures [${failures.join("; ")}]` : "",
+      ].filter(Boolean).join("; ");
+      let intent = getProtectionIntent(symbol, this.persistenceProfile);
+      if (!intent) {
+        const position = liveState().positions.get(symbol);
+        if (position) {
+          const closeSide = position.side === "long" ? "SELL" : "BUY";
+          saveProtectionIntent({
+            symbol,
+            side: position.side,
+            tpPrice: remainingProtection.find((order) => order.type === "TAKE_PROFIT_MARKET" && order.side === closeSide)?.stopPrice ?? null,
+            slPrice: remainingProtection.find((order) => order.type === "STOP_MARKET" && order.side === closeSide)?.stopPrice ?? null,
+          }, Date.now(), this.persistenceProfile);
+          intent = getProtectionIntent(symbol, this.persistenceProfile);
+        }
+      }
+      if (intent) setProtectionStatus(symbol, "UNPROTECTED", reason, this.persistenceProfile);
+      this.deps.emit("account-update", { at: Date.now(), protection: symbol, status: "UNPROTECTED" });
+      if (breakerError) throw breakerError;
+      return { ok: false, error: reason };
     }
     deleteProtectionIntent(symbol, this.persistenceProfile);
     this.deps.emit("account-update", { at: Date.now(), protection: symbol, status: null });
@@ -871,18 +966,19 @@ export class OrderService {
             (result) => (result as ProtectionReplaceResult | undefined)?.rollbackInvalid,
           ) as ProtectionReplaceResult | undefined;
           markProtectionRestoreAttempted(input.symbol, Date.now(), this.persistenceProfile);
-          this.markProtectionUnprotected(input.symbol, invalidOrder?.error ?? error);
+          const rollbackError = invalidOrder?.rollbackError ?? invalidOrder?.error ?? error;
+          this.markProtectionUnprotected(input.symbol, rollbackError);
           audit("operator", "position.protection.market_passed_old_trigger", {
             symbol: input.symbol,
             side: pos.side,
             severity: "high",
-            error: invalidOrder?.error,
+            error: rollbackError,
           }, undefined, this.persistenceProfile);
           alert(`position_protection_market_passed_old_trigger:${input.symbol}`, {
             symbol: input.symbol,
             side: pos.side,
             severity: "high",
-            error: invalidOrder?.error,
+            error: rollbackError,
           });
         } else if (previousConfirmed && (previousTp || previousSl)) {
           revertProtectionIntent({
@@ -1003,59 +1099,69 @@ export class OrderService {
       clientOrderId: newServerClientOrderId(type === "STOP_MARKET" ? "sl" : "tp"),
     }, true);
 
+    const restorePrevious = async (): Promise<{
+      restored: boolean;
+      invalid?: boolean;
+      error?: string;
+    }> => {
+      if (!previousPrice) return { restored: false };
+      const validationError = await this.validateRollbackPrice(symbol, type, previousPrice);
+      if (validationError) return { restored: false, invalid: true, error: validationError };
+      const rollback = await submit(previousPrice);
+      if (rollback.ok) {
+        try {
+          const result = await this.reconcileProtectionPlacement(symbol, type, side, previousPrice, rollback.clientOrderId);
+          if (result.order) return { restored: true };
+          return {
+            restored: false,
+            error: result.absent
+              ? rollback.error ?? `Exchange did not confirm the previous ${type} order`
+              : `Previous ${type} order outcome remains uncertain`,
+          };
+        } catch (err) {
+          if (err instanceof CircuitBreakerOpenError) throw err;
+          return { restored: false, error: `Could not confirm previous ${type} order: ${String(err)}` };
+        }
+      }
+      try {
+        const result = await this.reconcileProtectionPlacement(symbol, type, side, previousPrice, rollback.clientOrderId);
+        if (result.order) return { restored: true };
+        return {
+          restored: false,
+          error: result.absent
+            ? rollback.error ?? `Exchange rejected the previous ${type} order`
+            : `Previous ${type} order outcome remains uncertain`,
+        };
+      } catch (err) {
+        if (err instanceof CircuitBreakerOpenError) throw err;
+        return { restored: false, error: `Could not confirm previous ${type} order: ${String(err)}` };
+      }
+    };
+
     const first = await submit(price);
     if (first.ok) return first;
+    if (first.failureKind !== "transient_or_uncertain") {
+      const rollback = await restorePrevious();
+      return {
+        ...first,
+        ...(rollback.restored ? { rollbackRestored: true } : {}),
+        ...(rollback.invalid ? { rollbackInvalid: true, rollbackError: rollback.error } : {}),
+      };
+    }
+
     let reconciled: { order: BinanceOrder | null; absent: boolean };
     try {
       reconciled = await this.reconcileProtectionPlacement(symbol, type, side, price, first.clientOrderId);
     } catch (err) {
       if (err instanceof CircuitBreakerOpenError) throw err;
-      return failed(`Protective ${type} submission is uncertain and open orders could not be reconciled: ${String(err)}`);
+      return {
+        ...first,
+        error: `Protective ${type} submission is uncertain and open orders could not be reconciled: ${String(err)}`,
+      };
     }
     if (reconciled.order) return this.protectiveOrderResult(reconciled.order);
-    if (!reconciled.absent) return failed(`Protective ${type} submission outcome remains uncertain; retry was not attempted`);
-
-    let rollbackConfirmed: BinanceOrder | undefined;
-    if (previousPrice) {
-      const rollbackError = await this.validateRollbackPrice(symbol, type, previousPrice);
-      if (rollbackError) {
-        return failed(rollbackError, { rollbackInvalid: true });
-      }
-      const rollback = await submit(previousPrice);
-      const rollbackResult = await this.reconcileProtectionPlacement(symbol, type, side, previousPrice, rollback.clientOrderId).catch((err) => {
-        if (err instanceof CircuitBreakerOpenError) throw err;
-        return null;
-      });
-      rollbackConfirmed = rollbackResult?.order ?? undefined;
-    }
-
-    let currentAfterRollback: BinanceOrder[];
-    try {
-      currentAfterRollback = await this.deps.rest.getOpenOrders(symbol);
-    } catch (err) {
-      if (err instanceof CircuitBreakerOpenError) throw err;
-      return failed(`Could not reconcile protective orders before retry: ${String(err)}`);
-    }
-    const retryCancelError = await this.cancelProtectiveOrders(
-      symbol,
-      type,
-      side,
-      currentAfterRollback.filter((order) => this.isProtectiveOrder(order, type, side)),
-    );
-    if (retryCancelError) {
-      if (previousPrice && !rollbackConfirmed) {
-        const rollbackError = await this.validateRollbackPrice(symbol, type, previousPrice);
-        if (rollbackError) {
-          return failed(rollbackError, { rollbackInvalid: true });
-        }
-        const finalRollback = await submit(previousPrice);
-        const rollbackResult = await this.reconcileProtectionPlacement(symbol, type, side, previousPrice, finalRollback.clientOrderId).catch((err) => {
-          if (err instanceof CircuitBreakerOpenError) throw err;
-          return null;
-        });
-        rollbackConfirmed = rollbackResult?.order ?? undefined;
-      }
-      return failed(`Protective ${type} retry blocked: ${retryCancelError}`, { rollbackRestored: !!rollbackConfirmed });
+    if (!reconciled.absent) {
+      return { ...first, error: `Protective ${type} submission outcome remains uncertain; retry was not attempted` };
     }
 
     const retry = await submit(price);
@@ -1064,25 +1170,25 @@ export class OrderService {
       reconciled = await this.reconcileProtectionPlacement(symbol, type, side, price, retry.clientOrderId);
     } catch (err) {
       if (err instanceof CircuitBreakerOpenError) throw err;
-      return failed(`Protective ${type} retry is uncertain and open orders could not be reconciled: ${String(err)}`);
+      return {
+        ...retry,
+        error: `Protective ${type} retry is uncertain and open orders could not be reconciled: ${String(err)}`,
+      };
     }
     if (reconciled.order) return this.protectiveOrderResult(reconciled.order);
-    if (!reconciled.absent) return failed(`Protective ${type} retry outcome remains uncertain; no further order was sent`);
-
-    if (previousPrice) {
-      const rollbackError = await this.validateRollbackPrice(symbol, type, previousPrice);
-      if (rollbackError) {
-        return failed(rollbackError, { rollbackInvalid: true });
-      }
-      const restore = await submit(previousPrice);
-      const rollbackResult = await this.reconcileProtectionPlacement(symbol, type, side, previousPrice, restore.clientOrderId).catch((err) => {
-        if (err instanceof CircuitBreakerOpenError) throw err;
-        return null;
-      });
-      rollbackConfirmed = rollbackResult?.order ?? undefined;
+    if (!reconciled.absent) {
+      return { ...retry, error: `Protective ${type} retry outcome remains uncertain; rollback was not attempted` };
     }
-    const suffix = rollbackConfirmed ? "; previous protection restored" : "; previous protection could not be restored";
-    return failed(`Could not confirm new ${type} protection${suffix}`, { rollbackRestored: !!rollbackConfirmed });
+
+    const rollback = await restorePrevious();
+    return {
+      ...retry,
+      ...(rollback.restored ? { rollbackRestored: true } : {}),
+      ...(rollback.invalid ? { rollbackInvalid: true, rollbackError: rollback.error } : {}),
+      ...(!rollback.restored && !rollback.invalid && rollback.error ? {
+        error: `${retry.error ?? `Could not confirm new ${type} protection`}; ${rollback.error}`,
+      } : {}),
+    };
   }
 
   private async validateRollbackPrice(

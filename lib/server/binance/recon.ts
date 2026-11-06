@@ -18,6 +18,7 @@ import { alert } from "../alerts/dispatch";
 import { publishLive } from "./sse";
 import {
   deleteProtectionIntent,
+  isProtectionIntentLocked,
   listProtectionIntents,
   markProtectionRestoreAttempted,
   setProtectionStatus,
@@ -169,9 +170,11 @@ export class Reconciler {
     const startedAt = Date.now();
     const diffs: string[] = [];
     let result: ReconResult["result"] = "ok";
+    let positionSnapshotFresh = false;
     try {
       if (!this.isCurrent()) return this.cancelled();
       await this.deps.snapshot();
+      positionSnapshotFresh = true;
       if (!this.isCurrent()) return this.cancelled();
       await this.backfillMissedFills(diffs);
       if (!this.isCurrent()) return this.cancelled();
@@ -180,7 +183,7 @@ export class Reconciler {
       const intentSync = await this.reconcileActiveIntents(openOrders, diffs);
       if (!this.isCurrent()) return this.cancelled();
       result = intentSync.result;
-      await this.reconcileProtectionIntents();
+      if (positionSnapshotFresh) await this.reconcileProtectionIntents();
       if (!this.isCurrent()) return this.cancelled();
 
       for (const o of openOrders.values()) {
@@ -218,6 +221,7 @@ export class Reconciler {
   private async reconcileProtectionIntents(): Promise<void> {
     for (const intent of listProtectionIntents(this.persistenceProfile)) {
       if (!this.isCurrent()) return;
+      if (isProtectionIntentLocked(intent.symbol, this.persistenceProfile)) continue;
       if (!liveState().positions.has(intent.symbol)) {
         deleteProtectionIntent(intent.symbol, this.persistenceProfile);
         continue;
@@ -238,6 +242,13 @@ export class Reconciler {
           positionSide: position.side,
           severity: "high",
         });
+        continue;
+      }
+      if (
+        intent.status === "CONFIRMED" &&
+        intent.protectionStatus === "UNPROTECTED" &&
+        intent.failureReason?.startsWith("Protection removal incomplete:")
+      ) {
         continue;
       }
       const closeSide = position.side === "long" ? "SELL" : "BUY";
@@ -296,7 +307,7 @@ export class Reconciler {
         const restoreError = `Protection restore attempt failed: ${String(err)}`;
         setProtectionStatus(intent.symbol, "UNPROTECTED", restoreError, this.persistenceProfile);
         audit("operator", "position.protection.restore_failed", { symbol: intent.symbol, error: String(err) }, undefined, this.persistenceProfile);
-        alert("position_protection_restore_failed", { symbol: intent.symbol, error: String(err) });
+        alert(`position_protection_restore_failed:${intent.symbol}`, { symbol: intent.symbol, error: String(err) });
         log.error("position protection restore failed", { symbol: intent.symbol, error: String(err) });
       }
     }

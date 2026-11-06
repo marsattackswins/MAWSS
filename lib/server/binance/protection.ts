@@ -60,6 +60,54 @@ function fromRow(row: ProtectionRow): ProtectionIntent {
 const INTENT_COLUMNS = `symbol, side, tp_price, sl_price, previous_tp_price, previous_sl_price,
   created_at, updated_at, intent_status, status, failure_reason, restore_attempted_at`;
 
+interface ProtectionLock {
+  tail: Promise<void>;
+  users: number;
+}
+
+const protectionLocks = new Map<string, ProtectionLock>();
+
+function protectionLockKey(profile: PersistenceProfile, symbol: string): string {
+  return `${profile.id}:${symbol}`;
+}
+
+export function isProtectionIntentLocked(
+  symbol: string,
+  profile: PersistenceProfile = activePersistenceProfile(),
+): boolean {
+  assertPersistenceProfile(profile);
+  return (protectionLocks.get(protectionLockKey(profile, symbol))?.users ?? 0) > 0;
+}
+
+export async function withProtectionIntentLock<T>(
+  symbol: string,
+  operation: () => Promise<T>,
+  profile: PersistenceProfile = activePersistenceProfile(),
+): Promise<T> {
+  assertPersistenceProfile(profile);
+  const key = protectionLockKey(profile, symbol);
+  let lock = protectionLocks.get(key);
+  if (!lock) {
+    lock = { tail: Promise.resolve(), users: 0 };
+    protectionLocks.set(key, lock);
+  }
+  lock.users += 1;
+  const previous = lock.tail;
+  let release!: () => void;
+  const turn = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  lock.tail = previous.then(() => turn);
+  await previous;
+  try {
+    return await operation();
+  } finally {
+    release();
+    lock.users -= 1;
+    if (lock.users === 0) protectionLocks.delete(key);
+  }
+}
+
 export function getProtectionIntent(
   symbol: string,
   profile: PersistenceProfile = activePersistenceProfile(),

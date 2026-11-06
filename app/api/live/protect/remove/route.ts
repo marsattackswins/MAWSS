@@ -54,6 +54,7 @@ export async function POST(req: Request): Promise<Response> {
       if (error instanceof ProfileCoordinatorError) {
         return jsonError(profileErrorStatus(error.code), error.code, "Profile runtime changed; retry the request");
       }
+      audit("operator", "position.ui.protection_remove_failed", { symbol, error: String(error) }, ctx.ip);
       throw error;
     }
     observeLiveMutationLatency(
@@ -62,10 +63,17 @@ export async function POST(req: Request): Promise<Response> {
       Math.round(performance.now() - start),
     );
     recordRequest(symbol, LIVE_MUTATION_OPERATIONS.REMOVE_PROTECTION);
-    if (result instanceof Response) return result;
+    if (result instanceof Response) {
+      if (result.status >= 400) {
+        audit("operator", "position.ui.protection_remove_failed", { symbol, status: result.status }, ctx.ip);
+      }
+      return result;
+    }
 
     if (result.ok) {
       audit("operator", "position.ui.protection_removed", { symbol }, ctx.ip);
+    } else {
+      audit("operator", "position.ui.protection_remove_failed", { symbol, error: result.error }, ctx.ip);
     }
     return jsonOk(result, { status: result.ok ? 200 : 422 });
   });
