@@ -3,7 +3,7 @@ import { RateLimiter } from "@/lib/server/binance/ratelimit";
 import { OrderService, type ReferencePrice } from "@/lib/server/binance/orders";
 import { extractConstraints } from "@/lib/server/binance/filters";
 import { createIntent, findByClientOrderId, updateIntent } from "@/lib/server/binance/intents";
-import { liveState } from "@/lib/server/binance/state";
+import { applyAccountEvent, liveState } from "@/lib/server/binance/state";
 import { applyOpenOrdersSnapshot } from "@/lib/server/binance/state";
 import {
   getProtectionIntent,
@@ -973,6 +973,47 @@ describe("position close and native protection", () => {
     });
     expect(placeCalls(h)).toHaveLength(1);
     expect(getProtectionIntent("BTCUSDT")).toMatchObject({ status: "CONFIRMED", protectionStatus: "PROTECTED" });
+  });
+
+  test("flat fill followed by same-symbol reopen cannot restore the old protection intent", async () => {
+    const h = setup();
+    const exchange = mockProtectionExchange(h);
+    const event = (positionAmt: string) => ({
+      e: "ACCOUNT_UPDATE" as const,
+      E: Date.now(),
+      T: Date.now(),
+      a: {
+        B: [],
+        P: [{ s: "BTCUSDT", pa: positionAmt, ep: "50000", cr: "0", up: "0", mt: "cross", iw: "0", ps: "BOTH" as const }],
+      },
+    });
+    applyAccountEvent(event("0.001"));
+    savePendingProtectionIntent({
+      symbol: "BTCUSDT",
+      side: "long",
+      tpPrice: "52000",
+      slPrice: "48000",
+      previousTpPrice: null,
+      previousSlPrice: null,
+    });
+    applyAccountEvent(event("0"));
+    applyAccountEvent(event("0.002"));
+    h.http.route("/fapi/v1/userTrades", () => jsonRes([]));
+    const restoreProtection = jest.fn(async () => undefined);
+    const recon = new Reconciler({
+      persistenceProfile: persistenceProfileFromConfig(h.cfg),
+      rest: h.rest,
+      snapshot: async () => applyOpenOrdersSnapshot(exchange.orders as never),
+      freeze: () => undefined,
+      unfreeze: () => undefined,
+      restoreProtection,
+    });
+
+    await recon.run("same-symbol-reopen");
+
+    expect(getProtectionIntent("BTCUSDT")).toBeNull();
+    expect(restoreProtection).not.toHaveBeenCalled();
+    expect(placeCalls(h)).toHaveLength(0);
   });
 
   test("reconciliation alerts on missing protection and attempts restoration once", async () => {
