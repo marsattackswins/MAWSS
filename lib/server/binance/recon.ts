@@ -5,7 +5,7 @@ import { serverConfig } from "../env/config";
 import { redactJson } from "../audit/redact";
 import { setHealthSignal } from "../health/state";
 import { log } from "../log/logger";
-import { findActiveIntents, findByExchangeOrderId, updateIntent } from "./intents";
+import { findActiveIntents, findByExchangeOrderId, intentsInUncertainStates, updateIntent } from "./intents";
 import type { BinanceRestClient } from "./rest";
 import { fillExists, liveState, persistFill, rememberFill, type LiveFill } from "./state";
 import { isTerminalStatus } from "./types";
@@ -224,6 +224,22 @@ export class Reconciler {
       }
 
       const position = liveState().positions.get(intent.symbol)!;
+      if (position.side !== intent.side) {
+        deleteProtectionIntent(intent.symbol, this.persistenceProfile);
+        const reason = `Protection intent side ${intent.side} does not match live position side ${position.side}`;
+        audit("operator", "position.protection.intent_side_mismatch", {
+          symbol: intent.symbol,
+          intentSide: intent.side,
+          positionSide: position.side,
+        }, undefined, this.persistenceProfile);
+        alert(`position_protection_intent_side_mismatch:${intent.symbol}`, {
+          symbol: intent.symbol,
+          intentSide: intent.side,
+          positionSide: position.side,
+          severity: "high",
+        });
+        continue;
+      }
       const closeSide = position.side === "long" ? "SELL" : "BUY";
       const openOrders = [...liveState().openOrders.values()].filter(
         (order) => order.symbol === intent.symbol && order.side === closeSide && order.closePosition,
@@ -249,13 +265,30 @@ export class Reconciler {
       const reason = `Recorded protection has no matching open order: ${missing.join(", ")}`;
       setProtectionStatus(intent.symbol, "UNPROTECTED", reason, this.persistenceProfile);
       publishLive("account-update", { at: Date.now(), protection: intent.symbol, status: "UNPROTECTED" });
-      if (intent.status !== "UNPROTECTED") {
+      if (
+        intent.protectionStatus !== "UNPROTECTED" ||
+        (intent.status === "PENDING_REPLACE" && intent.failureReason === "Protection update in progress")
+      ) {
         audit("operator", "position.protection.unprotected", { symbol: intent.symbol, reason }, undefined, this.persistenceProfile);
-        alert("position_unprotected", { symbol: intent.symbol, reason });
+        alert(`position_unprotected:${intent.symbol}`, { symbol: intent.symbol, reason });
       }
       log.error("position protection missing during reconciliation", { symbol: intent.symbol, missing });
 
-      if (!this.deps.restoreProtection || intent.restoreAttemptedAt >= intent.updatedAt) continue;
+      if (intent.status !== "PENDING_REPLACE") continue;
+      const ageMs = Date.now() - intent.createdAt;
+      const maxAgeMs = serverConfig().protectionPendingMaxAgeMs;
+      if (ageMs < 0 || ageMs > maxAgeMs) {
+        const expiredReason = `Pending protection replacement expired after ${Math.max(0, ageMs)}ms; automatic restore limit is ${maxAgeMs}ms`;
+        setProtectionStatus(intent.symbol, "UNPROTECTED", expiredReason, this.persistenceProfile);
+        if (intent.failureReason !== expiredReason) {
+          audit("operator", "position.protection.pending_restore_expired", { symbol: intent.symbol, ageMs, maxAgeMs }, undefined, this.persistenceProfile);
+          alert(`position_protection_pending_expired:${intent.symbol}`, { symbol: intent.symbol, ageMs, maxAgeMs });
+        }
+        continue;
+      }
+      if (intent.restoreAttemptedAt >= intent.createdAt) continue;
+      if (intentsInUncertainStates(this.persistenceProfile).some((order) => order.symbol === intent.symbol)) continue;
+      if (!this.deps.restoreProtection) continue;
       markProtectionRestoreAttempted(intent.symbol, Date.now(), this.persistenceProfile);
       try {
         await this.deps.restoreProtection(intent);

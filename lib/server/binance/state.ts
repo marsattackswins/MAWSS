@@ -8,6 +8,7 @@ import {
 } from "../profile/context";
 import { add, div, eq, isNegative, isZero, mul, parseDec, toStr, type Dec } from "./decimal";
 import type { AccountResponse, AccountUpdateEvent, BinanceOrder, OrderTradeUpdateEvent, PositionRiskRow } from "./types";
+import { deleteProtectionIntent } from "./protection";
 
 export interface LiveAccount {
   totalWalletBalance: string;
@@ -507,11 +508,13 @@ export function applyAccountEvent(ev: AccountUpdateEvent): boolean {
     if (isZero(amt)) {
       if (prev) positionAmountChanged = true;
       state.positions.delete(p.s);
+      deleteProtectionIntent(p.s);
       continue;
     }
     const absQty = isNegative(amt) ? toStr({ units: -amt.units, scale: amt.scale }) : toStr(amt);
     const side = isNegative(amt) ? "short" : "long";
     const amountChanged = !prev || prev.side !== side || !eq(parseDec(prev.qty), parseDec(absQty));
+    if (prev && prev.side !== side) deleteProtectionIntent(p.s);
     if (amountChanged) positionAmountChanged = true;
     // ACCOUNT_UPDATE carries no leverage field, so seed from the last
     // ACCOUNT_CONFIG_UPDATE instead of guessing 1x.

@@ -135,7 +135,7 @@ export function positionsDto(): PositionDto[] {
       unrealized: Number(p.unrealizedProfit),
       markAgeMs: Math.max(0, now - p.updatedAt),
       markPriceStale: p.markPriceSource === "fill-fallback",
-      protectionStatus: getProtectionIntent(p.symbol, persistenceProfileFromConfig(activeProfileConfig()))?.status,
+      protectionStatus: getProtectionIntent(p.symbol, persistenceProfileFromConfig(activeProfileConfig()))?.protectionStatus,
       openedAt: positionOpenedAt(p.symbol) ?? p.updatedAt,
       notional: Number(p.notional),
       marginType: p.marginType,

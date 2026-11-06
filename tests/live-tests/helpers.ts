@@ -75,6 +75,7 @@ export function makeCfg(overrides: Partial<EnvConfig> = {}): EnvConfig {
     historyBackfillMs: 3 * 24 * 60 * 60 * 1000,
     leaseTtlMs: 60_000,
     snapshotMaxAgeMs: 5 * 60_000,
+    protectionPendingMaxAgeMs: 2 * 60_000,
     alertWebhookUrl: null,
     missingProductionRiskLimitVariables: [],
     risk: {

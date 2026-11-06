@@ -4,6 +4,7 @@ import { OrderService } from "@/lib/server/binance/orders";
 import { RateLimiter } from "@/lib/server/binance/ratelimit";
 import { checkRisk } from "@/lib/server/binance/risk";
 import { liveState, resetLiveStateForTests } from "@/lib/server/binance/state";
+import { getProtectionIntent, saveProtectionIntent } from "@/lib/server/binance/protection";
 import { getBinanceRestBreaker, getReconciliationBreaker } from "@/lib/server/resilience/breakers";
 import { setRuntime, RUNTIME_KEYS } from "@/lib/server/runtime/flags";
 import { buildHealthStatus } from "@/lib/server/health/status";
@@ -94,6 +95,7 @@ describe("Phase 2 pending exposure", () => {
 
 describe("Phase 2 emergency flatten", () => {
   test("flattens orders and positions despite normal freezes and coalesces concurrent calls", async () => {
+    saveProtectionIntent({ symbol: "BTCUSDT", side: "long", tpPrice: "52000", slPrice: "48000" });
     let orderCancels = 0;
     let closes = 0;
     let positions = true;
@@ -122,6 +124,7 @@ describe("Phase 2 emergency flatten", () => {
     expect(closes).toBe(1);
     expect(a.canceledOrderIds).toEqual(["protective-1"]);
     expect(a.closedPositions[0].result.ok).toBe(true);
+    expect(getProtectionIntent("BTCUSDT")).toBeNull();
   });
 
   test("OrderService emergency close bypasses kill switch and REST breaker", async () => {

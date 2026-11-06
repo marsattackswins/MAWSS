@@ -92,6 +92,8 @@ export interface EnvConfig {
   leaseTtlMs: number;
   /** Maximum age of the last authoritative account/positions/orders snapshot. */
   snapshotMaxAgeMs: number;
+  /** Maximum age for automatically restoring an interrupted protection replacement. */
+  protectionPendingMaxAgeMs: number;
   alertWebhookUrl: string | null;
   /** Production risk variables absent from the source environment. */
   missingProductionRiskLimitVariables?: string[];
@@ -411,6 +413,7 @@ export function loadEnvConfig(source: NodeJS.ProcessEnv = process.env): EnvConfi
     historyBackfillMs: num(source.MAWS_HISTORY_BACKFILL_MS, 3 * 24 * 60 * 60 * 1000),
     leaseTtlMs: num(source.MAWS_LEASE_TTL_MS, 5 * 60_000),
     snapshotMaxAgeMs: num(source.MAWS_SNAPSHOT_MAX_AGE_MS, 5 * 60_000),
+    protectionPendingMaxAgeMs: num(source.MAWS_PROTECTION_PENDING_MAX_AGE_MS, 2 * 60_000),
     alertWebhookUrl: source.MAWS_ALERT_WEBHOOK_URL?.trim() || null,
     missingProductionRiskLimitVariables,
     risk: {

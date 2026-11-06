@@ -10,6 +10,7 @@ import { useAppStore } from "@/lib/store";
 import {
   dispatchCancelOrder,
   dispatchClosePosition,
+  dispatchRemoveProtection,
 } from "@/lib/trading/dispatch";
 import { formatNum, formatUsd } from "@/lib/trading/format";
 import { PerformancePanel } from "@/components/trading/PerformancePanel";
@@ -579,6 +580,21 @@ export function PositionsPanel() {
                       </td>
                       <td className="px-2 py-1.5 text-(--app-muted)">—</td>
                       <td className="px-2 py-1.5 text-right">
+                        {live && (p.tp != null || p.sl != null || p.protectionStatus != null) && (
+                          <button
+                            type="button"
+                            disabled={mutationBlocked}
+                            title={mutationBlocked ? "Switching profile…" : "Cancel all TP/SL orders for this position"}
+                            className="mr-2 text-[#f0b90b] hover:text-(--app-text) disabled:cursor-not-allowed disabled:opacity-40"
+                            onClick={() => {
+                              if (window.confirm(`Remove all TP/SL protection for ${formatTicker(p.symbol)}?`)) {
+                                void dispatchRemoveProtection(p.symbol);
+                              }
+                            }}
+                          >
+                            Remove TP/SL
+                          </button>
+                        )}
                         <button
                           type="button"
                           disabled={mutationBlocked}

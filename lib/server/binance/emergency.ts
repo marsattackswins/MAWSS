@@ -7,6 +7,7 @@ import {
   type PersistenceProfile,
 } from "../profile/context";
 import { findByClientOrderId, updateIntent } from "./intents";
+import { deleteProtectionIntent } from "./protection";
 import type { BinanceOrder } from "./types";
 import type { OrderResult } from "./orders";
 
@@ -124,6 +125,7 @@ async function cancelOpenOrders(
           updateIntent(order.clientOrderId, { status: "CANCELED", exchangeOrderId: order.orderId, lastState: JSON.stringify({ source: "emergency_flatten" }) }, Date.now(), profile);
         }
       }
+      deleteProtectionIntent(symbol, profile);
       audit("operator", "emergency.orders.cancelled", { accountId, triggeredBy, symbol, count: canceled.length });
     } catch (err) {
       failures.push({ action: "cancel_orders", symbol, error: String(err) });
@@ -146,6 +148,7 @@ async function closeOpenPositions(
     try {
       const result = await deps.closePosition(position.symbol, position.positionAmt);
       closedPositions.push({ symbol: position.symbol, result });
+      if (result.ok) deleteProtectionIntent(position.symbol, profile);
       if (!result.ok && result.status !== "NO_POSITION") {
         failures.push({ action: "close_position", symbol: position.symbol, error: result.error ?? "close rejected" });
       }

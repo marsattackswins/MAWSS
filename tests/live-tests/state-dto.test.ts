@@ -12,7 +12,7 @@ import {
   resetLiveStateForTests,
 } from "@/lib/server/binance/state";
 import { accountDto, fillsDto, ordersDto, positionsDto } from "@/lib/server/binance/dto";
-import { saveProtectionIntent, setProtectionStatus } from "@/lib/server/binance/protection";
+import { getProtectionIntent, saveProtectionIntent, setProtectionStatus } from "@/lib/server/binance/protection";
 import type { AccountUpdateEvent, OrderTradeUpdateEvent } from "@/lib/server/binance/types";
 import { accountFixture, freshEnv, makeCfg, orderEvent, orderFixture } from "./helpers";
 import type { BinanceOrder } from "@/lib/server/binance/types";
@@ -83,6 +83,29 @@ describe("order event application and partial fills", () => {
 
     applyAccountEvent({ ...ev, a: { B: ev.a.B, P: [{ ...ev.a.P[0], pa: "-0.005" }] } });
     expect(liveState().positions.get("BTCUSDT")).toMatchObject({ side: "short", qty: "0.005" });
+  });
+
+  test("ACCOUNT_UPDATE flat and side flip delete the symbol protection intent immediately", () => {
+    const event = (positionAmt: string): AccountUpdateEvent => ({
+      e: "ACCOUNT_UPDATE",
+      E: Date.now(),
+      T: Date.now(),
+      a: {
+        B: [],
+        P: [{ s: "BTCUSDT", pa: positionAmt, ep: "50000", cr: "0", up: "0", mt: "cross", iw: "0", ps: "BOTH" }],
+      },
+    });
+
+    applyAccountEvent(event("0.002"));
+    saveProtectionIntent({ symbol: "BTCUSDT", side: "long", tpPrice: "52000", slPrice: "48000" });
+    applyAccountEvent(event("0"));
+    expect(getProtectionIntent("BTCUSDT")).toBeNull();
+
+    applyAccountEvent(event("0.002"));
+    saveProtectionIntent({ symbol: "BTCUSDT", side: "long", tpPrice: "52000", slPrice: "48000" });
+    applyAccountEvent(event("-0.003"));
+    expect(liveState().positions.get("BTCUSDT")?.side).toBe("short");
+    expect(getProtectionIntent("BTCUSDT")).toBeNull();
   });
 
   test("applySymbolLeverage seeds new positions and repairs the 1x placeholder", () => {

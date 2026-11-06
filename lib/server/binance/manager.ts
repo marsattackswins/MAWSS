@@ -139,8 +139,8 @@ export class BinanceLiveManager {
       getConstraints: (symbol) => this.metadata.getConstraints(symbol),
       getReferencePrice: (symbol) => this.getReferencePrice(symbol),
       getMarkPrice: async (symbol) => {
-        const ticker = await this.rest.getTickerPrice(symbol);
-        return { price: ticker.price, at: Date.now() };
+        const mark = await this.rest.getMarkPrice(symbol);
+        return { price: mark.markPrice, at: mark.time ?? Date.now() };
       },
       getRiskSnapshot: () => this.getRiskSnapshot(),
       freeze: (reason) => this.freeze(reason),

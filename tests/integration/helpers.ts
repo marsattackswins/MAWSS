@@ -103,6 +103,7 @@ export function loadTestnetConfig(): EnvConfig {
     markPriceIntervalMs: 15_000,
     leaseTtlMs: 60_000,
     snapshotMaxAgeMs: 5 * 60_000,
+    protectionPendingMaxAgeMs: 2 * 60_000,
     alertWebhookUrl: null,
     risk: {
       maxOrderNotionalUsd: 500, // testnet limits

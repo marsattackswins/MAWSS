@@ -208,5 +208,23 @@ export async function dispatchProtect(
   }
 }
 
+export async function dispatchRemoveProtection(symbol: string): Promise<{ ok: boolean; error?: string }> {
+  if (!isLiveBrokerConnected()) {
+    notifyError("Connect to a Binance profile to remove TP/SL");
+    return { ok: false, error: "not_connected" };
+  }
+  try {
+    const res = await liveApi.removeProtection(symbol);
+    if (!res.ok) {
+      notifyError(res.error ?? "Could not remove protective orders");
+      return { ok: false, error: res.error };
+    }
+    return { ok: true };
+  } catch (err) {
+    notifyError(describe(err));
+    return { ok: false, error: describe(err) };
+  }
+}
+
 // Re-export clampCloseFraction for callers that import it transitively.
 export { clampCloseFraction };

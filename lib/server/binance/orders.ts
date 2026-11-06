@@ -40,8 +40,12 @@ import { trackOrderCanceled, trackOrderRejected, trackOrderSubmitted, trackOrder
 import { normalMutationBlock } from "../profile/admission";
 import { alert } from "../alerts/dispatch";
 import {
+  confirmProtectionIntent,
+  deleteProtectionIntent,
   getProtectionIntent,
-  saveProtectionIntent,
+  markProtectionRestoreAttempted,
+  revertProtectionIntent,
+  savePendingProtectionIntent,
   setProtectionStatus,
   type ProtectionIntent,
 } from "./protection";
@@ -81,6 +85,12 @@ export interface ReferencePrice {
 
 /** Fail closed: refuse submissions when the best available quote is older than this. */
 export const STALE_REFERENCE_MS = 30_000;
+export const PROTECTION_MARK_MAX_AGE_MS = 10_000;
+
+type ProtectionReplaceResult = OrderResult & {
+  rollbackRestored?: boolean;
+  rollbackInvalid?: boolean;
+};
 
 /**
  * Binance testnet occasionally rejects fully valid reduce-only closes with
@@ -158,6 +168,54 @@ export class OrderService {
 
   private sleep(ms: number): Promise<void> {
     return (this.deps.sleep ?? defaultSleep)(ms);
+  }
+
+  private async getFreshProtectionMark(symbol: string): Promise<ReferencePrice> {
+    let reference: ReferencePrice | null = null;
+    try {
+      reference = this.deps.getMarkPrice
+        ? await this.deps.getMarkPrice(symbol)
+        : await this.deps.getReferencePrice(symbol);
+    } catch {
+      // Fall through to an uncached REST mark-price request.
+    }
+    if (
+      reference &&
+      Number.isFinite(Number(reference.price)) &&
+      Number(reference.price) > 0 &&
+      Date.now() - reference.at <= PROTECTION_MARK_MAX_AGE_MS
+    ) {
+      return reference;
+    }
+
+    const mark = await this.deps.rest.getMarkPrice(symbol);
+    return { price: mark.markPrice, at: mark.time ?? Date.now() };
+  }
+
+  private protectionPriceError(
+    side: "long" | "short",
+    type: "TAKE_PROFIT_MARKET" | "STOP_MARKET",
+    price: string,
+    reference: ReferencePrice,
+  ): string | null {
+    try {
+      const trigger = parseDec(price);
+      const mark = parseDec(reference.price);
+      if (isNegative(trigger) || isZero(trigger)) return "Trigger price must be greater than zero";
+      if (eq(trigger, mark)) return `Trigger is immediately-triggering at mark ${reference.price}`;
+      const isTakeProfit = type === "TAKE_PROFIT_MARKET";
+      const beyond = isTakeProfit
+        ? (side === "long" ? gt(trigger, mark) : lt(trigger, mark))
+        : (side === "long" ? lt(trigger, mark) : gt(trigger, mark));
+      if (beyond) return null;
+      const label = type === "TAKE_PROFIT_MARKET" ? "TP" : "SL";
+      const direction = isTakeProfit
+        ? (side === "long" ? "above" : "below")
+        : (side === "long" ? "below" : "above");
+      return `${side === "long" ? "Long" : "Short"} ${label} must be strictly ${direction} the current mark ${reference.price}`;
+    } catch {
+      return "Trigger price must be a positive decimal";
+    }
   }
 
   private findIntent(clientOrderId: string) {
@@ -526,7 +584,7 @@ export class OrderService {
       const amount = parseDec(row.positionAmt);
       const short = isNegative(amount);
       const qty = short ? toStr({ units: -amount.units, scale: amount.scale }) : toStr(amount);
-      return submitCloseWithReduceOnlyFallback(
+      const result = await submitCloseWithReduceOnlyFallback(
         (reduceOnly) =>
           this.submitOrderSerialized({
             symbol,
@@ -553,6 +611,8 @@ export class OrderService {
           );
         },
       );
+      if (result.ok) deleteProtectionIntent(symbol, this.persistenceProfile);
+      return result;
     });
   }
 
@@ -575,7 +635,7 @@ export class OrderService {
     const qty = short ? toStr({ units: -amount.units, scale: amount.scale }) : toStr(amount);
     // A normal UI close is still a live order submission. Only the explicit
     // emergency-flatten path may bypass the execution gates.
-    return submitCloseWithReduceOnlyFallback(
+    const result = await submitCloseWithReduceOnlyFallback(
       (reduceOnly) =>
         this.submitOrder({
           symbol,
@@ -601,6 +661,8 @@ export class OrderService {
         );
       },
     );
+    if (result.ok) deleteProtectionIntent(symbol, this.persistenceProfile);
+    return result;
   }
 
   /**
@@ -619,6 +681,28 @@ export class OrderService {
       tpPrice: intent.tpPrice ?? undefined,
       slPrice: intent.slPrice ?? undefined,
     }, false);
+  }
+
+  async removeProtection(symbol: string): Promise<{ ok: boolean; error?: string }> {
+    return withRiskMutation(() => this.removeProtectionSerialized(symbol));
+  }
+
+  private async removeProtectionSerialized(symbol: string): Promise<{ ok: boolean; error?: string }> {
+    const openOrders = await this.deps.rest.getOpenOrders(symbol);
+    for (const type of ["TAKE_PROFIT_MARKET", "STOP_MARKET"] as const) {
+      for (const side of ["BUY", "SELL"] as const) {
+        const cancelError = await this.cancelProtectiveOrders(
+          symbol,
+          type,
+          side,
+          openOrders.filter((order) => this.isProtectiveOrder(order, type, side)),
+        );
+        if (cancelError) return { ok: false, error: `Could not remove ${type} protection: ${cancelError}` };
+      }
+    }
+    deleteProtectionIntent(symbol, this.persistenceProfile);
+    this.deps.emit("account-update", { at: Date.now(), protection: symbol, status: null });
+    return { ok: true };
   }
 
   private async protectPositionSerialized(
@@ -666,15 +750,25 @@ export class OrderService {
       }
     }
 
-    const reference = await (this.deps.getMarkPrice?.(input.symbol) ?? this.deps.getReferencePrice(input.symbol));
-    if (!reference || !Number.isFinite(Number(reference.price)) || Number(reference.price) <= 0) {
+    let reference: ReferencePrice;
+    try {
+      reference = await this.getFreshProtectionMark(input.symbol);
+    } catch (err) {
+      if (err instanceof CircuitBreakerOpenError) throw err;
+      const result = failed(`Unable to fetch a fresh mark price for ${input.symbol}: ${String(err)}`);
+      return {
+        ...(input.tpPrice ? { tp: result } : {}),
+        ...(input.slPrice ? { sl: result } : {}),
+      };
+    }
+    if (!Number.isFinite(Number(reference.price)) || Number(reference.price) <= 0) {
       const result = failed(`No current mark price available for ${input.symbol}`);
       return {
         ...(input.tpPrice ? { tp: result } : {}),
         ...(input.slPrice ? { sl: result } : {}),
       };
     }
-    if (Date.now() - reference.at > STALE_REFERENCE_MS) {
+    if (Date.now() - reference.at > PROTECTION_MARK_MAX_AGE_MS) {
       const result = failed(`Current mark price for ${input.symbol} is stale`);
       return {
         ...(input.tpPrice ? { tp: result } : {}),
@@ -683,49 +777,18 @@ export class OrderService {
     }
 
     const directionErrors: { tp?: string; sl?: string } = {};
-    const validTrigger = (price: string | undefined, kind: "TP" | "SL"): boolean => {
-      if (price == null) return true;
-      try {
-        const parsed = parseDec(price);
-        if (isNegative(parsed) || isZero(parsed)) {
-          directionErrors[kind === "TP" ? "tp" : "sl"] = `${kind} price must be greater than zero`;
-          return false;
-        }
-        const markPrice = parseDec(reference.price);
-        const favorable = kind === "TP"
-          ? (pos.side === "long" ? gt(parsed, markPrice) : lt(parsed, markPrice))
-          : (pos.side === "long" ? lt(parsed, markPrice) : gt(parsed, markPrice));
-        if (!favorable) {
-          directionErrors[kind === "TP" ? "tp" : "sl"] =
-            `${pos.side === "long" ? "Long" : "Short"} ${kind} must be ${kind === "TP" ? "beyond" : "before"} mark price ${reference.price}; immediately-triggering prices are not allowed`;
-          return false;
-        }
-        return true;
-      } catch {
-        directionErrors[kind === "TP" ? "tp" : "sl"] = `${kind} price must be a positive decimal`;
-        return false;
-      }
-    };
-    validTrigger(input.tpPrice, "TP");
-    validTrigger(input.slPrice, "SL");
+    if (input.tpPrice) directionErrors.tp = this.protectionPriceError(pos.side, "TAKE_PROFIT_MARKET", input.tpPrice, reference) ?? undefined;
+    if (input.slPrice) directionErrors.sl = this.protectionPriceError(pos.side, "STOP_MARKET", input.slPrice, reference) ?? undefined;
     if (directionErrors.tp || directionErrors.sl) {
       return {
-        ...(input.tpPrice ? { tp: failed(directionErrors.tp!) } : {}),
-        ...(input.slPrice ? { sl: failed(directionErrors.sl!) } : {}),
+        ...(input.tpPrice ? { tp: directionErrors.tp ? failed(directionErrors.tp) : undefined } : {}),
+        ...(input.slPrice ? { sl: directionErrors.sl ? failed(directionErrors.sl) : undefined } : {}),
       };
     }
 
     const currentIntent = getProtectionIntent(input.symbol, this.persistenceProfile);
     let intendedTp = input.tpPrice ?? currentIntent?.tpPrice ?? null;
     let intendedSl = input.slPrice ?? currentIntent?.slPrice ?? null;
-    if (persistIntent) {
-      saveProtectionIntent({
-        symbol: input.symbol,
-        side: pos.side,
-        tpPrice: intendedTp,
-        slPrice: intendedSl,
-      }, Date.now(), this.persistenceProfile);
-    }
 
     let openOrders: BinanceOrder[];
     try {
@@ -747,22 +810,30 @@ export class OrderService {
     const existingSl = openOrders.find((order) => this.isProtectiveOrder(order, "STOP_MARKET", closeSide));
     intendedTp = input.tpPrice ?? existingTp?.stopPrice ?? currentIntent?.tpPrice ?? null;
     intendedSl = input.slPrice ?? existingSl?.stopPrice ?? currentIntent?.slPrice ?? null;
+    const previousTp = persistIntent
+      ? existingTp?.stopPrice ?? currentIntent?.tpPrice ?? null
+      : currentIntent?.previousTpPrice ?? existingTp?.stopPrice ?? null;
+    const previousSl = persistIntent
+      ? existingSl?.stopPrice ?? currentIntent?.slPrice ?? null
+      : currentIntent?.previousSlPrice ?? existingSl?.stopPrice ?? null;
 
-    if (persistIntent && (intendedTp !== currentIntent?.tpPrice || intendedSl !== currentIntent?.slPrice)) {
-      saveProtectionIntent({
+    if (persistIntent) {
+      savePendingProtectionIntent({
         symbol: input.symbol,
         side: pos.side,
         tpPrice: intendedTp,
         slPrice: intendedSl,
+        previousTpPrice: previousTp,
+        previousSlPrice: previousSl,
       }, Date.now(), this.persistenceProfile);
     }
 
     try {
       if (input.tpPrice) {
-        out.tp = await this.replaceProtectionOrder(input.symbol, closeSide, "TAKE_PROFIT_MARKET", input.tpPrice);
+        out.tp = await this.replaceProtectionOrder(input.symbol, closeSide, "TAKE_PROFIT_MARKET", input.tpPrice, previousTp ?? undefined);
       }
       if (input.slPrice) {
-        out.sl = await this.replaceProtectionOrder(input.symbol, closeSide, "STOP_MARKET", input.slPrice);
+        out.sl = await this.replaceProtectionOrder(input.symbol, closeSide, "STOP_MARKET", input.slPrice, previousSl ?? undefined);
       }
 
       let finalOrders: BinanceOrder[];
@@ -780,11 +851,50 @@ export class OrderService {
       const tpConfirmed = !intendedTp || !!this.findProtectiveOrder(finalOrders, "TAKE_PROFIT_MARKET", closeSide, intendedTp);
       const slConfirmed = !intendedSl || !!this.findProtectiveOrder(finalOrders, "STOP_MARKET", closeSide, intendedSl);
       if (tpConfirmed && slConfirmed) {
-        setProtectionStatus(input.symbol, "PROTECTED", null, this.persistenceProfile);
+        confirmProtectionIntent({
+          symbol: input.symbol,
+          side: pos.side,
+          tpPrice: intendedTp,
+          slPrice: intendedSl,
+        }, Date.now(), this.persistenceProfile);
         this.deps.emit("account-update", { at: Date.now(), protection: input.symbol });
       } else {
         const error = "Exchange open orders do not match the recorded TP/SL intent";
-        this.markProtectionUnprotected(input.symbol, error);
+        const previousConfirmed =
+          (!previousTp || !!this.findProtectiveOrder(finalOrders, "TAKE_PROFIT_MARKET", closeSide, previousTp)) &&
+          (!previousSl || !!this.findProtectiveOrder(finalOrders, "STOP_MARKET", closeSide, previousSl));
+        const rollbackInvalid = [out.tp, out.sl].some(
+          (result) => (result as ProtectionReplaceResult | undefined)?.rollbackInvalid,
+        );
+        if (rollbackInvalid) {
+          const invalidOrder = [out.tp, out.sl].find(
+            (result) => (result as ProtectionReplaceResult | undefined)?.rollbackInvalid,
+          ) as ProtectionReplaceResult | undefined;
+          markProtectionRestoreAttempted(input.symbol, Date.now(), this.persistenceProfile);
+          this.markProtectionUnprotected(input.symbol, invalidOrder?.error ?? error);
+          audit("operator", "position.protection.market_passed_old_trigger", {
+            symbol: input.symbol,
+            side: pos.side,
+            severity: "high",
+            error: invalidOrder?.error,
+          }, undefined, this.persistenceProfile);
+          alert(`position_protection_market_passed_old_trigger:${input.symbol}`, {
+            symbol: input.symbol,
+            side: pos.side,
+            severity: "high",
+            error: invalidOrder?.error,
+          });
+        } else if (previousConfirmed && (previousTp || previousSl)) {
+          revertProtectionIntent({
+            symbol: input.symbol,
+            side: pos.side,
+            previousTpPrice: previousTp,
+            previousSlPrice: previousSl,
+          }, Date.now(), this.persistenceProfile);
+        } else {
+          markProtectionRestoreAttempted(input.symbol, Date.now(), this.persistenceProfile);
+          this.markProtectionUnprotected(input.symbol, error);
+        }
         if (input.tpPrice && out.tp?.ok !== false) out.tp = failed(error);
         if (input.slPrice && out.sl?.ok !== false) out.sl = failed(error);
       }
@@ -867,8 +977,14 @@ export class OrderService {
     side: "BUY" | "SELL",
     type: "TAKE_PROFIT_MARKET" | "STOP_MARKET",
     price: string,
-  ): Promise<OrderResult> {
-    const failed = (error: string): OrderResult => ({ ok: false, clientOrderId: "", error });
+    previousPrice?: string,
+  ): Promise<ProtectionReplaceResult> {
+    const failed = (error: string, extra: Partial<ProtectionReplaceResult> = {}): ProtectionReplaceResult => ({
+      ok: false,
+      clientOrderId: "",
+      error,
+      ...extra,
+    });
     const current = await this.deps.rest.getOpenOrders(symbol);
     const alreadyPresent = this.findProtectiveOrder(current, type, side, price);
     if (alreadyPresent) return this.protectiveOrderResult(alreadyPresent);
@@ -899,9 +1015,12 @@ export class OrderService {
     if (reconciled.order) return this.protectiveOrderResult(reconciled.order);
     if (!reconciled.absent) return failed(`Protective ${type} submission outcome remains uncertain; retry was not attempted`);
 
-    const previousPrice = previous[0]?.stopPrice;
     let rollbackConfirmed: BinanceOrder | undefined;
     if (previousPrice) {
+      const rollbackError = await this.validateRollbackPrice(symbol, type, previousPrice);
+      if (rollbackError) {
+        return failed(rollbackError, { rollbackInvalid: true });
+      }
       const rollback = await submit(previousPrice);
       const rollbackResult = await this.reconcileProtectionPlacement(symbol, type, side, previousPrice, rollback.clientOrderId).catch((err) => {
         if (err instanceof CircuitBreakerOpenError) throw err;
@@ -925,6 +1044,10 @@ export class OrderService {
     );
     if (retryCancelError) {
       if (previousPrice && !rollbackConfirmed) {
+        const rollbackError = await this.validateRollbackPrice(symbol, type, previousPrice);
+        if (rollbackError) {
+          return failed(rollbackError, { rollbackInvalid: true });
+        }
         const finalRollback = await submit(previousPrice);
         const rollbackResult = await this.reconcileProtectionPlacement(symbol, type, side, previousPrice, finalRollback.clientOrderId).catch((err) => {
           if (err instanceof CircuitBreakerOpenError) throw err;
@@ -932,7 +1055,7 @@ export class OrderService {
         });
         rollbackConfirmed = rollbackResult?.order ?? undefined;
       }
-      return failed(`Protective ${type} retry blocked: ${retryCancelError}`);
+      return failed(`Protective ${type} retry blocked: ${retryCancelError}`, { rollbackRestored: !!rollbackConfirmed });
     }
 
     const retry = await submit(price);
@@ -947,6 +1070,10 @@ export class OrderService {
     if (!reconciled.absent) return failed(`Protective ${type} retry outcome remains uncertain; no further order was sent`);
 
     if (previousPrice) {
+      const rollbackError = await this.validateRollbackPrice(symbol, type, previousPrice);
+      if (rollbackError) {
+        return failed(rollbackError, { rollbackInvalid: true });
+      }
       const restore = await submit(previousPrice);
       const rollbackResult = await this.reconcileProtectionPlacement(symbol, type, side, previousPrice, restore.clientOrderId).catch((err) => {
         if (err instanceof CircuitBreakerOpenError) throw err;
@@ -955,7 +1082,31 @@ export class OrderService {
       rollbackConfirmed = rollbackResult?.order ?? undefined;
     }
     const suffix = rollbackConfirmed ? "; previous protection restored" : "; previous protection could not be restored";
-    return failed(`Could not confirm new ${type} protection${suffix}`);
+    return failed(`Could not confirm new ${type} protection${suffix}`, { rollbackRestored: !!rollbackConfirmed });
+  }
+
+  private async validateRollbackPrice(
+    symbol: string,
+    type: "TAKE_PROFIT_MARKET" | "STOP_MARKET",
+    price: string,
+  ): Promise<string | null> {
+    let mark: ReferencePrice;
+    try {
+      mark = await this.getFreshProtectionMark(symbol);
+    } catch (err) {
+      return `Cannot safely restore the previous ${type} order without a fresh mark: ${String(err)}`;
+    }
+    if (Date.now() - mark.at > PROTECTION_MARK_MAX_AGE_MS) {
+      return `Cannot safely restore the previous ${type} order because the mark is stale`;
+    }
+    const side = liveState().positions.get(symbol)?.side;
+    if (!side) return `Cannot safely restore the previous ${type} order without an open position`;
+    const error = this.protectionPriceError(side, type, price, mark);
+    if (!error) return null;
+    if (type === "STOP_MARKET") {
+      return `Market passed the old stop level ${price}; ${error}`;
+    }
+    return `Previous take-profit ${price} is no longer valid at mark ${mark.price}; ${error}`;
   }
 
   private isProtectiveOrder(

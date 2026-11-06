@@ -107,6 +107,11 @@ node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"
 
 ### Tuning Variables
 
+#### MAWS_PROTECTION_PENDING_MAX_AGE_MS
+**Description**: Maximum age of an interrupted protective-order replacement eligible for automatic recovery
+**Default**: `120000` (2 minutes)
+**Purpose**: Reconciliation restores only recent `PENDING_REPLACE` protection intents. Older pending intents are left unprotected and alerted; they are never automatically restored.
+
 #### MAWS_RECV_WINDOW_MS
 **Description**: Binance API receive window
 **Default**: `5000`

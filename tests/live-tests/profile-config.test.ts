@@ -22,6 +22,11 @@ function env(values: Record<string, string> = {}): NodeJS.ProcessEnv {
 }
 
 describe("server profile configuration", () => {
+  test("protection recovery age defaults to two minutes and is configurable", () => {
+    expect(loadEnvConfig(env({})).protectionPendingMaxAgeMs).toBe(120_000);
+    expect(loadEnvConfig(env({ MAWS_PROTECTION_PENDING_MAX_AGE_MS: "45000" })).protectionPendingMaxAgeMs).toBe(45_000);
+  });
+
   test("parses separate testnet and production credentials", () => {
     const cfg = loadEnvConfig(env({
       MAWS_ENV: "testnet",

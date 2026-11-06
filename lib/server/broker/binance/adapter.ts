@@ -183,6 +183,18 @@ export class BinanceAdapter implements IBroker {
     }
   }
 
+  async removeProtection(symbol: string): Promise<{ ok: boolean; error?: string }> {
+    try {
+      return await this.manager.orders.removeProtection(symbol);
+    } catch (err) {
+      if (err instanceof CircuitBreakerOpenError) throw err;
+      if (err instanceof BinanceApiError) {
+        throw new BrokerOrderError("binance", err.code, err.exchangeMsg, err);
+      }
+      throw new BrokerError("Failed to remove protective orders", "binance", err);
+    }
+  }
+
   // ============================================================================
   // Positions & Account
   // ============================================================================

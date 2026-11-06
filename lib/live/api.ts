@@ -113,6 +113,9 @@ export const liveApi = {
   protect(input: { symbol: string; tpPrice?: string; slPrice?: string }): Promise<{ tp?: OrderActionResult; sl?: OrderActionResult }> {
     return call("/api/live/protect", { method: "POST", body: input });
   },
+  removeProtection(symbol: string): Promise<{ ok: boolean; error?: string }> {
+    return call("/api/live/protect/remove", { method: "POST", body: { symbol } });
+  },
   setGates(input: { executionEnabled?: boolean; killSwitch?: boolean }): Promise<{ decision: unknown }> {
     return call("/api/live/gates", { method: "POST", body: input });
   },

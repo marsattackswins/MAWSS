@@ -247,6 +247,19 @@ export const MIGRATIONS: Migration[] = [
       `CREATE INDEX IF NOT EXISTS idx_protection_profile_status ON protection_intents(profile_id, status)`,
     ],
   },
+  {
+    version: 10,
+    name: "M0010 protection intent lifecycle and rollback prices",
+    up: [
+      `ALTER TABLE protection_intents
+         ADD COLUMN intent_status TEXT NOT NULL DEFAULT 'CONFIRMED'
+         CHECK (intent_status IN ('PENDING_REPLACE', 'CONFIRMED'))`,
+      `ALTER TABLE protection_intents ADD COLUMN previous_tp_price TEXT`,
+      `ALTER TABLE protection_intents ADD COLUMN previous_sl_price TEXT`,
+      `ALTER TABLE protection_intents ADD COLUMN created_at INTEGER NOT NULL DEFAULT 0`,
+      `UPDATE protection_intents SET created_at = updated_at WHERE created_at = 0`,
+    ],
+  },
 ];
 
 const PROFILE_CHECK =

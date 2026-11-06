@@ -32,6 +32,7 @@ export interface IBroker {
   emergencyClosePosition(symbol: string): Promise<OrderResult>;
   emergencyFlatten(triggeredBy: string): Promise<EmergencyFlattenSummary>;
   protectPosition(params: ProtectPositionParams): Promise<ProtectPositionResult>;
+  removeProtection(symbol: string): Promise<{ ok: boolean; error?: string }>;
 
   // Positions & Account
   getPositions(): Promise<Position[]>;
