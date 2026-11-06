@@ -3,7 +3,6 @@ import { MAWS_WORKSPACE_KEY } from "@/lib/maws/brand";
 import { normalizeAppSettings } from "@/lib/app-theme";
 import {
   DEFAULT_LAYOUT_SYNC,
-  DEFAULT_PAPER_ACCOUNT,
   DEFAULT_SYMBOL_TRADING,
 } from "@/types";
 
@@ -11,13 +10,13 @@ import {
  * Automated persistence-compatibility guard for the single workspace key
  * (maws.workspace.v6). Replaces "diff the persisted schema by eye":
  *
- *   1. partialize output must contain EXACTLY the approved 52-key set;
+ *   1. partialize output must contain EXACTLY the approved 43-key set;
  *   2. runtime-only fields (feed values, menus, drawing session state) must
  *      never be persisted — hotSymbols included, from the moment it exists;
  *   3. partialize output must be JSON-serializable;
  *   4. hydrating the REAL root store from a representative legacy V6 fixture
  *      must restore the normalized state (renames, merges, migrations);
- *   5. the debounced write path must persist exactly the same 52-key set;
+ *   5. the debounced write path must persist exactly the same 43-key set;
  *
  * The store is imported fresh via jest.isolateModules with a minimal
  * window/localStorage stub (jest env is "node"). zustand's persist hydration
@@ -33,7 +32,6 @@ const EXPECTED_PERSISTED_KEYS = [
   "alerts",
   "appSettings",
   "autoScaleByPane",
-  "balanceHistory",
   "bottomHeight",
   "bottomOpen",
   "bottomTab",
@@ -41,30 +39,22 @@ const EXPECTED_PERSISTED_KEYS = [
   "chartSettings",
   "chartTemplates",
   "columnWidths",
-  "connectedBroker",
   "detailsCollapsed",
   "drawingTool",
   "drawingsHidden",
   "indicatorSettings",
   "indicatorsHidden",
   "indicatorTemplates",
-  "journal",
   "layoutCount",
   "layoutSync",
   "layoutTracks",
   "magnet",
-  "mockBalance",
-  "mockRealized",
   "newsCollapsed",
-  "orderHistory",
-  "orders",
   "orientation",
   "paneStretchFactors",
   "panes",
   "panesVelaState",
-  "paperAccount",
   "performanceCollapsed",
-  "positions",
   "range",
   "rightDock",
   "rightDockOrder",
@@ -81,8 +71,8 @@ const EXPECTED_PERSISTED_KEYS = [
   "watchlistGroups",
   "watchlistHeight",
 ].sort();
-if (EXPECTED_PERSISTED_KEYS.length !== 52) {
-  throw new Error("Approved persisted key set must contain exactly 52 keys");
+if (EXPECTED_PERSISTED_KEYS.length !== 43) {
+  throw new Error("Approved persisted key set must contain exactly 43 keys");
 }
 
 /** Fields that must NEVER be persisted (runtime-only by design). */
@@ -98,6 +88,7 @@ const RUNTIME_ONLY_KEYS = [
   "brokerDialogOpen",
   "indicatorSettingsId",
   "drawingSettingsTarget",
+  "rightPanelOpen", // panel-body fold (arrow + rail icons), session-local by design
   "selectedDrawingId",
   "drawingHistory",
   "drawingHistoryIndex",
@@ -106,6 +97,7 @@ const RUNTIME_ONLY_KEYS = [
   "clipboardPrice",
   "vertCursorLocked",
   "lockedCursorTime",
+  "connectedBroker", // must be confirmed server-side, never trusted from storage
 ];
 
 interface WindowStub {
@@ -181,22 +173,9 @@ const LEGACY_FIXTURE: Record<string, unknown> = {
     MATICUSDT: { ...DEFAULT_SYMBOL_TRADING, leverage: 7 },
     EURUSD: { ...DEFAULT_SYMBOL_TRADING },
   },
-  paperAccount: { leverage: { crypto: 5, forex: 20 } },
   indicatorTemplates: [
     { id: "vol-based", name: "Seeded", studies: [] },
     { id: "custom-1", name: "Mine", studies: [] },
-  ],
-  journal: [
-    {
-      id: "j-close",
-      symbol: "BTCUSDT",
-      side: "long",
-      qty: 2,
-      entry: 100,
-      exit: 110,
-      closedAt: 1700000000000,
-    },
-    { id: "j-note", text: "Manual note", time: 1700000000001 },
   ],
 };
 
@@ -210,7 +189,7 @@ describe("persistence compatibility (maws.workspace.v6)", () => {
     uninstallWindow();
   });
 
-  it("partialize outputs exactly the approved 52-key set", () => {
+  it("partialize outputs exactly the approved 43-key set", () => {
     installWindow();
     const { useAppStore, workspacePartialize } = freshStore();
     const out = workspacePartialize(useAppStore.getState());
@@ -273,25 +252,6 @@ describe("persistence compatibility (maws.workspace.v6)", () => {
     expect(s.bottomTab).toBe("positions");
     expect(s.drawingTool).toBe("cursor");
 
-    // Paper account leverage merge: legacy forex key deleted, crypto kept.
-    expect(s.paperAccount.marginControl).toBe(DEFAULT_PAPER_ACCOUNT.marginControl);
-    expect(s.paperAccount.leverage).toEqual({
-      stocks: DEFAULT_PAPER_ACCOUNT.leverage.stocks,
-      futures: DEFAULT_PAPER_ACCOUNT.leverage.futures,
-      crypto: 5,
-      others: DEFAULT_PAPER_ACCOUNT.leverage.others,
-    });
-
-    // Journal legacy migration to {id, time, text}.
-    expect(s.journal).toEqual([
-      {
-        id: "j-close",
-        time: 1700000000000,
-        text: "Close long for symbol BTCUSDT at price 110 for 2 units",
-      },
-      { id: "j-note", time: 1700000000001, text: "Manual note" },
-    ]);
-
     // Seeded indicator templates filtered; custom template kept.
     expect(s.indicatorTemplates).toHaveLength(1);
     expect(s.indicatorTemplates[0].id).toBe("custom-1");
@@ -306,13 +266,21 @@ describe("persistence compatibility (maws.workspace.v6)", () => {
     expect(s.appSettings).toEqual(
       normalizeAppSettings({ backgroundColor: "#ff0000" }),
     );
-    expect(s.orders).toEqual([]);
-    expect(s.positions).toEqual([]);
-    expect(s.orderHistory).toEqual([]);
-    expect(s.balanceHistory).toEqual([]);
     expect(s.buySellMenu).toBeNull();
-    expect(s.accountSettingsOpen).toBe(false);
     expect(s.brokerDialogOpen).toBe(false);
+
+    // Legacy paper fields are NOT on the store anymore.
+    expect(s).not.toHaveProperty("mockBalance");
+    expect(s).not.toHaveProperty("mockRealized");
+    expect(s).not.toHaveProperty("paperAccount");
+    expect(s).not.toHaveProperty("orders");
+    expect(s).not.toHaveProperty("positions");
+    expect(s).not.toHaveProperty("orderHistory");
+    expect(s).not.toHaveProperty("balanceHistory");
+    expect(s).not.toHaveProperty("journal");
+
+    // connectedBroker is migrated from "mock" to null (disconnected).
+    expect(s.connectedBroker).toBeNull();
   });
 
   it("preserves valid bottomTab / rightDock values and finite split (second fixture)", () => {
@@ -336,7 +304,14 @@ describe("persistence compatibility (maws.workspace.v6)", () => {
     expect(useAppStore.getState().rightDock).toBe("strategy");
   });
 
-  it("debounced write path persists exactly the 52-key set", () => {
+  it("migrates legacy connectedBroker=mock to null (disconnected)", () => {
+    const map = installWindow();
+    seedFixture(map, { connectedBroker: "mock" });
+    const { useAppStore } = freshStore();
+    expect(useAppStore.getState().connectedBroker).toBeNull();
+  });
+
+  it("debounced write path persists exactly the 43-key set", () => {
     jest.useFakeTimers();
     const map = installWindow();
     const { useAppStore } = freshStore();
@@ -356,5 +331,6 @@ describe("persistence compatibility (maws.workspace.v6)", () => {
     expect(parsed.state.bottomOpen).toBe(true);
     expect(parsed.state).not.toHaveProperty("searchOpen");
     expect(parsed.state).not.toHaveProperty("hotSymbols");
+    expect(parsed.state).not.toHaveProperty("connectedBroker");
   });
 });

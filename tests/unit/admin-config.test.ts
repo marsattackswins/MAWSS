@@ -5,20 +5,9 @@ jest.mock("@/lib/server/env/config", () => ({
   serverConfig: () => ({
     env: "testnet",
     brokerType: "binance",
-    defaultProfile: "paper",
+    defaultProfile: "binance-testnet",
     activeProfileId: "binance-testnet",
     profiles: {
-      paper: {
-        profileId: "paper",
-        label: "Paper",
-        environment: "paper",
-        configured: false,
-        executionEnabled: false,
-        apiKey: null,
-        apiSecret: null,
-        restEndpoint: "https://fapi.binance.com",
-        webSocketEndpoint: "wss://fstream.binance.com",
-      },
       "binance-testnet": {
         profileId: "binance-testnet",
         label: "Binance Testnet",
@@ -32,7 +21,7 @@ jest.mock("@/lib/server/env/config", () => ({
       },
       "binance-production": {
         profileId: "binance-production",
-        label: "Binance Production",
+        label: "Binance Live",
         environment: "production",
         configured: false,
         executionEnabled: false,
@@ -81,14 +70,6 @@ jest.mock("@/lib/server/env/config", () => ({
   }),
   safeProfileMetadata: () => [
     {
-      profileId: "paper",
-      label: "Paper",
-      environment: "paper",
-      configured: false,
-      requiresProductionConfirmation: false,
-      executionEnabled: false,
-    },
-    {
       profileId: "binance-testnet",
       label: "Binance Testnet",
       environment: "testnet",
@@ -98,7 +79,7 @@ jest.mock("@/lib/server/env/config", () => ({
     },
     {
       profileId: "binance-production",
-      label: "Binance Production",
+      label: "Binance Live",
       environment: "production",
       configured: false,
       requiresProductionConfirmation: true,
@@ -106,7 +87,7 @@ jest.mock("@/lib/server/env/config", () => ({
     },
   ],
   HOST_MAP: {
-    local: { rest: "", uds: "", label: "local (mock only)" },
+    local: { rest: "", uds: "", label: "local (public data only)" },
     testnet: {
       rest: "https://testnet.binancefuture.com",
       uds: "wss://fstream.binancefuture.com",
@@ -250,7 +231,7 @@ describe("/api/admin/config", () => {
 
       expect(serialized).not.toContain("test-api-key-12345");
       expect(serialized).not.toContain("test-api-secret-67890");
-      expect(data.profileMetadata[2]).toEqual(expect.objectContaining({
+      expect(data.profileMetadata[1]).toEqual(expect.objectContaining({
         profileId: "binance-production",
         requiresProductionConfirmation: true,
       }));

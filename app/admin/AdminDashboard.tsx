@@ -1,8 +1,8 @@
 "use client";
 
-import Link from "next/link";
 import { AlertTriangle, RefreshCw, XCircle } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
+import { MAWS_JOURNAL_URL } from "@/lib/maws/journal";
 import RiskCockpit, { type RiskCockpitSnapshot } from "./RiskCockpit";
 import OperationsConsole, { type PanelErrors } from "./OperationsConsole";
 import AppPowerControl from "./AppPowerControl";
@@ -135,9 +135,15 @@ export default function AdminDashboard() {
               </p>
             </div>
             <div className="flex flex-wrap items-center gap-2">
-              <Link href="/admin/journal" className={ACTION_BUTTON_CLASS}>
+              <a
+                href={MAWS_JOURNAL_URL}
+                target="_blank"
+                rel="noopener noreferrer"
+                className={ACTION_BUTTON_CLASS}
+                title="LuxAlgo Trade Journal — opens at /journal under this origin (start it with npm run journal)"
+              >
                 Trade Journal
-              </Link>
+              </a>
               <AppPowerControl />
               <button
                 type="button"
@@ -238,7 +244,7 @@ function FailureState({ onRetry }: { onRetry: () => void }) {
 function formatEnvironment(env: string | null): string {
   if (env === "local") return "Chart Only";
   if (env === "testnet") return "Binance Testnet";
-  if (env === "production") return "Binance Production";
+  if (env === "production") return "Binance Live";
   return env ?? "Environment unavailable";
 }
 

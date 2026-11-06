@@ -259,6 +259,21 @@ export interface IChartRenderer {
     setNativeData?(type: string, data: unknown): void;
 
     /**
+     * HOST OVERLAY SEAM (local fix, see lib/charting/README.md): the CSS-pixel Y of a
+     * price inside the chart canvas, so host DOM overlays can stay glued to a price
+     * line through pan/zoom/price-scale drags. Null before layout or when the price
+     * pane has no geometry. Optional: a renderer without the seam omits it.
+     */
+    priceToPixelY?(price: number): number | null;
+
+    /**
+     * The inverse of {@link priceToPixelY}: the price under a CSS-pixel Y, for host
+     * drag affordances that resolve a price from where the pointer was released.
+     * Null before layout or outside the price pane. Optional.
+     */
+    pixelYToPrice?(y: number): number | null;
+
+    /**
      * Replace the timeline marks + their group definitions (the `chart.marks` model). The
      * renderer snaps each mark onto its bar, folds same-bar/same-group marks into clusters, and
      * paints the lane above the time axis; group visibility is its own display state (the

@@ -88,7 +88,7 @@ afterEach(() => {
 });
 
 describe("profile coordinator", () => {
-  test("starts local Chart Only without a manager and switches to Testnet then Paper", async () => {
+  test("starts local Chart Only without a manager and switches to Testnet then detaches", async () => {
     const cfg = makeCfg({
       env: "local",
       activeProfileId: null,
@@ -118,10 +118,7 @@ describe("profile coordinator", () => {
       ready: true,
     });
 
-    await expect(profileCoordinator().switchProfile({
-      profileId: "paper",
-      requestId: "local-paper-switch",
-    })).resolves.toMatchObject({
+    await expect(profileCoordinator().detach()).resolves.toMatchObject({
       profileId: null,
       environment: null,
       phase: "idle",
@@ -190,7 +187,7 @@ describe("profile coordinator", () => {
     await startCoordinator();
     positionPresent = true;
     const beforeCalls = http.calls.length;
-    const first = profileCoordinator().switchProfile({ profileId: "paper", requestId: "operator-switch-2" });
+    const first = profileCoordinator().detach();
     await expect(profileCoordinator().switchProfile({ profileId: "binance-production", confirmProduction: true })).rejects.toMatchObject({ code: "profile_switch_in_progress" });
     await expect(first).rejects.toMatchObject({ code: "exposure_present" });
     expect(profileRuntimeStatus().profileId).toBe("binance-testnet");

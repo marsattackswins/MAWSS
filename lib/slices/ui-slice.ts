@@ -21,7 +21,11 @@ export type BottomTab =
   | "orders"
   | "orderHistory"
   | "balanceHistory"
+  | "performance"
   | "journal";
+
+/** The three fold-out blocks of the symbol card, addressed by the dock. */
+export type SymbolPanelBlock = "news" | "sessions" | "technicals";
 
 /** The right-rail entries, in their default order (drag to rearrange). */
 export const RIGHT_DOCK_IDS: DockId[] = [
@@ -92,7 +96,12 @@ export function sameDockOrder(a: readonly DockId[], b: readonly DockId[]): boole
 
 export type UiSliceState = {
   shortcuts: ShortcutMap;
+  /** Whole-side switch kept for persisted documents and API compat — the shell
+   *  never folds the rail itself, so this only ever governs the initial body state. */
   rightOpen: boolean;
+  /** The panel body beside the rail is showing. BOTH the top-bar arrow and a
+   *  rail icon fold this — session-local, never persisted. */
+  rightPanelOpen: boolean;
   bottomOpen: boolean;
   bottomTab: BottomTab;
   rightDock: DockId;
@@ -106,6 +115,15 @@ export type UiSliceState = {
   settingsOpen: boolean;
   brokerDialogOpen: boolean;
   accountSettingsOpen: boolean;
+  /** Full-screen overlay hosting the vendored LuxAlgo Trade Journal (/journal). */
+  journalOverlayOpen: boolean;
+  /** Watchlist symbol-detail panel docked to the bottom strip instead of the right rail. */
+  symbolPanelDocked: boolean;
+  /** Which symbol-card blocks are expanded. Store-owned so a dock click can open one
+   *  block and fold the others, and so the states survive a dock/undock round-trip. */
+  symbolPanelNewsOpen: boolean;
+  symbolPanelSessionsOpen: boolean;
+  symbolPanelTechnicalsOpen: boolean;
   buySellMenu: BuySellMenuState;
   contextMenu: ContextMenuState;
   appSettings: AppSettings;
@@ -117,6 +135,7 @@ export type UiSliceActions = {
   setShortcut: (id: ShortcutId, chord: ShortcutChord | null) => void;
   resetShortcuts: () => void;
   setRightOpen: (value: boolean) => void;
+  setRightPanelOpen: (value: boolean) => void;
   setBottomOpen: (value: boolean) => void;
   setBottomTab: (tab: BottomTab) => void;
   setBottomTabCollapsed: (tab: BottomTab) => void;
@@ -131,6 +150,14 @@ export type UiSliceActions = {
   setSettingsOpen: (value: boolean) => void;
   setBrokerDialogOpen: (value: boolean) => void;
   setAccountSettingsOpen: (value: boolean) => void;
+  setJournalOverlayOpen: (value: boolean) => void;
+  setSymbolPanelDocked: (value: boolean) => void;
+  setSymbolPanelBlock: (block: SymbolPanelBlock, open: boolean) => void;
+  toggleSymbolPanelBlock: (block: SymbolPanelBlock) => void;
+  /** Undock and expand just this block, folding the other two (a dock readout click). */
+  focusSymbolPanelBlock: (block: SymbolPanelBlock) => void;
+  /** Undock and leave every block in its current state (the price/logo click). */
+  undockSymbolPanel: () => void;
   setBuySellMenu: (menu: BuySellMenuState) => void;
   setContextMenu: (menu: ContextMenuState) => void;
   closeMenus: () => void;
@@ -151,6 +178,7 @@ export function createUiSlice(set: RootSet, get: RootGet): UiSlice {
   return {
     shortcuts: { ...DEFAULT_SHORTCUTS },
     rightOpen: true,
+    rightPanelOpen: true,
     bottomOpen: false,
     bottomTab: "positions",
     rightDock: "strategy",
@@ -163,6 +191,11 @@ export function createUiSlice(set: RootSet, get: RootGet): UiSlice {
     settingsOpen: false,
     brokerDialogOpen: false,
     accountSettingsOpen: false,
+    journalOverlayOpen: false,
+    symbolPanelDocked: false,
+    symbolPanelNewsOpen: false,
+    symbolPanelSessionsOpen: true,
+    symbolPanelTechnicalsOpen: true,
     buySellMenu: null,
     contextMenu: null,
     appSettings: { ...DEFAULT_APP_SETTINGS },
@@ -172,7 +205,11 @@ export function createUiSlice(set: RootSet, get: RootGet): UiSlice {
     setShortcut: (id, chord) =>
       set({ shortcuts: { ...get().shortcuts, [id]: chord } }),
     resetShortcuts: () => set({ shortcuts: { ...DEFAULT_SHORTCUTS } }),
-    setRightOpen: (value) => set({ rightOpen: value }),
+    // Compat path: on “show”, restore the panel body as well, so old collapsed documents
+    // open with a full right side; on “hide” only the side flag moves — the rail stays.
+    setRightOpen: (value) =>
+      set(value ? { rightOpen: true, rightPanelOpen: true } : { rightOpen: false }),
+    setRightPanelOpen: (value) => set({ rightPanelOpen: value }),
     setBottomOpen: (value) => set({ bottomOpen: value }),
     setBottomTab: (tab) => set({ bottomTab: tab, bottomOpen: true }),
     setBottomTabCollapsed: (tab) => set({ bottomTab: tab, bottomOpen: false }),
@@ -185,6 +222,7 @@ export function createUiSlice(set: RootSet, get: RootGet): UiSlice {
       set({
         rightDock: dock,
         rightOpen: true,
+        rightPanelOpen: true,
       }),
     setRightDockOrder: (order) => set({ rightDockOrder: normalizeDockOrder(order) }),
     setRightWidth: (width) => set({ rightWidth: width }),
@@ -226,6 +264,45 @@ export function createUiSlice(set: RootSet, get: RootGet): UiSlice {
       set({ brokerDialogOpen: value, contextMenu: null }),
     setAccountSettingsOpen: (value) =>
       set({ accountSettingsOpen: value, contextMenu: null }),
+    setJournalOverlayOpen: (value) =>
+      set(value
+        ? {
+            journalOverlayOpen: true,
+            settingsOpen: false,
+            indicatorMenuOpen: false,
+            searchOpen: false,
+            layoutMenuOpen: false,
+            contextMenu: null,
+            buySellMenu: null,
+          }
+        : { journalOverlayOpen: false }),
+    setSymbolPanelDocked: (value) => set({ symbolPanelDocked: value }),
+    setSymbolPanelBlock: (block, open) =>
+      set(
+        block === "news"
+          ? { symbolPanelNewsOpen: open }
+          : block === "sessions"
+            ? { symbolPanelSessionsOpen: open }
+            : { symbolPanelTechnicalsOpen: open },
+      ),
+    toggleSymbolPanelBlock: (block) => {
+      const s = get();
+      const open =
+        block === "news"
+          ? !s.symbolPanelNewsOpen
+          : block === "sessions"
+            ? !s.symbolPanelSessionsOpen
+            : !s.symbolPanelTechnicalsOpen;
+      get().setSymbolPanelBlock(block, open);
+    },
+    focusSymbolPanelBlock: (block) =>
+      set({
+        symbolPanelDocked: false,
+        symbolPanelNewsOpen: block === "news",
+        symbolPanelSessionsOpen: block === "sessions",
+        symbolPanelTechnicalsOpen: block === "technicals",
+      }),
+    undockSymbolPanel: () => set({ symbolPanelDocked: false }),
     setBuySellMenu: (menu) =>
       set({ buySellMenu: menu, contextMenu: menu ? null : get().contextMenu }),
     setContextMenu: (menu) =>
@@ -276,6 +353,9 @@ export function normalizeUiRehydrate(state: Store): void {
   if ((state.rightDock as string) === "news") {
     state.rightDock = "calendar";
   }
+  // The rail never folds anymore: any persisted "whole side hidden" from an older
+  // build is healed so the body/arrow state can't be born inconsistent.
+  state.rightOpen = true;
   state.rightDockOrder = normalizeDockOrder(state.rightDockOrder);
   state.buySellMenu = null;
   state.accountSettingsOpen = false;
@@ -285,6 +365,7 @@ export function normalizeUiRehydrate(state: Store): void {
     state.bottomTab !== "orders" &&
     state.bottomTab !== "orderHistory" &&
     state.bottomTab !== "balanceHistory" &&
+    state.bottomTab !== "performance" &&
     state.bottomTab !== "journal"
   ) {
     state.bottomTab = "positions";

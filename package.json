@@ -17,10 +17,13 @@
     "test:integration": "node -r dotenv/config node_modules/.bin/jest --testPathPattern=tests/integration --runInBand --detectOpenHandles dotenv_config_path=.env.integration",
     "test:integration:verbose": "MAWS_TEST_VERBOSE=true npm run test:integration",
     "test:integration:setup": "node scripts/check-integration-setup.mjs",
+    "journal": "pnpm -C vendor/trade-journal/apps/web exec next start -p 3400",
+    "journal:build": "pnpm -C vendor/trade-journal/apps/web exec next build",
     "smoke:live": "tsx scripts/smoke-live.ts",
     "smoke:live:dry": "tsx scripts/smoke-live.ts --dry-run",
     "secret-scan": "node scripts/secret-scan.mjs",
-    "gen-operator-auth": "node scripts/gen-operator-auth.mjs"
+    "gen-operator-auth": "node scripts/gen-operator-auth.mjs",
+    "clean": "node -e \"require('fs').rmSync('.next',{recursive:true,force:true})\""
   },
   "dependencies": {
     "@luxalgo/vela": "^0.8.3",

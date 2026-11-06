@@ -230,7 +230,7 @@ POST /api/auth/revoke-all
 - Charting and public market-data workflows remain available.
 - Safe profile metadata can be displayed without a session.
 - Attaching Testnet or Production requires `MAWS_OPERATOR_AUTH`, a valid session, CSRF/origin checks, configured profile credentials, and normal readiness gates.
-- Paper Trading remains browser-local and never sends orders to Binance.
+- Local mode is chart-only (disconnected); no orders are sent without a confirmed exchange connection.
 
 The default authentication guard still blocks routes that are not explicitly marked as local-safe; local mode is not a blanket authentication bypass.
 

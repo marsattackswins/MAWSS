@@ -61,7 +61,7 @@ export {
     legendValuesInput,
     legendValuesOn,
 } from './core/native-indicators';
-export { DARK_THEME, LIGHT_THEME, resolveTheme } from './core/theme';
+export { DARK_THEME, LIGHT_THEME, resolveTheme, THEME_INDICATOR_COLORS, type ThemeIndicatorColors, resolveThemeIndicatorColors } from './core/theme';
 export { TypedEventBus } from './core/events/EventBus';
 
 // User drawings (model + registry + persistence; renderer-agnostic)

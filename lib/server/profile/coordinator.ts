@@ -29,7 +29,7 @@ export type ProfilePhase = "idle" | "switching" | "ready" | "degraded" | "detach
 
 export type ProfileRuntimeStatus = {
   profileId: ProfileId | null;
-  environment: "paper" | "testnet" | "production" | null;
+  environment: "testnet" | "production" | null;
   phase: ProfilePhase;
   ready: boolean;
   managerStatus: string;
@@ -76,7 +76,6 @@ function isProfileId(value: unknown): value is ProfileId {
 }
 
 function environmentForProfile(profileId: ProfileId): EnvConfig["env"] {
-  if (profileId === "paper") return "local";
   if (profileId === "binance-testnet") return "testnet";
   return "production";
 }
@@ -94,7 +93,7 @@ function safeEnvironment(config: EnvConfig): ProfileRuntimeStatus["environment"]
 
 function profileConfig(base: EnvConfig, profileId: ProfileId): EnvConfig {
   const profile = base.profiles[profileId];
-  if (profileId !== "paper" && !profile.configured) {
+  if (!profile.configured) {
     throw new ProfileCoordinatorError("configuration_unavailable");
   }
   return {
@@ -304,7 +303,21 @@ export class ProfileCoordinator {
     }
     if (!safeRequestId(request.requestId)) throw new ProfileCoordinatorError("invalid_profile");
     const target = request.profileId;
-    const pending = target === "paper" ? this.detachProfile() : this.performSwitch(target);
+    const pending = this.performSwitch(target);
+    const tracked = pending.finally(() => {
+      if (this.switchPromise === tracked) this.switchPromise = null;
+    });
+    this.switchPromise = tracked;
+    return tracked;
+  }
+
+  /**
+   * Detaches the server from any active live profile and returns to the idle
+   * (disconnected) state. Used by the disconnect endpoint.
+   */
+  async detach(): Promise<ProfileRuntimeStatus> {
+    if (this.switchPromise) throw new ProfileCoordinatorError("profile_switch_in_progress");
+    const pending = this.detachProfile();
     const tracked = pending.finally(() => {
       if (this.switchPromise === tracked) this.switchPromise = null;
     });

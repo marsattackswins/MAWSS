@@ -6,7 +6,7 @@ MAWS is a local multi-chart terminal for market analysis and trading workflows w
 
 ## Overview
 
-MAWS provides a secure, browser-based interface for cryptocurrency futures trading with real-time market data, order management, position tracking, and risk controls. It supports multiple deployment modes from local paper trading to production execution.
+MAWS provides a secure, browser-based interface for cryptocurrency futures trading with real-time market data, order management, position tracking, and risk controls. It supports multiple deployment modes from local chart-only mode to production execution.
 
 ### Key Features
 
@@ -85,7 +85,7 @@ graph TB
 
 MAWS supports four environment modes with progressively stricter requirements:
 
-- **local**: Chart Only startup with no attached trading account or server trading manager; public Binance market data remains available, and Paper, Testnet, and Production can be attached from the UI
+- **local**: Chart Only startup with no attached trading account or server trading manager; public Binance market data remains available, and Testnet and Production can be attached from the UI
 - **testnet**: Binance USD-M Futures Testnet startup context, requiring authentication and Testnet credentials
 - **shadow**: Production market data with read-only account, zero order submissions
 - **production**: Real trading startup context, requiring all risk limits and execution gates enabled
@@ -194,7 +194,7 @@ npm run dev
 ```
 
 - Runs on http://localhost:3000
-- Starts in Chart Only; Paper Trading needs no credentials
+- Starts in Chart Only (disconnected)
 - Testnet or Production can be attached from the Trade screen after server-side setup and operator login
 - SQLite database in `.maws/maws.db`
 
@@ -316,7 +316,7 @@ sudo systemctl stop maws
 Critical environment variables (see `.env.example` for complete list):
 
 - `MAWS_ENV`: Deployment mode (local|testnet|shadow|production)
-- `MAWS_DEFAULT_PROFILE`: Safe profile metadata default (paper unless explicitly set)
+- `MAWS_DEFAULT_PROFILE`: Safe profile metadata default (binance-testnet unless explicitly set)
 - `MAWS_OPERATOR_AUTH`: Operator credential hash
 - `MAWS_BINANCE_TESTNET_API_KEY/SECRET`: Separate testnet credentials
 

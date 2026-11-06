@@ -20,7 +20,6 @@
 
 import {
   MARKET_SESSIONS,
-  clockLabel,
   hourLabel,
   isSessionOpen,
   sessionDayRuns,
@@ -42,8 +41,8 @@ const TIMELINE_TRACK_HEIGHT = 4;
  * is what sets how far the time strip sits below the last session bar: rows end at
  * ROW_TOP + 2*PITCH + ROW_HEIGHT = 62, and the axis starts ~22px lower. */
 const TIMELINE_AXIS_GUTTER = 40;
-/** Row-label gutter — a colour pip plus the longest venue name ("New York"). */
-const TIMELINE_LABEL_WIDTH = 66;
+/** Row-label gutter — a colour pip plus the longest venue name ("New York") at 10px. */
+const TIMELINE_LABEL_WIDTH = 72;
 
 /** One timeline row per venue, plus the hour-label gutter under them. */
 function timelineHeight(rows: number): number {
@@ -61,22 +60,19 @@ type Ink = {
   light: boolean;
   /** Session rail behind the pills. */
   track: string;
-  /** Row label of a session that is trading right now. */
+  /** Name of the venue trading right now — the ink of the "Sessions" header above it. */
   label: string;
-  /** Row labels / axis ticks for the quiet rows. */
+  /** Quiet venue names and axis ticks — the ink of the Technicals fold's row labels. */
   hour: string;
   now: string;
-  /** Chip behind the live clock on the axis. */
-  chip: string;
 };
 
 const DARK_INK: Ink = {
   light: false,
   track: "rgba(255,255,255,0.055)",
-  label: "#e6e8ef",
-  hour: "#6d6d76",
+  label: "#d1d4dc",
+  hour: "#787b86",
   now: "#ffffff",
-  chip: "rgba(255,255,255,0.07)",
 };
 
 const LIGHT_INK: Ink = {
@@ -85,8 +81,13 @@ const LIGHT_INK: Ink = {
   label: "#23262f",
   hour: "#8b8f9a",
   now: "#111318",
-  chip: "rgba(17,19,24,0.055)",
 };
+
+/** A `#rgb` / `#rrggbb` custom property, or null when it is absent or not a plain hex. */
+function themeHex(styles: CSSStyleDeclaration, name: string): string | null {
+  const raw = styles.getPropertyValue(name).trim();
+  return /^#([0-9a-f]{3}|[0-9a-f]{6})$/i.test(raw) ? raw : null;
+}
 
 /** Hex → `rgba()` with an explicit alpha (the canvas has no colour-alpha helper). */
 function withAlpha(hex: string, a: number): string {
@@ -179,13 +180,21 @@ function drawTimeline(
     ctx.fill();
     ctx.globalAlpha = 1;
 
-    ctx.font = `${open ? "600" : "500"} 9px ${FONT}`;
+    // 9px caps deliver far less ink than the 11–12px DOM labels beside them, which reads
+    // as a fainter grey even at an identical colour — so the strip sets 10px bold.
+    ctx.font = `600 10px ${FONT}`;
     tracking(ctx, "0.08em");
     ctx.textAlign = "left";
+    // The live venue takes the header's ink; the rest sit on the muted ink the
+    // Technicals rows use.
     ctx.fillStyle = open ? ink.label : ink.hour;
     ctx.fillText(session.name.toUpperCase(), 11, centre + 3);
 
     for (const [a, b] of sessionDayRuns(session, at)) {
+      // A window that crosses UTC midnight wraps into a right-edge tail; the strip's
+      // left edge IS 12am, so drop the tail and let the bar read continuously from the
+      // left. A genuine full-day run (starts at 0, ends at 1440) is kept.
+      if (b >= 1440 && a > 0) continue;
       const live = minuteOfDay >= a && minuteOfDay < b;
       const runX = x0 + (a / 1440) * trackW;
       const runW = ((b - a) / 1440) * trackW;
@@ -210,13 +219,13 @@ function drawTimeline(
 
   const x = x0 + (minuteOfDay / 1440) * trackW;
   const axisY = h - 7;
-  const label = clockLabel(at);
 
-  // Axis ticks in quiet micro-type; the live chip owns the stretch around "now".
-  ctx.font = `500 9px ${FONT}`;
+  // Axis ticks: the same muted ink and size as the quiet venue names. The now-line
+  // below already marks the moment, so no time chip rides the axis — every hour tick
+  // stays visible.
+  ctx.font = `600 10px ${FONT}`;
   tracking(ctx, "0.04em");
   ctx.fillStyle = ink.hour;
-  const chipW = Math.ceil(ctx.measureText(label).width) + 14;
   const ticks: Array<{ hour: number; align: CanvasTextAlign }> = [
     { hour: 0, align: "left" },
     { hour: 6, align: "center" },
@@ -226,24 +235,12 @@ function drawTimeline(
   ];
   for (const tick of ticks) {
     const tickX = x0 + (tick.hour / 24) * trackW;
-    if (Math.abs(tickX - x) < chipW / 2 + 8) continue;
     ctx.textAlign = tick.align;
     ctx.fillText(hourLabel(tick.hour), tickX, axisY);
   }
-
-  // The live clock rides a soft chip — the one number worth reading off the axis.
-  ctx.font = `600 9px ${FONT}`;
-  tracking(ctx, "0.02em");
-  const chipX = Math.min(w - chipW / 2 - 1, Math.max(x0 + chipW / 2 - 4, x));
-  ctx.fillStyle = ink.chip;
-  pill(ctx, chipX - chipW / 2, axisY - 10.5, chipW, 15, 7.5);
-  ctx.fill();
-  ctx.fillStyle = ink.now;
-  ctx.textAlign = "center";
-  ctx.fillText(label, chipX, axisY - 0.5);
   tracking(ctx, "0px");
 
-  // Now marker: a hairline that fades downward, capped with a single dot.
+  // Now marker: a plain hairline that fades downward — no cap dot at the tip.
   const marker = ctx.createLinearGradient(0, 0, 0, rowsBottom + 4);
   marker.addColorStop(0, withAlpha(ink.now, 0.45));
   marker.addColorStop(1, withAlpha(ink.now, 0.1));
@@ -253,42 +250,53 @@ function drawTimeline(
   ctx.moveTo(x, 1.5);
   ctx.lineTo(x, rowsBottom + 2);
   ctx.stroke();
-  ctx.fillStyle = ink.now;
-  ctx.beginPath();
-  ctx.arc(x, 1.5, 2, 0, Math.PI * 2);
-  ctx.fill();
 }
 
-function countdownText(minutes: number): string {
-  if (minutes < 60) return `Opens in ${minutes}m`;
-  return `Opens in ${Math.floor(minutes / 60)}h ${minutes % 60}m`;
+/** One unit only — `45m` / `12h` / `3d`, never `12h 55m`. */
+function countdownText(minutes: number, label = "Opens"): string {
+  let value: string;
+  if (minutes < 60) value = `${minutes}m`;
+  else if (minutes < 60 * 24) value = `${Math.floor(minutes / 60)}h`;
+  else value = `${Math.floor(minutes / (60 * 24))}d`;
+  return `${label} in ${value}`;
 }
 
-/** Ink follows the shell theme: the card's own background decides light or dark. */
+/** Ink follows the shell theme: the card's own background decides light or dark, and the
+ *  app's text variables carry the same two weights the neighbouring DOM rows use. */
 function inkFor(element: HTMLElement): Ink {
   const styles = getComputedStyle(element);
   const hex = styles.getPropertyValue("--app-elevated").trim();
   const m = /^#([0-9a-fA-F]{6})$/.exec(hex) ?? /^#([0-9a-fA-F]{3})$/.exec(hex);
-  if (!m) return DARK_INK;
-  const raw = m[1]!;
-  const full = raw.length === 3 ? raw.split("").map((c) => c + c).join("") : raw;
-  const r = parseInt(full.slice(0, 2), 16);
-  const g = parseInt(full.slice(2, 4), 16);
-  const b = parseInt(full.slice(4, 6), 16);
-  const luminance = (0.2126 * r + 0.7152 * g + 0.0722 * b) / 255;
-  return luminance > 0.55 ? LIGHT_INK : DARK_INK;
+  const base = (() => {
+    if (!m) return DARK_INK;
+    const raw = m[1]!;
+    const full = raw.length === 3 ? raw.split("").map((c) => c + c).join("") : raw;
+    const r = parseInt(full.slice(0, 2), 16);
+    const g = parseInt(full.slice(2, 4), 16);
+    const b = parseInt(full.slice(4, 6), 16);
+    const luminance = (0.2126 * r + 0.7152 * g + 0.0722 * b) / 255;
+    return luminance > 0.55 ? LIGHT_INK : DARK_INK;
+  })();
+  return {
+    ...base,
+    label: themeHex(styles, "--app-text") ?? base.label,
+    hour: themeHex(styles, "--app-muted") ?? base.hour,
+  };
 }
 
-const BADGE_STYLE: Record<SessionState["badge"], { color: string; background: string; border: string }> = {
-  Open: { color: "#2fbd85", background: "transparent", border: "rgba(47,189,133,.45)" },
-  Overlap: { color: "#0b2019", background: "#2fbd85", border: "#2fbd85" },
-  Closed: { color: "var(--app-muted)", background: "var(--app-hover)", border: "var(--app-border)" },
-};
-
-export function MarketSessions() {
+export function MarketSessions({
+  expanded,
+  onToggle,
+}: {
+  expanded: boolean;
+  onToggle: () => void;
+}) {
   const hostRef = useRef<HTMLDivElement | null>(null);
   const timelineRef = useRef<HTMLCanvasElement | null>(null);
+  const detailRef = useRef<HTMLDivElement | null>(null);
   const [state, setState] = useState<SessionState>(() => sessionState(Date.now()));
+  // Folded = only the Current/Next summary; the label line + 24-hour strip collapse.
+  const [detailHeight, setDetailHeight] = useState<number | null>(null);
 
   useEffect(() => {
     const host = hostRef.current;
@@ -311,7 +319,8 @@ export function MarketSessions() {
 
     resize();
     // The strip is static, so a once-a-second tick is all it needs: the text rows and
-    // the "now" line both move on the minute.
+    // the "now" line both move on the minute. The canvas stays mounted while folded, so
+    // the Current/Next countdowns keep ticking down even with the strip clipped away.
     const textTimer = window.setInterval(() => {
       setState(sessionState(Date.now()));
       ink = inkFor(host);
@@ -330,37 +339,98 @@ export function MarketSessions() {
     };
   }, []);
 
-  const badge = BADGE_STYLE[state.badge];
+  // Natural height of the collapsible detail (label + strip), so folding can animate it.
+  // `detailRef` is the un-clipped content inside the animated window, so its offsetHeight
+  // is the real target even while the window is at 0.
+  useEffect(() => {
+    const el = detailRef.current;
+    if (!el) return;
+    const measure = () => setDetailHeight(el.offsetHeight);
+    measure();
+    const ro = typeof ResizeObserver !== "undefined" ? new ResizeObserver(measure) : null;
+    ro?.observe(el);
+    return () => ro?.disconnect();
+  }, []);
+
   // No countdown means nothing is waiting to open: every session of the clock is live.
   const nextLabel = state.next ? `Next · ${state.next.session.name}` : "All sessions open";
+  // The venue(s) trading right now; the "Closes in" value counts down to whichever shuts first.
+  const currentNames = state.current.map((s) => s.name).join(" · ");
 
   return (
     <div className="px-3 pt-3">
-      {/* Only the label and the live state: the strip names the sessions itself, so the
-          old "London + New York" headline is gone. */}
-      <div className="mb-0.5 flex items-center justify-between gap-2">
-        <div className="text-[13px] font-semibold text-(--app-text)">Sessions</div>
-        <span
-          className="shrink-0 rounded-full border px-2 py-0.5 text-[10px] font-semibold"
-          style={{ color: badge.color, background: badge.background, borderColor: badge.border }}
-        >
-          {state.badge}
-        </span>
-      </div>
       <div
         ref={hostRef}
-        className="rounded-[8px] border border-(--app-border) bg-(--app-elevated) px-3 py-2.5"
+        role="button"
+        tabIndex={0}
+        aria-expanded={expanded}
+        title={expanded ? "Collapse the session timeline" : "Show the session timeline"}
+        onClick={onToggle}
+        onKeyDown={(e) => {
+          if (e.key === "Enter" || e.key === " ") {
+            e.preventDefault();
+            onToggle();
+          }
+        }}
+        className="cursor-pointer rounded-[8px] border border-(--app-border) bg-(--app-elevated) px-3 py-2.5"
       >
-        <canvas ref={timelineRef} className="mt-2 block w-full" aria-hidden="true" />
+        {/* Fixed header — stays put while the strip below it slides, so folding reads
+            as a drawer opening under a label, exactly like the News card. */}
+        <div className="flex items-center justify-between gap-2">
+          <div className="text-[13px] font-semibold text-(--app-text)">Sessions</div>
+          <span className="shrink-0 text-[13px] font-semibold text-(--app-text)">
+            {state.badge}
+          </span>
+        </div>
 
-        <div className="mt-3 flex items-center justify-between gap-2 border-t border-(--app-border) pt-2.5 text-[11px]">
-          <span className="flex min-w-0 items-center gap-1.5 text-(--app-text)">
-            <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-[#a7be94]" />
-            <span className="truncate">{nextLabel}</span>
-          </span>
-          <span className="shrink-0 tabular-nums text-(--app-muted)">
-            {state.next ? countdownText(state.nextInMinutes) : ""}
-          </span>
+        {/* Collapsible drawer window — the 24-hour strip. The un-clipped content keeps
+            its natural height so the slide animates to a fixed pixel value, not `auto`. */}
+        <div
+          className="overflow-hidden transition-[height] duration-200 ease-out"
+          style={{ height: expanded ? detailHeight ?? "auto" : 0 }}
+        >
+          <div ref={detailRef} className="pt-3">
+            <canvas ref={timelineRef} className="block w-full" aria-hidden="true" />
+          </div>
+        </div>
+
+        {/* Summary rows — always visible; this is the card's folded state. */}
+        <div
+          className={
+            expanded
+              ? "mt-3 space-y-1.5 border-t border-(--app-border) pt-2.5 text-[11px]"
+              : "mt-4 space-y-1.5 text-[11px]"
+          }
+        >
+          {currentNames ? (
+            <div className="flex items-center justify-between gap-2">
+              <span className="flex min-w-0 items-center gap-1.5 text-(--app-text)">
+              {/* Each pip borrows its venue's own timeline colour, so the rows read as
+                  "these sessions" rather than generic open/closed status dots. With an
+                  overlap the first (earliest-opening) venue claims the current pip. */}
+              <span
+                className="h-1.5 w-1.5 shrink-0 rounded-full"
+                style={{ backgroundColor: state.current[0]?.color ?? "var(--app-up)" }}
+              />
+              <span className="truncate">Current · {currentNames}</span>
+              </span>
+              <span className="shrink-0 tabular-nums text-(--app-muted)">
+                {state.currentClosing ? countdownText(state.closesInMinutes, "Closes") : ""}
+              </span>
+            </div>
+          ) : null}
+          <div className="flex items-center justify-between gap-2">
+            <span className="flex min-w-0 items-center gap-1.5 text-(--app-text)">
+              <span
+                className="h-1.5 w-1.5 shrink-0 rounded-full"
+                style={{ backgroundColor: state.next ? state.next.session.color : "var(--app-up)" }}
+              />
+              <span className="truncate">{nextLabel}</span>
+            </span>
+            <span className="shrink-0 tabular-nums text-(--app-muted)">
+              {state.next ? countdownText(state.nextInMinutes) : ""}
+            </span>
+          </div>
         </div>
       </div>
     </div>

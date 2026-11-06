@@ -20,7 +20,7 @@ export async function GET(req: Request): Promise<Response> {
   const hasConfiguredBinanceProfile =
     cfg.profiles["binance-testnet"].configured || cfg.profiles["binance-production"].configured;
   if (cfg.env === "local" && !cfg.operatorAuth && !hasConfiguredBinanceProfile) {
-    return jsonOk({ authenticated: true, env: "local", envLabel: HOST_MAP.local.label, connectedBroker: "mock" });
+    return jsonOk({ authenticated: true, env: "local", envLabel: HOST_MAP.local.label, connectedBroker: "" });
   }
   const runtimeProfile = persistenceProfileFromConfig(runtimeCfg);
   const sessionId = readSessionCookie(req.headers.get("cookie"), secureCookieContext(cfg));

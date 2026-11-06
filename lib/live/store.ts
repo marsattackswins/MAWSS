@@ -99,7 +99,7 @@ export const useLiveStore = create<LiveStore>()((set) => ({
       managerStatus: status.managerStatus,
       managerError: status.managerError ?? null,
       env: status.environment,
-      envLabel: status.environment === "paper" ? "Paper Trading" : status.environment === "testnet" ? "Binance Testnet" : status.environment === "production" ? "Binance Production" : null,
+      envLabel: status.environment === "testnet" ? "Binance Testnet" : status.environment === "production" ? "Binance Live" : null,
       health: status.phase === "ready" && state.profileId === status.profileId && state.generation === status.generation ? state.health : null,
       stream: status.streamHealthy == null ? null : { connected: status.streamHealthy, leaseOwned: status.streamHealthy, phase: status.streamHealthy ? "live" : "degraded", reconnects: 0 },
     })),

@@ -6,8 +6,10 @@
 import {
   MARKET_SESSIONS,
   clockLabel,
+  currentClosing,
   hourLabel,
   isSessionOpen,
+  nextClosing,
   nextOpening,
   nextSessionOpening,
   openSessions,
@@ -31,7 +33,7 @@ describe("market sessions", () => {
   it("is the same three cash sessions for every instrument", () => {
     expect(names(MARKET_SESSIONS)).toEqual(["Tokyo", "London", "New York"]);
     expect(Object.fromEntries(MARKET_SESSIONS.map(({ name, color }) => [name, color]))).toEqual({
-      Tokyo: "#ff6600",
+      Tokyo: "#eab308",
       London: "#22c55e",
       "New York": "#3b82f6",
     });
@@ -154,6 +156,28 @@ describe("market sessions", () => {
     expect(shut.badge).toBe("Closed");
     expect(shut.next?.session.name).toBe("Tokyo");
     expect(shut.next?.at).toBe(at("2026-01-18T23:00:00Z"));
+  });
+
+  it("counts down to the soonest close among the live venues", () => {
+    // Thursday 08:30 UTC: only London trades (closes 17:00 UTC); New York opens 13:00.
+    expect(nextClosing(session("London"), THU_0830)).toBe(at("2026-01-15T17:00:00Z"));
+    const single = currentClosing(THU_0830);
+    expect(single?.session.name).toBe("London");
+    expect(single?.at).toBe(at("2026-01-15T17:00:00Z"));
+
+    // 14:00 UTC: London (closes 17:00) overlaps New York (closes 22:00 UTC) — soonest wins.
+    const overlapAt = at("2026-01-15T14:00:00Z");
+    expect(names(openSessions(overlapAt))).toEqual(["London", "New York"]);
+    expect(currentClosing(overlapAt)?.session.name).toBe("London");
+
+    // Nothing is open at the weekend, so there is no current close.
+    expect(currentClosing(at("2026-01-17T12:00:00Z"))).toBeNull();
+
+    // sessionState carries the close countdown alongside the open one.
+    const st = sessionState(THU_0830);
+    expect(st.current.map((s) => s.name)).toEqual(["London"]);
+    expect(st.currentClosing?.session.name).toBe("London");
+    expect(st.closesInMinutes).toBe(510);
   });
 
   it("labels the hourly axis as bare hours with am/pm", () => {

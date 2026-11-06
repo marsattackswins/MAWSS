@@ -63,7 +63,7 @@ export function AlertsPanel() {
           />
           <button
             type="button"
-            className="flex h-7 items-center gap-1 bg-[#2962ff] px-2 text-[11px] text-white"
+            className="flex h-7 items-center gap-1 bg-(--app-accent) px-2 text-[11px] text-white"
             onClick={() => {
               const value = Number(price) || quote?.last;
               if (!value) return;
@@ -130,12 +130,15 @@ export function AlertsPanel() {
               <span className="truncate pr-1 text-[12px] text-(--app-text)">
                 {alert.side === "above" ? "≥" : "≤"} {formatPrice(alert.symbol, alert.price)}
               </span>
-              <span className={`truncate pr-1 text-[11px] ${hit ? "text-[#089981]" : "text-(--app-muted)"}`}>
+              <span
+                className="truncate pr-1 text-[11px]"
+                style={{ color: hit ? "var(--app-up)" : "var(--app-muted)" }}
+              >
                 {hit ? "Triggered" : "Waiting"}
               </span>
               <button
                 type="button"
-                className="text-(--app-muted) hover:text-[#f23645]"
+                className="text-(--app-muted) hover:text-(--app-down)"
                 onClick={() => removeAlert(alert.id)}
               >
                 <Trash2 size={13} />

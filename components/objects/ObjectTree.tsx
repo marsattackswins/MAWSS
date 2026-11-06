@@ -62,7 +62,7 @@ export function ObjectTree() {
                 <span className="text-[12px] font-semibold text-(--app-text)">
                   {formatTicker(pane.symbol)}
                 </span>
-                <span className="text-[11px] text-[#4c525e]">{pane.timeframe}</span>
+                <span className="text-[11px] text-(--app-faint)">{pane.timeframe}</span>
               </button>
               {!collapsed && (
                 <div className="ml-3 border-l border-(--app-border) pb-2">
@@ -73,7 +73,7 @@ export function ObjectTree() {
                       key={study.id}
                       className="flex items-center gap-1 px-2 py-0.5 text-[12px] text-(--app-text)"
                     >
-                      <span className={`flex-1 ${hidden ? "text-[#4c525e]" : ""}`}>
+                      <span className={`flex-1 ${hidden ? "text-(--app-faint)" : ""}`}>
                         {indicatorTitle(study.type, pane.symbol)}
                       </span>
                       <button
@@ -88,7 +88,7 @@ export function ObjectTree() {
                         type="button"
                         title="Remove"
                         onClick={() => removeIndicator(study.id, pane.id)}
-                        className="text-(--app-muted) hover:text-[#f23645]"
+                        className="text-(--app-muted) hover:text-(--app-down)"
                       >
                         <Trash2 size={12} />
                       </button>
@@ -96,7 +96,7 @@ export function ObjectTree() {
                     );
                   })}
                   {pane.drawings.length === 0 && studies.length === 0 && (
-                    <div className="px-2 py-1 text-[11px] text-[#4c525e]">Empty</div>
+                    <div className="px-2 py-1 text-[11px] text-(--app-faint)">Empty</div>
                   )}
                   {pane.drawings.map((d) => (
                     <div
@@ -132,7 +132,7 @@ export function ObjectTree() {
                         type="button"
                         title="Remove"
                         onClick={() => removeDrawing(pane.id, d.id)}
-                        className="text-(--app-muted) hover:text-[#f23645]"
+                        className="text-(--app-muted) hover:text-(--app-down)"
                       >
                         <Trash2 size={12} />
                       </button>
@@ -141,7 +141,7 @@ export function ObjectTree() {
                   {pane.drawings.length > 0 && (
                     <button
                       type="button"
-                      className="px-2 pt-1 text-[11px] text-(--app-muted) hover:text-[#f23645]"
+                      className="px-2 pt-1 text-[11px] text-(--app-muted) hover:text-(--app-down)"
                       onClick={() => clearDrawings(pane.id)}
                     >
                       Remove drawings

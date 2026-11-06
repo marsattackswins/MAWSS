@@ -12,14 +12,42 @@
 
 import { Fragment, useMemo, useRef } from "react";
 import { tokenizePine, type PineTokenKind } from "@/lib/pine-syntax";
+import { useAppStore } from "@/lib/store";
+import { velaThemeNameFromAppSettings } from "@/lib/app-theme";
 
-const COLORS: Record<PineTokenKind, string> = {
-  plain: "#d1d4dc",
-  comment: "#6a9955",
-  string: "#ce9178",
-  number: "#b5cea8",
-  keyword: "#569cd6",
-  builtin: "#9cdcfe",
+const THEME_SYNTAX_COLORS: Record<string, Record<PineTokenKind, string>> = {
+  dark: {
+    plain: "#eeeef1",
+    comment: "#757882",
+    string: "#e0af68",
+    number: "#a7be94",
+    keyword: "#7aa2f7",
+    builtin: "#bb9af7",
+  },
+  classic: {
+    plain: "#d1d4dc",
+    comment: "#6a9955",
+    string: "#ce9178",
+    number: "#b5cea8",
+    keyword: "#569cd6",
+    builtin: "#9cdcfe",
+  },
+  gruvbox: {
+    plain: "#ebdbb2",
+    comment: "#928374",
+    string: "#b8bb26",
+    number: "#d3869b",
+    keyword: "#fb4934",
+    builtin: "#8ec07c",
+  },
+  light: {
+    plain: "#1e293b",
+    comment: "#64748b",
+    string: "#b45309",
+    number: "#047857",
+    keyword: "#1d4ed8",
+    builtin: "#7c3aed",
+  },
 };
 
 const TEXT_STYLE = {
@@ -39,6 +67,8 @@ export type PineCodeEditorProps = {
 };
 
 export function PineCodeEditor({ value, onChange, inputRef, readOnly }: PineCodeEditorProps) {
+  const themeName = useAppStore((s) => velaThemeNameFromAppSettings(s.appSettings));
+  const colors = THEME_SYNTAX_COLORS[themeName] ?? THEME_SYNTAX_COLORS.dark;
   const taRef = useRef<HTMLTextAreaElement | null>(null);
   const preRef = useRef<HTMLPreElement | null>(null);
   const gutterRef = useRef<HTMLDivElement | null>(null);
@@ -71,7 +101,7 @@ export function PineCodeEditor({ value, onChange, inputRef, readOnly }: PineCode
   };
 
   return (
-    <div className="flex min-h-0 flex-1 overflow-hidden" style={{ background: "#131722" }}>
+    <div className="flex min-h-0 flex-1 overflow-hidden" style={{ background: "var(--app-bg)" }}>
       <div
         ref={gutterRef}
         aria-hidden
@@ -79,10 +109,10 @@ export function PineCodeEditor({ value, onChange, inputRef, readOnly }: PineCode
         style={{
           ...TEXT_STYLE,
           width: `${digits + 2}ch`,
-          color: "#5c6370",
+          color: "var(--app-muted)",
           paddingTop: 8,
           paddingBottom: 8,
-          borderRight: "1px solid #2a2e39",
+          borderRight: "1px solid var(--app-border)",
         }}
       >
         {lines.map((_, i) => (
@@ -97,12 +127,12 @@ export function PineCodeEditor({ value, onChange, inputRef, readOnly }: PineCode
           ref={preRef}
           aria-hidden
           className="pointer-events-none absolute inset-0 overflow-hidden px-3 py-2"
-          style={{ ...TEXT_STYLE, margin: 0, whiteSpace: "pre", color: COLORS.plain }}
+          style={{ ...TEXT_STYLE, margin: 0, whiteSpace: "pre", color: colors.plain }}
         >
           {lines.map((tokens, i) => (
             <Fragment key={i}>
               {tokens.map((token, j) => (
-                <span key={j} style={{ color: COLORS[token.kind] }}>
+                <span key={j} style={{ color: colors[token.kind] }}>
                   {token.text}
                 </span>
               ))}
@@ -131,7 +161,7 @@ export function PineCodeEditor({ value, onChange, inputRef, readOnly }: PineCode
           style={{
             ...TEXT_STYLE,
             color: "transparent",
-            caretColor: "#d1d4dc",
+            caretColor: "var(--app-text)",
             whiteSpace: "pre",
             margin: 0,
           }}

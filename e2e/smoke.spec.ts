@@ -91,45 +91,10 @@ test("stale feed shows Data delayed and returns to Live after recovery", async (
   }
 });
 
-test("paper order opens, TP closes it, and position/P&L/balance update", async ({ page }) => {
-  const feed = new FakeBinanceFeed(8787);
-  try {
-    await stubRest(page);
-    await page.goto("/");
-    await waitForKlineClient(feed);
-    // Seed market price 100 on both channels.
-    feed.broadcast(klineEvent(KLINE_STREAM, "BTCUSDT", "1d", currentDayOpenSec(), 100));
-    feed.broadcast(miniTickerEvent(MINI_STREAM, "BTCUSDT", 100, 1));
-
-    const buy = page.getByRole("button", { name: /BUY/ });
-    await expect(buy).toBeVisible({ timeout: 30_000 });
-    await page.waitForTimeout(500); // let the quote reach the button
-
-    // First submit with no broker → broker dialog; connect the paper broker.
-    await buy.click();
-    await page.getByText("Paper Trading").click();
-
-    // Now the real submit action: market buy fills at 100 with 2% TP / 1% SL.
-    await buy.click();
-    const row = page.locator("tbody tr").filter({ hasText: "BTCUSDT.P" });
-    await expect(row).toBeVisible({ timeout: 15_000 });
-    await expect(row).toContainText("100.0"); // avg fill
-    await expect(row).toContainText("102.0"); // TP
-    await expect(row).toContainText("99.0"); // SL
-
-    // Price through TP → position closes at 102; values update visibly.
-    feed.broadcast(klineEvent(KLINE_STREAM, "BTCUSDT", "1d", currentDayOpenSec(), 103));
-    feed.broadcast(miniTickerEvent(MINI_STREAM, "BTCUSDT", 103, 2));
-
-    await expect(row).toHaveCount(0, { timeout: 15_000 });
-    // qty = margin 100 * leverage 10 / 100 = 10 → realized (102-100)*10 = 20.
-    await expect(page.getByText(/^Realized P&L:/)).toContainText("20.00", { timeout: 15_000 });
-    await expect(page.getByText(/^Account balance:/)).toContainText("100,020.00", {
-      timeout: 15_000,
-    });
-  } finally {
-    await feed.close();
-  }
+test.skip("paper order opens, TP closes it, and position/P&L/balance update — REMOVED: paper trading was removed from the product", () => {
+  // Paper trading mode has been removed. Testnet and Production are the only
+  // trading environments. This test has been skipped pending a replacement
+  // E2E test for live Testnet order flow.
 });
 
 test("rapid timeframe switches never hit 'Object is disposed' and chart stays live", async ({

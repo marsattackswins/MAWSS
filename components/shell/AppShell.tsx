@@ -7,14 +7,13 @@ import { SettingsModal } from "@/components/settings/SettingsModal";
 import { IndicatorSettingsModal } from "@/components/settings/IndicatorSettingsModal";
 import { DrawingSettingsModal } from "@/components/settings/DrawingSettingsModal";
 import { BrokerDialog } from "@/components/trading/BrokerDialog";
-import { AccountSettingsModal } from "@/components/trading/AccountSettingsModal";
 import { BuySellContextMenu } from "@/components/trading/BuySellContextMenu";
-import { MockBrokerLoop } from "@/components/trading/MockBrokerLoop";
 import { ReplayBar } from "@/components/replay/ReplayBar";
 import { BottomPanel } from "@/components/shell/BottomPanel";
 import { RightDock } from "@/components/shell/RightDock";
 import { RightSidebar } from "@/components/shell/RightSidebar";
 import { TopBar } from "@/components/shell/TopBar";
+import { JournalOverlay } from "@/components/shell/JournalOverlay";
 import { getChart, getLastCrosshair, getWorkspace } from "@/lib/chart-registry";
 import { restoreServerProfile } from "@/lib/live/bridge";
 import { useLiveStore } from "@/lib/live/store";
@@ -32,12 +31,7 @@ import { useEffect, useRef, useState } from "react";
 
 type ChartRange = "1D" | "5D" | "1M" | "3M" | "6M" | "YTD" | "1Y" | "5Y" | "All";
 
-/**
- * Host the chart grid on Vela's workspace engine (phased VelaWorkspace migration).
- * The legacy ChartGrid path has been removed; this constant is now a one-way opt-in
- * kept for parity with the migration docs until the env var is retired.
- */
-const USE_VELA_WORKSPACE = process.env.NEXT_PUBLIC_MAWS_VELA_WORKSPACE === "true";
+
 
 function rangeSeconds(range: ChartRange): number | null {
   const day = 86400;
@@ -134,7 +128,7 @@ export function AppShell() {
   const setIndicatorSettingsOpen = useAppStore((s) => s.setIndicatorSettingsOpen);
   const setDrawingSettingsTarget = useAppStore((s) => s.setDrawingSettingsTarget);
   const setBrokerDialogOpen = useAppStore((s) => s.setBrokerDialogOpen);
-  const setAccountSettingsOpen = useAppStore((s) => s.setAccountSettingsOpen);
+  const setJournalOverlayOpen = useAppStore((s) => s.setJournalOverlayOpen);
   const setMaximizedPane = useAppStore((s) => s.setMaximizedPane);
 
   useSyncHotSymbols(ready);
@@ -175,6 +169,9 @@ export function AppShell() {
           // Vela's own dialog (the same one the symbol button and bare typing open);
           // the shell popover it used to raise no longer exists.
           getWorkspace()?.openSymbolSearch();
+          break;
+        case "toggleJournal":
+          s.setJournalOverlayOpen(!s.journalOverlayOpen);
           break;
         case "fitChart": {
           if (!pane) return;
@@ -263,6 +260,10 @@ export function AppShell() {
       const s = useAppStore.getState();
 
       if (e.key === "Escape") {
+        if (s.journalOverlayOpen) {
+          setJournalOverlayOpen(false);
+          return;
+        }
         if (s.settingsOpen) {
           setSettingsOpen(false);
           return;
@@ -277,10 +278,6 @@ export function AppShell() {
         }
         if (s.brokerDialogOpen) {
           setBrokerDialogOpen(false);
-          return;
-        }
-        if (s.accountSettingsOpen) {
-          setAccountSettingsOpen(false);
           return;
         }
         if (s.contextMenu || s.indicatorMenuOpen || s.layoutMenuOpen) {
@@ -326,7 +323,7 @@ export function AppShell() {
     setSettingsOpen,
     setIndicatorSettingsOpen,
     setBrokerDialogOpen,
-    setAccountSettingsOpen,
+    setJournalOverlayOpen,
     setMaximizedPane,
     setDrawingSettingsTarget,
   ]);
@@ -352,15 +349,17 @@ export function AppShell() {
           <ReplayBar />
         </div>
         <RightSidebar />
+        {/* The shortcut rail hides with the whole right side: the top-bar arrow
+            stows panel + rail together (RightDock returns null on !rightOpen),
+            while a rail icon itself folds only its own panel body. */}
         <RightDock />
       </div>
 
       <SettingsModal />
+      <JournalOverlay />
       <IndicatorSettingsModal />
       <DrawingSettingsModal />
       <BrokerDialog />
-      <AccountSettingsModal />
-      <MockBrokerLoop />
       <ChartContextMenu />
       <BuySellContextMenu />
       <LiveNotices />

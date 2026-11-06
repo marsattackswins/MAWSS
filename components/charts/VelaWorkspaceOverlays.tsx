@@ -17,6 +17,7 @@ import { useAppStore } from "@/lib/store";
 import { getLastCrosshair } from "@/lib/chart-registry";
 import type { ChartPaneState } from "@/types";
 import { TradeMarks } from "@/components/charts/TradeMarks";
+import { TradeManager } from "@/components/charts/TradeManager";
 import { SessionBreaks } from "@/components/charts/SessionBreaks";
 import { EventBreaks } from "@/components/charts/EventBreaks";
 import { DrawingOverlay } from "@/components/drawings/DrawingOverlay";
@@ -113,6 +114,7 @@ function CellOverlays({ ws, pane }: { ws: VelaWorkspace; pane: ChartPaneState })
           <SessionBreaks pane={pane} />
           <EventBreaks pane={pane} />
           <TradeMarks pane={pane} />
+          <TradeManager pane={pane} />
           {showPlusButton && <CrosshairPlus pane={pane} />}
           {showMaximize && (
             <div

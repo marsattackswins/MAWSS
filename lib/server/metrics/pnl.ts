@@ -7,18 +7,15 @@ import type { ChartPosition } from "@/types";
 /**
  * P&L aggregation for the admin metrics endpoint.
  *
- * `pnl_24h` is defined simply as the sum of UNREALIZED P&L across all OPEN
- * positions right now (live + paper):
+ * `pnl_24h` is defined as the sum of UNREALIZED P&L across all OPEN positions
+ * right now:
  *   - live: Binance mark-price unrealized P&L from the server live state.
- *   - paper: realized P&L already locked into mockBalance is NOT double
- *     counted; only open paper positions contribute their current unrealized
- *     P&L, computed from opening fills and the latest mark price.
  *
  * Low-cost, no new tables/services: reads already-maintained in-memory state.
  */
 
-/** Unrealized P&L for paper positions: (last − entry) × qty for longs, inverse for shorts. */
-export function paperPositionUnrealized(pos: ChartPosition, last: number): number {
+/** Unrealized P&L for a position: (last − entry) × qty for longs, inverse for shorts. */
+export function positionUnrealized(pos: ChartPosition, last: number): number {
   return pos.side === "long" ? (last - pos.entry) * pos.qty : (pos.entry - last) * pos.qty;
 }
 
@@ -51,7 +48,7 @@ export function pnl24h(input?: PnlInput): number {
     for (const p of input.positions) {
       const last = input.lastPriceOf(p.symbol);
       if (Number.isFinite(last) && last > 0) {
-        total += paperPositionUnrealized(p, last);
+        total += positionUnrealized(p, last);
       }
     }
   }

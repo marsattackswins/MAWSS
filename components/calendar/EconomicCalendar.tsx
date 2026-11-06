@@ -48,10 +48,10 @@ function EventCard({
   const guide = open ? getEventGuide(event.title) : null;
   const impactBar =
     event.impact === "high"
-      ? "bg-[#f23645]"
+      ? "bg-(--app-down)"
       : event.impact === "medium"
         ? "bg-[#ffa726]"
-        : "bg-[#4c525e]";
+        : "bg-(--app-faint)";
   const impactLabel =
     event.impact === "high"
       ? "High impact"
@@ -65,10 +65,10 @@ function EventCard({
       onClick={onToggle}
       className={`group relative w-full overflow-hidden rounded-md border text-left transition-colors ${
         live
-          ? "border-[#3a3a3a] bg-[var(--maws-elevated)]"
+          ? "border-(--app-text) bg-[var(--maws-elevated)]"
           : open
-            ? "border-[#333333] bg-[var(--maws-elevated)]"
-            : "border-[var(--maws-border)] bg-[var(--maws-panel)] hover:border-[#2a2a2a] hover:bg-[var(--maws-elevated)]"
+            ? "border-(--app-border) bg-[var(--maws-elevated)]"
+            : "border-[var(--maws-border)] bg-[var(--maws-panel)] hover:border-(--app-hover) hover:bg-[var(--maws-elevated)]"
       } ${past ? "opacity-55" : ""}`}
     >
       <span
@@ -88,11 +88,11 @@ function EventCard({
                   Live
                 </span>
               )}
-              <span className="text-[#333333]">·</span>
+              <span className="text-(--app-muted)">·</span>
               <span className="shrink-0 uppercase tracking-wide">{event.country}</span>
             </div>
             {event.forecast ? (
-              <span className="shrink-0 tabular-nums text-[#5b9cf6]">
+              <span className="shrink-0 tabular-nums text-(--app-accent)">
                 Forecast: {event.forecast}
               </span>
             ) : (
@@ -107,7 +107,7 @@ function EventCard({
                 Previous: {event.previous}
               </span>
             ) : event.actual ? (
-              <span className="shrink-0 text-[11px] leading-[16px] tabular-nums text-[#26a69a]">
+              <span className="shrink-0 text-[11px] leading-[16px] tabular-nums text-(--app-up)">
                 Actual: {event.actual}
               </span>
             ) : (
@@ -117,7 +117,7 @@ function EventCard({
 
           {event.actual && event.previous ? (
             <div className="flex justify-end text-[11px] leading-[16px]">
-              <span className="tabular-nums text-[#26a69a]">
+              <span className="tabular-nums text-(--app-up)">
                 Actual: {event.actual}
               </span>
             </div>
@@ -125,21 +125,21 @@ function EventCard({
         </div>
 
         {open && guide && (
-          <div className="mt-2 space-y-2.5 border-t border-[#1c1c1c] pt-2.5 text-[11px] leading-snug">
+          <div className="mt-2 space-y-2.5 border-t border-(--app-border) pt-2.5 text-[11px] leading-snug">
             <div>
-              <div className="mb-0.5 text-[9px] font-semibold uppercase tracking-wide text-[#4c525e]">
+              <div className="mb-0.5 text-[9px] font-semibold uppercase tracking-wide text-(--app-faint)">
                 Description
               </div>
               <p className="text-(--app-muted)">{guide.description}</p>
             </div>
             <div>
-              <div className="mb-0.5 text-[9px] font-semibold uppercase tracking-wide text-[#4c525e]">
+              <div className="mb-0.5 text-[9px] font-semibold uppercase tracking-wide text-(--app-faint)">
                 Usual effect
               </div>
               <p className="text-(--app-muted)">{guide.usualEffect}</p>
             </div>
             <div>
-              <div className="mb-0.5 text-[9px] font-semibold uppercase tracking-wide text-[#4c525e]">
+              <div className="mb-0.5 text-[9px] font-semibold uppercase tracking-wide text-(--app-faint)">
                 Why traders care
               </div>
               <p className="text-(--app-muted)">{guide.whyTradersCare}</p>
@@ -147,17 +147,17 @@ function EventCard({
             <div
               className={`text-[10px] font-semibold uppercase tracking-wide ${
                 event.impact === "high"
-                  ? "text-[#f23645]"
+                  ? "text-(--app-down)"
                   : event.impact === "medium"
                     ? "text-[#ffa726]"
-                    : "text-[#4c525e]"
+                    : "text-(--app-faint)"
               }`}
             >
               {impactLabel}
             </div>
             {event.category === "crypto" ? (
               <span
-                className="inline-block cursor-pointer text-[#2962ff] hover:underline"
+                className="inline-block cursor-pointer text-(--app-accent) hover:underline"
                 onClick={(e) => {
                   e.stopPropagation();
                   onOpenSymbol("BTCUSDT");
@@ -167,7 +167,7 @@ function EventCard({
               </span>
             ) : event.category === "commodity" ? (
               <span
-                className="inline-block cursor-pointer text-[#2962ff] hover:underline"
+                className="inline-block cursor-pointer text-(--app-accent) hover:underline"
                 onClick={(e) => {
                   e.stopPropagation();
                   onOpenSymbol("XAUUSDT");
@@ -181,7 +181,7 @@ function EventCard({
       </div>
 
       <span
-        className={`pointer-events-none absolute right-2 bottom-1.5 text-[#4c525e] transition-opacity ${
+        className={`pointer-events-none absolute right-2 bottom-1.5 text-(--app-faint) transition-opacity ${
           open ? "opacity-70" : "opacity-0 group-hover:opacity-70"
         }`}
         aria-hidden
@@ -273,7 +273,7 @@ export function EconomicCalendar() {
         <div className="flex min-w-0 items-center gap-2">
           <span className="text-[13px] font-semibold text-(--app-text)">Calendar</span>
           <span
-            className="truncate text-[10px] uppercase tracking-wide text-[#4c525e]"
+            className="truncate text-[10px] uppercase tracking-wide text-(--app-faint)"
             title={status ?? undefined}
           >
             {loading
@@ -285,7 +285,7 @@ export function EconomicCalendar() {
           <button
             type="button"
             title="Reload calendar"
-            className="h-5 rounded px-1 text-[10px] text-[#4c525e] hover:bg-(--app-hover) hover:text-(--app-text)"
+            className="h-5 rounded px-1 text-[10px] text-(--app-faint) hover:bg-(--app-hover) hover:text-(--app-text)"
             onClick={() => setReloadToken((n) => n + 1)}
           >
             Reload
@@ -303,7 +303,7 @@ export function EconomicCalendar() {
           </button>
           <button
             type="button"
-            className="min-w-[4.5rem] px-1 text-center text-[12px] text-(--app-text) hover:text-white"
+            className="min-w-[4.5rem] px-1 text-center text-[12px] text-(--app-text) hover:text-(--app-accent)"
             onClick={() => setCursor(todayStart)}
           >
             {isToday ? "Today" : label}

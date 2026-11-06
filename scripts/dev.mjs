@@ -4,6 +4,7 @@ import net from "node:net";
 import path from "node:path";
 import { platform } from "node:os";
 import { APP_PORT } from "./app-port.mjs";
+import { ensureJournalSidecar, stopJournalSidecar } from "./journal-sidecar.mjs";
 
 // Pinned to 3000, never env-selected and never "next free port": the browser's
 // saved workspace is keyed by origin, so any other port is a fresh empty
@@ -208,11 +209,27 @@ const child = spawn(process.execPath, [nextBin, "dev", "-p", port], {
   env: { ...process.env, PORT: port },
 });
 
+// ── Journal sidecar (vendored LuxAlgo Trade Journal on :3400) ───────────────
+//
+// The journal is a separate Next server that the app proxies at /journal, and it
+// used to be a manual `npm run journal` step that never came back after a dev
+// restart — the journal button served connection-refused. The ownership rules
+// live in scripts/journal-sidecar.mjs (shared with the supervisor): reuse an
+// already-running instance, otherwise start it (one-time build if needed) and
+// respawn it if it dies. It dies with the dev server — Ctrl-C cleans up both.
+void ensureJournalSidecar({
+  log: (message) => console.log(`${dim}${message}${reset}`),
+  error: (message) => console.error(message),
+});
+
 let stopping = false;
 const stopChild = (signal = "SIGTERM") => {
   if (stopping) return;
   stopping = true;
   if (!child.killed) child.kill(signal);
+  // The sidecar is our child too: a dev-storm restart must not strand an old
+  // journal server holding port 3400.
+  stopJournalSidecar();
   const fallback = setTimeout(() => {
     if (child.exitCode === null) child.kill();
   }, 5_000);

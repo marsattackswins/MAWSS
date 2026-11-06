@@ -293,6 +293,8 @@ export type ChartSettings = {
   showPositionLines: boolean;
   showTpSlLines: boolean;
   showLiqLines: boolean;
+  /** Which side of the chart the on-chart trade manager pill is pinned to. */
+  tradePillSide: "left" | "right";
   alertLineColor: string;
   buyLineColor: string;
   sellLineColor: string;
@@ -384,6 +386,7 @@ export const DEFAULT_CHART_SETTINGS: ChartSettings = {
   showPositionLines: true,
   showTpSlLines: true,
   showLiqLines: true,
+  tradePillSide: "left",
   alertLineColor: "#ff9800",
   buyLineColor: "#089981",
   sellLineColor: "#f23645",
@@ -1031,36 +1034,6 @@ export const DEFAULT_LAYOUT_SYNC: LayoutSync = {
   crosshair: true,
   time: false,
   dateRange: false,
-};
-
-export type PaperAccountSettings = {
-  marginControl: boolean;
-  leverage: {
-    stocks: number;
-    futures: number;
-    crypto: number;
-    others: number;
-  };
-  futuresCommissionOn: boolean;
-  commissionPerContract: number;
-  othersCommissionOn: boolean;
-  othersCommission: number;
-  othersCommissionType: "fixed" | "percent";
-};
-
-export const DEFAULT_PAPER_ACCOUNT: PaperAccountSettings = {
-  marginControl: true,
-  leverage: {
-    stocks: 2,
-    futures: 20,
-    crypto: 25,
-    others: 25,
-  },
-  futuresCommissionOn: false,
-  commissionPerContract: 0.01,
-  othersCommissionOn: false,
-  othersCommission: 0.0001,
-  othersCommissionType: "fixed",
 };
 
 /** Per-symbol order sizing / trade defaults (Buy/Sell button settings). */

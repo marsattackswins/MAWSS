@@ -9,7 +9,7 @@ export function replaySliderMax(
 }
 
 export function replaySliderPosition(
-  cursorTime: number | null,
+  cursorTime: number | null | undefined,
   bounds: { first: number; last: number } | null,
   timeframeMs: number,
 ): number {

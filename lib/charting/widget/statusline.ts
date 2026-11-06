@@ -307,6 +307,8 @@ export class Statusline {
     /** Fit mode (multi-chart cells): one row, overflowing segments hidden — see {@link setFitMode}. */
     private fitMode = false;
     private fitRO: ResizeObserver | null = null;
+    /** Width-relevant signature of the last ladder walk (see {@link readoutWidthKey}). */
+    private fitKey = '';
     /** The identity row (avatar / symbol / meta / market) and the values row (readout /
      *  eye) — one line side by side, or a two-line column once the ladder stacks them. */
     private readonly identityRow: HTMLElement;
@@ -453,6 +455,9 @@ export class Statusline {
             this.applyLayout(rung);
             if (!hasValues || !overflows()) break;
         }
+        // The ladder is settled — remember what these widths fit, so the next value tick
+        // with the same digit counts can skip straight to renderValues().
+        this.fitKey = this.readoutWidthKey();
         if (!this.fitMode) return;
         const order: Array<[HTMLElement, boolean]> = [
             [this.valuesRow, hasValues],
@@ -466,6 +471,7 @@ export class Statusline {
         // With the values row gone the chip is one line again — un-stack so the legend
         // shift drops back to a single line's.
         if (this.valuesRow.style.display === 'none') this.applyLayout({ ...this.layout, stacked: false });
+        this.fitKey = this.readoutWidthKey();
     }
 
     /** Shape + color the value readout after the active price style: its own up/down
@@ -646,7 +652,35 @@ export class Statusline {
         // renderer on every readout refresh (bar ticks, crosshair moves), so a toggle
         // made anywhere (the object tree's eye) reaches the status line.
         if (this.menuHooks) this.setChartHidden(!this.menuHooks.chartVisible());
-        this.fit(); // re-walks the ladder — the readout's width follows the bar
+        // Re-walking the ladder forces a synchronous layout (`scrollWidth` vs
+        // `clientWidth`) — hundreds of µs per call, which on a hover/pan stream was the
+        // single largest cost per pointer event. The rung only changes when the text's
+        // WIDTH could change, so re-fit on a width-relevant signature and otherwise just
+        // rewrite the values (no layout read at all).
+        const key = this.readoutWidthKey();
+        if (key === this.fitKey) {
+            this.renderValues();
+            return;
+        }
+        this.fit();
+    }
+
+    /**
+     * Width-relevant signature of what the chip shows: the ladder rung, visibility and
+     * fit mode plus the CHARACTER COUNT of every formatted value (proportional UI digits
+     * share one advance, so equal counts cannot change the rung that fits). A price tick
+     * that only changes the digits keeps the signature and skips the reflow.
+     */
+    private readoutWidthKey(): string {
+        const bar = this.hoverBar ?? this.lastBar;
+        const head = `${this.layout.level}|${this.layout.stacked}|${this.chartHidden}|${this.fitMode}|${this.metaEl.textContent?.length ?? 0}`;
+        if (!bar) return `${head}|empty`;
+        const dp = decimalsFor(bar.close);
+        const cells = readoutCells(this.layout.level, this.readout)
+            .map((c) => `${c.label.length}:${fmtPrice(bar[c.key], dp).length}`)
+            .join(',');
+        const change = this.layout.level === 'minimal' ? fmtChangePct(bar.open, bar.close) : fmtChange(bar.open, bar.close);
+        return `${head}|${cells}|${change.length}`;
     }
 
     /** Write the value readout for the current bar at the current ladder level. */

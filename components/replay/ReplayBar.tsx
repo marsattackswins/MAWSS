@@ -31,9 +31,9 @@ export function ReplayBar() {
   const stopReplay = useAppStore((s) => s.stopReplay);
 
   const paneId = replay?.paneId;
-  const tfMs = useAppStore((s) => {
+  const tfMs: number = useAppStore((s) => {
     const p = s.panes.find((x) => x.id === paneId);
-    if (!p) return 0;
+    if (!p) return 3_600_000;
     const map: Record<string, number> = {
       "1m": 60_000, "3m": 180_000, "5m": 300_000, "15m": 900_000, "30m": 1_800_000,
       "1h": 3_600_000, "2h": 7_200_000, "4h": 14_400_000, "1D": 86_400_000,

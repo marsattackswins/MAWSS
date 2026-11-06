@@ -2,7 +2,7 @@ import { describe, it, expect } from '@jest/globals';
 import type { ChartPosition, ChartOrder } from '../../types';
 
 /**
- * Tests for margin and leverage calculations in paper trading
+ * Tests for margin and leverage calculations.
  * Covers margin requirements, leverage effects, and position-related calculations
  */
 

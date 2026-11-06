@@ -6,16 +6,20 @@
  *
  *  - Indicators: the full Vela native catalog, search-filtered, click to add
  *    (repeatable — clicking again adds a second instance, like TV).
- *  - Favorites: the user's starred indicators (star column + its own tab), the same
+ *  - Favorites: the user's pinned indicators (favorite column + its own tab), the same
  *    localStorage seam the TradingView dialog's Favorites left column models.
  *  - My scripts: the user's saved Pine library (lib/vela-pine-scripts.ts), Run
  *    mounts one on the active chart through the workspace shell, an eye toggles a
- *    live one's visibility, the same pin stars it as a favorite.
+ *    live one's visibility, the same pin favorites it.
  *
  * Clicking a live row closes and opens its settings dialog (TV behavior). Layout —
  * search on top, the tree column on the left, the table right — mirrors the
- * reference dialog in one column: rows carry their star, author and category
+ * reference dialog in one column: rows carry their favorite, author and category
  * badge; the tree reduces to the three tabs of the request, so it is dropped.
+ *
+ * The favorite button is the wishlist diamond from the ticker search (same glyph,
+ * same teal, and the same far-right spot in the row) so one affordance reads the
+ * same everywhere.
  */
 
 import { getChart, getWorkspace } from "@/lib/chart-registry";
@@ -27,7 +31,7 @@ import {
   type PineScript,
 } from "@/lib/vela-pine-scripts";
 import { useAppStore } from "@/lib/store";
-import { Code2, Eye, EyeOff, Search, Star, Trash2, X } from "lucide-react";
+import { Code2, Diamond, Eye, EyeOff, Search, Trash2, X } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 
 const TABS = ["Indicators", "Favorites", "My scripts"] as const;
@@ -36,7 +40,7 @@ type Tab = (typeof TABS)[number];
 /** localStorage key of the pinned favorites (user content, not workspace state). */
 const FAVORITES_KEY = "maws.indicator.favorites.v1";
 
-/** The library of native indicators — the dialog's source of truth for the two star columns. */
+/** The library of native indicators — the dialog's source of truth for the two favorite columns. */
 type CatalogEntry = (typeof VELA_INDICATOR_CATALOG)[number];
 
 type FavoriteKey = string; // native: `<type>`; pine: `pine:<id>`
@@ -250,14 +254,6 @@ export function IndicatorsDialog() {
                   <div className="mb-1 text-[10px] font-semibold uppercase tracking-[0.08em] text-(--app-muted)">On chart</div>
                   {liveScripts.map((l) => (
                     <div key={l.id} className="group flex items-center gap-2 rounded-[6px] px-2 py-1.5 hover:bg-[var(--app-hover)]">
-                      <button
-                        type="button"
-                        title={fav(l.id) ? "Unpin from favorites" : "Pin to favorites"}
-                        onClick={() => toggleFavorite(l.id)}
-                        className={`shrink-0 ${fav(l.id) ? "text-[#f0b90b]" : "text-[#4c525e] hover:text-(--app-muted)"}`}
-                      >
-                        <Star size={13} fill={fav(l.id) ? "currentColor" : "none"} />
-                      </button>
                       <span className="min-w-0 flex-1 truncate text-[13px] text-[var(--app-text)]">{l.title}</span>
                       <button
                         type="button"
@@ -285,6 +281,14 @@ export function IndicatorsDialog() {
                       >
                         <X size={13} />
                       </button>
+                      <button
+                        type="button"
+                        title={fav(l.id) ? "Unpin from favorites" : "Pin to favorites"}
+                        onClick={() => toggleFavorite(l.id)}
+                        className={`shrink-0 ${fav(l.id) ? "text-[#50d2c1]" : "text-[#4c525e] hover:text-(--app-muted)"}`}
+                      >
+                        <Diamond size={13} fill={fav(l.id) ? "currentColor" : "none"} />
+                      </button>
                     </div>
                   ))}
                 </div>
@@ -293,14 +297,6 @@ export function IndicatorsDialog() {
                 {scriptRows.length ? (
                   scriptRows.map((s) => (
                     <div key={s.id} className="group flex items-center gap-2 rounded-[6px] px-2 py-1.5 hover:bg-[var(--app-hover)]">
-                      <button
-                        type="button"
-                        title={fav(`pine:${s.id}`) ? "Unpin from favorites" : "Pin to favorites"}
-                        onClick={() => toggleFavorite(`pine:${s.id}`)}
-                        className={`shrink-0 ${fav(`pine:${s.id}`) ? "text-[#f0b90b]" : "text-[#4c525e] hover:text-(--app-muted)"}`}
-                      >
-                        <Star size={13} fill={fav(`pine:${s.id}`) ? "currentColor" : "none"} />
-                      </button>
                       <button
                         type="button"
                         className="min-w-0 flex-1 truncate text-left text-[13px] text-[var(--app-text)] hover:underline"
@@ -322,6 +318,14 @@ export function IndicatorsDialog() {
                         className="shrink-0 text-[#4c525e] opacity-0 transition-opacity hover:text-[#f23645] group-hover:opacity-100"
                       >
                         <Trash2 size={13} />
+                      </button>
+                      <button
+                        type="button"
+                        title={fav(`pine:${s.id}`) ? "Unpin from favorites" : "Pin to favorites"}
+                        onClick={() => toggleFavorite(`pine:${s.id}`)}
+                        className={`shrink-0 ${fav(`pine:${s.id}`) ? "text-[#50d2c1]" : "text-[#4c525e] hover:text-(--app-muted)"}`}
+                      >
+                        <Diamond size={13} fill={fav(`pine:${s.id}`) ? "currentColor" : "none"} />
                       </button>
                     </div>
                   ))
@@ -349,17 +353,6 @@ export function IndicatorsDialog() {
                         }
                       }}
                     >
-                      <button
-                        type="button"
-                        title={fav(favKey) ? "Remove from favorites" : "Add to favorites"}
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          toggleFavorite(favKey);
-                        }}
-                        className={`shrink-0 ${fav(favKey) ? "text-[#f0b90b]" : "text-[#4c525e] opacity-0 group-hover:opacity-100 hover:text-(--app-muted)"}`}
-                      >
-                        <Star size={13} fill={fav(favKey) ? "currentColor" : "none"} />
-                      </button>
                       <span className="min-w-0 flex-1 truncate text-[13px] text-[var(--app-text)]">
                         {kind === "native" ? entry!.title : script!.name}
                       </span>
@@ -368,12 +361,23 @@ export function IndicatorsDialog() {
                       ) : (
                         <span className="shrink-0 text-[11px] text-(--app-muted)">maws</span>
                       )}
+                      <button
+                        type="button"
+                        title={fav(favKey) ? "Remove from favorites" : "Add to favorites"}
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          toggleFavorite(favKey);
+                        }}
+                        className={`shrink-0 ${fav(favKey) ? "text-[#50d2c1]" : "text-[#4c525e] opacity-0 group-hover:opacity-100 hover:text-(--app-muted)"}`}
+                      >
+                        <Diamond size={13} fill={fav(favKey) ? "currentColor" : "none"} />
+                      </button>
                     </div>
                   );
                 })
               ) : (
                 <div className="px-5 py-6 text-center text-[12px] text-(--app-muted)">
-                  {tab === "Favorites" ? "Nothing pinned yet — star an indicator or a script." : "No indicators match."}
+                  {tab === "Favorites" ? "Nothing pinned yet — click the diamond on an indicator or a script." : "No indicators match."}
                 </div>
               )}
             </>

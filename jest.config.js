@@ -21,26 +21,12 @@ module.exports = {
   ],
   coverageDirectory: 'coverage',
   coverageReporters: ['text', 'lcov', 'html'],
-  // Per-file floors for the core paper-trading engine. exit-conditions.ts is
-  // pinned to 100% (resolveExitCondition must stay fully branch-covered).
   coverageThreshold: {
-    'lib/trading/exit-conditions.ts': {
-      branches: 100,
-      functions: 100,
-      lines: 100,
-      statements: 100,
-    },
     'lib/trading/symbol-settings.ts': {
       branches: 100,
       functions: 100,
       lines: 100,
       statements: 100,
-    },
-    'lib/trading/mock.ts': {
-      branches: 92,
-      functions: 100,
-      lines: 100,
-      statements: 95,
     },
     'lib/market/feed-normalize.ts': {
       branches: 100,

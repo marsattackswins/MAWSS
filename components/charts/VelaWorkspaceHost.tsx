@@ -76,11 +76,9 @@ export function VelaWorkspaceHost() {
 
   // Mount the workspace once. The zustand snapshot seeds the cells; later store
   // changes flow through the subscription below.
-  const ENABLED = process.env.NEXT_PUBLIC_MAWS_VELA_WORKSPACE === "true";
-
   useEffect(() => {
     const el = containerRef.current;
-    if (!el || wsRef.current || !ENABLED) return;
+    if (!el || wsRef.current) return;
     const s = useAppStore.getState();
 
     ensureMawsLayouts();

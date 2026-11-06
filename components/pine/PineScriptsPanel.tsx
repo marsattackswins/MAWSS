@@ -38,7 +38,6 @@ import {
   SaveAll,
   SquareX,
   Trash2,
-  X,
 } from "lucide-react";
 import type { Vela } from "@/lib/charting";
 import { getChart, getWorkspace, subscribeWorkspace } from "@/lib/chart-registry";
@@ -62,12 +61,12 @@ type LogEntry = { id: number; level: "info" | "error"; text: string; time: numbe
 type RecentRun = { id: string; name: string; symbol: string; timeframe: string; at: number };
 type MenuKind = "scripts" | "more" | "history" | "version" | null;
 
-// The editor is its own dark surface (like Vela's), independent of the app theme.
-const SURFACE = "#131722";
-const MENU_BG = "#1e222d";
-const BORDER = "#2a2e39";
-const TEXT = "#d1d4dc";
-const MUTED = "#8f96a3";
+// Surfaces read from CSS variables so the editor matches the active theme.
+const SURFACE = "var(--app-panel)";
+const MENU_BG = "var(--app-elevated)";
+const BORDER = "var(--app-border)";
+const TEXT = "var(--app-text)";
+const MUTED = "var(--app-muted)";
 
 function clock(ts: number): string {
   const d = new Date(ts);
@@ -99,8 +98,8 @@ function IconButton({
       {...(trigger ? { "data-pine-menu-trigger": true } : {})}
       className={`flex h-6 w-6 shrink-0 items-center justify-center rounded-[3px] transition-colors disabled:opacity-35 ${
         active
-          ? "bg-[#2a2e39] text-[#d1d4dc]"
-          : "text-[#9aa0ab] hover:bg-[#2a2e39] hover:text-[#d1d4dc]"
+          ? "bg-(--app-hover) text-(--app-text)"
+          : "text-(--app-muted) hover:bg-(--app-hover) hover:text-(--app-text)"
       }`}
     >
       {children}
@@ -130,12 +129,12 @@ function MenuRow({
       type="button"
       disabled={disabled}
       onClick={onClick}
-      className="flex h-8 w-full items-center gap-2 px-4 text-left text-[12px] transition-colors hover:bg-[#2a2e39] disabled:opacity-40 disabled:hover:bg-transparent"
-      style={{ color: danger ? "#f23645" : TEXT }}
+      className="flex h-8 w-full items-center gap-2 px-4 text-left text-[12px] transition-colors hover:bg-(--app-hover) disabled:opacity-40 disabled:hover:bg-transparent"
+      style={{ color: danger ? "var(--app-down)" : TEXT }}
     >
       <span
         className="flex w-4 shrink-0 items-center justify-center"
-        style={{ color: checked ? "#2962ff" : MUTED }}
+        style={{ color: checked ? "var(--app-accent)" : MUTED }}
       >
         {checked ? <Check size={13} /> : icon}
       </span>
@@ -188,7 +187,6 @@ function MenuPanel({
 export function PineScriptsPanel() {
   const pane = useActivePane();
   const activePaneId = useAppStore((s) => s.activePaneId);
-  const setRightOpen = useAppStore((s) => s.setRightOpen);
 
   // One boot read: the saved library plus the open document (a saved script, the
   // restored unsaved draft, or a fresh "My script").
@@ -504,7 +502,7 @@ export function PineScriptsPanel() {
             type="button"
             onClick={() => setMenu(menu === "scripts" ? null : "scripts")}
             onDoubleClick={() => setRenaming(true)}
-            className="flex min-w-0 flex-1 items-center gap-1 text-left text-[13px] font-semibold hover:text-white"
+            className="flex min-w-0 flex-1 items-center gap-1 text-left text-[13px] font-semibold hover:text-(--app-text)"
             title="Recent scripts"
             data-pine-menu-trigger
             style={{ color: TEXT }}
@@ -522,8 +520,8 @@ export function PineScriptsPanel() {
           type="button"
           onClick={run}
           disabled={!draft.trim()}
-          className="flex h-[26px] shrink-0 items-center gap-1 rounded-[4px] border px-2.5 text-[12px] transition-colors hover:bg-[#2a2e39] disabled:opacity-40"
-          style={{ borderColor: "#363a45", color: TEXT }}
+          className="flex h-[26px] shrink-0 items-center gap-1 rounded-[4px] border px-2.5 text-[12px] transition-colors hover:bg-(--app-hover) disabled:opacity-40"
+          style={{ borderColor: BORDER, color: TEXT }}
           title="Run on the active chart"
         >
           <Play size={11} />
@@ -562,9 +560,6 @@ export function PineScriptsPanel() {
           >
             <MoreVertical size={14} />
           </IconButton>
-          <IconButton title="Close panel" onClick={() => setRightOpen(false)}>
-            <X size={14} />
-          </IconButton>
         </span>
       </div>
 
@@ -583,7 +578,7 @@ export function PineScriptsPanel() {
                   key={s.id}
                   type="button"
                   onClick={() => openDocument(s)}
-                  className="flex h-8 w-full items-center px-4 text-left text-[12px] transition-colors hover:bg-[#2a2e39]"
+                  className="flex h-8 w-full items-center px-4 text-left text-[12px] transition-colors hover:bg-(--app-hover)"
                   style={{
                     color: TEXT,
                     background: s.id === openId ? BORDER : undefined,
@@ -598,7 +593,7 @@ export function PineScriptsPanel() {
           <button
             type="button"
             onClick={newScript}
-            className="flex h-8 w-full items-center gap-2 px-4 text-left text-[12px] transition-colors hover:bg-[#2a2e39]"
+            className="flex h-8 w-full items-center gap-2 px-4 text-left text-[12px] transition-colors hover:bg-(--app-hover)"
             style={{ color: TEXT }}
           >
             <span className="flex w-4 shrink-0 items-center justify-center" style={{ color: MUTED }}>
@@ -702,7 +697,7 @@ export function PineScriptsPanel() {
               <span className="shrink-0" style={{ color: MUTED }}>
                 {clock(entry.time)}
               </span>
-              <span style={{ color: entry.level === "error" ? "#f23645" : "#b9bdc9" }}>
+              <span style={{ color: entry.level === "error" ? "var(--app-down)" : TEXT }}>
                 {entry.text}
               </span>
             </div>
@@ -720,7 +715,7 @@ export function PineScriptsPanel() {
             setMenu(null);
             setLogsOpen((v) => !v);
           }}
-          className="flex flex-1 items-center gap-1 px-2 text-[11px] transition-colors hover:bg-[#1e222d]"
+          className="flex flex-1 items-center gap-1 px-2 text-[11px] transition-colors hover:bg-(--app-hover)"
           style={{ color: MUTED }}
           title={logsOpen ? "Hide logs" : "Show logs"}
         >
@@ -728,7 +723,7 @@ export function PineScriptsPanel() {
           <span>Logs</span>
           <span
             className="rounded-[3px] px-1 text-[10px]"
-            style={{ background: "#2a2e39", color: TEXT }}
+            style={{ background: BORDER, color: TEXT }}
           >
             {logs.length}
           </span>
@@ -736,7 +731,7 @@ export function PineScriptsPanel() {
         <button
           type="button"
           onClick={() => setMenu(menu === "version" ? null : "version")}
-          className="flex items-center gap-1 border-l px-2 text-[11px] transition-colors hover:bg-[#1e222d]"
+          className="flex items-center gap-1 border-l px-2 text-[11px] transition-colors hover:bg-(--app-hover)"
           style={{ borderColor: BORDER, color: MUTED }}
           title="Pine version"
           data-pine-menu-trigger

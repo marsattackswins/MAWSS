@@ -1,7 +1,6 @@
 import { liveApi, LiveApiError, LiveAuthError, setCsrf } from "./api";
 import { useLiveStore } from "./store";
 import { useAppStore } from "../store";
-import { connectMock } from "../trading/mock";
 import type {
   FillDto,
   HealthDto,
@@ -17,9 +16,8 @@ let started = false;
 let attachmentEpoch = 0;
 
 const PROFILE_LABELS: Record<LiveProfileId, string> = {
-  paper: "Paper Trading",
   "binance-testnet": "Binance Testnet",
-  "binance-production": "Binance Production",
+  "binance-production": "Binance Live",
 };
 
 const PROFILE_ERROR_TEXT: Record<string, string> = {
@@ -37,10 +35,9 @@ const PROFILE_ERROR_TEXT: Record<string, string> = {
 };
 
 export type LiveConnectOutcome = "connected" | "unauthenticated" | "error";
-export type ProfileSwitchOutcome = "ready" | "paper" | "unauthenticated" | "error";
+export type ProfileSwitchOutcome = "ready" | "unauthenticated" | "error";
 
 function profileIdForEnvironment(environment: string): LiveProfileId | null {
-  if (environment === "local") return null;
   if (environment === "testnet") return "binance-testnet";
   if (environment === "production") return "binance-production";
   return null;
@@ -55,7 +52,7 @@ function fallbackStatus(meta: {
   const ready = meta.managerStatus === "ready" && meta.health.streamHealthy;
   return {
     profileId,
-    environment: profileId === "paper" ? "paper" : profileId === "binance-testnet" ? "testnet" : profileId === "binance-production" ? "production" : null,
+    environment: profileId === "binance-testnet" ? "testnet" : profileId === "binance-production" ? "production" : null,
     phase: ready ? "ready" : "degraded",
     ready,
     managerStatus: meta.managerStatus,
@@ -93,7 +90,7 @@ function applyProfileStatus(status: ProfileRuntimeStatusDto): void {
 }
 
 async function enableAuthenticatedExecution(profileId: LiveProfileId | null): Promise<void> {
-  if (profileId === null || profileId === "paper") return;
+  if (profileId === null) return;
   try {
     await liveApi.setGates({ executionEnabled: true });
     return;
@@ -112,6 +109,16 @@ async function enableAuthenticatedExecution(profileId: LiveProfileId | null): Pr
   }
 }
 
+/** Preserve client state during temporary errors if positions were previously restored */
+function shouldPreserveClient(): boolean {
+  try {
+    const savedProfileId = localStorage.getItem("maws.lastLiveProfile");
+    return savedProfileId === "binance-testnet" || savedProfileId === "binance-production";
+  } catch {
+    return false;
+  }
+}
+
 function detachClient(clearRuntime = true): void {
   stopSse();
   if (refreshTimer) {
@@ -122,7 +129,11 @@ function detachClient(clearRuntime = true): void {
   live.setAttached(false);
   live.clearState();
   if (clearRuntime) live.clearProfileRuntime();
-  useAppStore.getState().setConnectedBroker(null);
+
+  // Don't reset connectedBroker if we expect to restore from localStorage
+  if (!shouldPreserveClient()) {
+    useAppStore.getState().setConnectedBroker(null);
+  }
 }
 
 function isCurrentAttachment(status: ProfileRuntimeStatusDto, epoch: number): boolean {
@@ -157,8 +168,8 @@ function scheduleRefresh(expected: { status: ProfileRuntimeStatusDto; epoch: num
 
 export function redirectToLogin(): void {
   if (typeof window !== "undefined" && window.location.pathname !== "/login") {
-    // Hard navigation on purpose: the session is dead, so a full page load
-    // tears down the SSE bridge and all live client state before sign-in.
+    // Hard navigation: the session is dead, so a full page load tears down
+    // the SSE bridge and all live client state before sign-in.
     // eslint-disable-next-line @next/next/no-location-assign-relative-destination
     window.location.href = "/login";
   }
@@ -237,7 +248,7 @@ function stopSse(): void {
 }
 
 async function attachConfirmedProfile(status: ProfileRuntimeStatusDto, verifyAfterState: boolean): Promise<boolean> {
-  if (!isReady(status) || status.profileId === "paper") return false;
+  if (!isReady(status)) return false;
   applyProfileStatus(status);
   const epoch = attachmentEpoch;
   const loaded = await refreshState({ status, epoch });
@@ -273,18 +284,13 @@ export async function restoreServerProfile(): Promise<void> {
   try {
     const session = await liveApi.session();
     if (!session.authenticated) {
-      const paperAttached = useAppStore.getState().connectedBroker === "mock";
       detachClient();
-      if (session.env === "local" && paperAttached) connectMock();
       return;
     }
     if (session.env === "local") {
-      // Local mode is chart-only. Do not probe protected live APIs or restore
-      // an exchange attachment from a browser claim. A persisted Paper
-      // attachment remains a browser-local choice.
-      const paperAttached = useAppStore.getState().connectedBroker === "mock";
+      // Local/disconnected mode: chart-only. Do not probe protected live APIs
+      // or restore an exchange attachment from a browser claim.
       detachClient();
-      if (paperAttached) connectMock();
       return;
     }
     setCsrf(session.csrf ?? null);
@@ -302,18 +308,9 @@ export async function restoreServerProfile(): Promise<void> {
         applyProfileStatus(status);
         useAppStore.getState().setConnectedBroker("binance");
       } else {
-        // A persisted paper attachment is not authoritative. A non-ready or
-        // empty server status leaves the workspace in chart-only mode while
-        // preserving the paper books themselves.
         detachClient(false);
         applyProfileStatus(status);
       }
-      return;
-    }
-    if (status.profileId === "paper") {
-      detachClient(false);
-      connectMock();
-      applyProfileStatus(status);
       return;
     }
     stopSse();
@@ -333,7 +330,7 @@ export async function restoreServerProfile(): Promise<void> {
   }
 }
 
-/** Establishes the legacy live attachment after the server manager is connected. */
+/** Establishes the live attachment after the server manager is connected. */
 export async function connectLiveBroker(): Promise<LiveConnectOutcome> {
   const store = useLiveStore.getState();
   try {
@@ -373,14 +370,6 @@ export async function connectLiveBroker(): Promise<LiveConnectOutcome> {
 export async function switchLiveProfile(target: LiveProfileId, confirmProduction = false): Promise<ProfileSwitchOutcome> {
   const previous = useLiveStore.getState();
   try {
-    const hasServerProfile = previous.profileId !== null || useAppStore.getState().connectedBroker === "binance";
-    if (target === "paper" && !hasServerProfile) {
-      // Paper is a browser-local attachment when no server profile is active.
-      detachClient();
-      connectMock();
-      return "paper";
-    }
-
     const session = await liveApi.session();
     if (!session.authenticated) {
       detachClient();
@@ -391,17 +380,7 @@ export async function switchLiveProfile(target: LiveProfileId, confirmProduction
     stopSse();
     useLiveStore.getState().beginProfileSwitch();
     const response = await liveApi.switchProfile({ profileId: target, confirmProduction, requestId: requestId() });
-    const status = target === "paper" ? response : await waitForReady(response, target);
-    if (target === "paper") {
-      if (status.profileId !== null || status.phase === "failed" || status.phase === "detached") {
-        applyProfileStatus(status);
-        throw new LiveApiError(status.reasonCode ?? "target_start_failed", PROFILE_ERROR_TEXT[status.reasonCode ?? ""] ?? "Paper Trading could not be selected.", 409);
-      }
-      detachClient(false);
-      applyProfileStatus(status);
-      connectMock();
-      return "paper";
-    }
+    const status = await waitForReady(response, target);
 
     if (!isReady(status) || status.profileId !== target) {
       applyProfileStatus(status);
@@ -421,7 +400,7 @@ export async function switchLiveProfile(target: LiveProfileId, confirmProduction
       // The original stable error category is more useful than a second failure.
     }
     if (observed) {
-      if (target !== "paper" && observed.phase === "switching") {
+      if (observed.phase === "switching") {
         try {
           observed = await waitForReady(observed, target);
         } catch {
@@ -429,18 +408,12 @@ export async function switchLiveProfile(target: LiveProfileId, confirmProduction
         }
       }
       applyProfileStatus(observed);
-      if (isReady(observed) && observed.profileId !== "paper") {
+      if (isReady(observed)) {
         stopSse();
         if (await attachConfirmedProfile(observed, false)) {
           useLiveStore.getState().notify("error", `${safeErrorText(error)} Previous profile restored.`);
           return "error";
         }
-      } else if (isReady(observed) && observed.profileId === "paper") {
-        detachClient(false);
-        connectMock();
-        applyProfileStatus(observed);
-        useLiveStore.getState().notify("error", `${safeErrorText(error)} Paper Trading remains active.`);
-        return "error";
       }
       detachClient(false);
       applyProfileStatus(observed);
@@ -470,7 +443,10 @@ export async function disconnectLiveBroker(): Promise<void> {
   await liveApi.disconnect().catch(() => undefined);
 }
 
-/** Restores a persisted paper attachment only through the existing paper store. */
+/**
+ * Restores a persisted live session after page hydration.
+ * Only attempts restore when a "binance" broker was last persisted.
+ */
 export async function restoreLiveSessionIfAttached(attachedBroker: string | null): Promise<void> {
   if (started || attachedBroker !== "binance") return;
   started = true;

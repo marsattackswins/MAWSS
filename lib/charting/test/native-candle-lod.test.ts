@@ -52,6 +52,15 @@ describe('candle wick width', () => {
 
 describe('candle geometry (device-pixel snapping)', () => {
     const dprs = [1, 1.5, 2, 3];
+
+    it('writes into a caller-provided object so a render loop allocates no candle objects', () => {
+        const out = { wickX: -1, wickW: -1, bodyX: -1, bodyW: -1, center: -1 };
+        const got = candleGeometry(12.3, 6, 2, 1, out);
+        expect(got).toBe(out);
+        expect(out.wickW).toBeGreaterThan(0);
+        expect(out.bodyW).toBeGreaterThanOrEqual(out.wickW);
+        expect(out.center).toBeCloseTo(out.wickX + out.wickW / 2, 9);
+    });
     const spacings = [3, 3.5, 4, 4.7, 5, 6.3, 8, 12.5, 20];
 
     it('keeps the wick exactly centered in the body at every zoom and dpr', () => {
@@ -203,5 +212,13 @@ describe('aggregateCandleColumns (sub-pixel LOD bucketing)', () => {
             { x: 0, hi: 13, lo: 10, color: '#ff0' },
             { x: 0, hi: 14, lo: 9, color: 'up' }, // bars 1 and 3 bridge across bar 2's range
         ]);
+    });
+
+    it('extends an overlapping single-color run in place across a dense pixel column', () => {
+        const dense = Array.from({ length: 1000 }, (_, i) =>
+            bar(i, 100 + i * 0.001, 101 + i * 0.001, 99 + i * 0.001, 100 + i * 0.001),
+        );
+        const sticks = aggregateCandleColumns(dense, 0, dense.length - 1, oneColumn, yOf, dirColor);
+        expect(sticks).toEqual([{ x: 0, hi: 101.999, lo: 99, color: 'up' }]);
     });
 });

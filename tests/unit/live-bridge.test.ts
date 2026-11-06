@@ -98,26 +98,6 @@ describe("live broker attachment", () => {
     expect(useLiveStore.getState().attached).toBe(false);
   });
 
-  test("local mode preserves a persisted Paper attachment without live state", async () => {
-    useAppStore.setState({ connectedBroker: "mock", orders: [{ id: "paper-order" } as never] });
-    mockLiveApi.session.mockResolvedValue({ authenticated: true, csrf: "csrf", env: "local" });
-
-    await restoreServerProfile();
-
-    expect(useAppStore.getState().connectedBroker).toBe("mock");
-    expect(useAppStore.getState().orders).toEqual([{ id: "paper-order" }]);
-    expect(useLiveStore.getState().attached).toBe(false);
-    expect(mockLiveApi.profile).not.toHaveBeenCalled();
-  });
-
-  test("paper selection does not require an operator session", async () => {
-    await expect(switchLiveProfile("paper")).resolves.toBe("paper");
-
-    expect(mockLiveApi.session).not.toHaveBeenCalled();
-    expect(useAppStore.getState().connectedBroker).toBe("mock");
-    expect(useLiveStore.getState().attached).toBe(false);
-  });
-
   test("failed live connect clears the app broker and live state", async () => {
     useAppStore.setState({ connectedBroker: "binance" });
     useLiveStore.setState({ attached: true, positions: [{ id: "p", symbol: "BTCUSDT" } as never] });
@@ -193,8 +173,8 @@ describe("live broker attachment", () => {
     expect(mockLiveApi.setGates).toHaveBeenCalledWith({ executionEnabled: true });
   });
 
-  test("does not restore a persisted paper broker when the server has no active profile", async () => {
-    useAppStore.setState({ connectedBroker: "mock", orders: [{ id: "paper-order" } as never] });
+  test("does not restore a stale binance claim when the server has no active profile", async () => {
+    useAppStore.setState({ connectedBroker: "binance" });
     mockLiveApi.session.mockResolvedValue({ authenticated: true, csrf: "csrf", env: "testnet" });
     mockLiveApi.profile.mockResolvedValue({
       profileId: null,
@@ -211,7 +191,6 @@ describe("live broker attachment", () => {
     await restoreServerProfile();
 
     expect(useAppStore.getState().connectedBroker).toBeNull();
-    expect(useAppStore.getState().orders).toEqual([{ id: "paper-order" }]);
     expect(useLiveStore.getState().attached).toBe(false);
   });
 

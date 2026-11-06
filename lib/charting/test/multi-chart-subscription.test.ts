@@ -26,6 +26,10 @@ class MockMarketDataFeed implements MarketDataFeed {
         return [];
     }
     
+    async load(_cfg: MarketConfig): Promise<OHLCV[]> {
+        return [];
+    }
+    
     subscribe(_cfg: MarketConfig, onBar: (bar: OHLCV) => void): Unsubscribe {
         const key = `${_cfg.symbol}/${_cfg.timeframe}`;
         const current = this.subscriptionCount.get(key) || 0;
@@ -42,14 +46,14 @@ class MockMarketDataFeed implements MarketDataFeed {
         };
     }
     
-    unsubscribe(_symbol: string, _timeframe: string): void {
-        const key = `${_symbol}/${_timeframe}`;
-        const current = this.subscriptionCount.get(key) || 0;
-        if (current <= 1) {
-            this.subscriptionCount.delete(key);
-        } else {
-            this.subscriptionCount.set(key, current - 1);
-        }
+    /** Optional method - not implemented */
+    loadProgressive?(_cfg: MarketConfig, _onBatch: (bars: OHLCV[]) => void, _opts?: { signal?: AbortSignal }): Promise<OHLCV[] | null> {
+        return Promise.resolve(null);
+    }
+    
+    /** Optional method - not implemented */
+    symbolInfo?(_cfg: MarketConfig) {
+        return undefined;
     }
     
     /** Count of distinct symbol/timeframe pairs with at least one subscriber */

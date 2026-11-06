@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeEach, afterAll } from '@jest/globals';
 import { useAppStore } from '../../lib/store';
+import { useLiveStore } from '../../lib/live/store';
 import {
   quantizeQtyToStep,
   resolveSymbolTrading,
@@ -28,9 +29,9 @@ afterAll(() => replaceUniverse(universeSnapshot));
 beforeEach(() => {
   useAppStore.setState({
     symbolTrading: {},
-    mockBalance: BALANCE,
     chartSettings: { ...DEFAULT_CHART_SETTINGS, defaultLeverage: 7 },
   });
+  useLiveStore.setState({ account: { balance: BALANCE, available: BALANCE, equity: BALANCE, margin: 0, unrealized: 0, fetchedAt: Date.now(), equitySource: "exchange" } });
 });
 
 describe('resolveSymbolTrading (real store)', () => {

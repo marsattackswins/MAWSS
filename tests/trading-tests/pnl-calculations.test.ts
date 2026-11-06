@@ -2,11 +2,11 @@ import { describe, it, expect } from '@jest/globals';
 import type { ChartPosition } from '../../types';
 
 /**
- * Tests for P&L (Profit & Loss) calculations in paper trading
+ * Tests for P&L (Profit & Loss) calculations.
  * Covers long and short position P&L with various scenarios
  */
 
-describe('Paper Trading P&L Calculations', () => {
+describe('P&L Calculations', () => {
   describe('long position P&L', () => {
     it('should calculate profit for long position when price increases', () => {
       const position: ChartPosition = {

@@ -115,7 +115,7 @@ Status line (cell)/Advanced (cell)/Time zone/Trading session/Watermark.
 - The per-cell **nav bar** (`components/charts/ChartNavigation.tsx`: zoom −/+, scroll ‹/›, reset) and its `navigationButtons` store key + host row: view reset already lives on the chart context menu ("Reset chart view", ALT+R) and the workspace cell cluster, and wheel/drag cover zoom/pan. `showPlusButton` stays — a `CrosshairPlus` toggle was still unreachable, so it now has a **Chart chrome** group in the Canvas tab.
 
 ### LIVE — previously mis-listed as dead (verified consumers)
-- Trading: `oneClickTrading` (TopBar order gate), `executionSound`+`executionSoundName` (paper engine plays on fill), `showOnlyRejectionNotifications` (live notification filter).
+- Trading: `oneClickTrading` (TopBar order gate), `executionSound`+`executionSoundName` (execution sound plays on fill), `showOnlyRejectionNotifications` (live notification filter).
 - Events: `eventsBreaks` + `eventsBreakColor` (EventBreaks layer), `newsNotification` (NewsPanel), `defaultQty` (falls back into `resolveOrderQty`), `defaultLeverage` (symbol settings fallback).
 
 ### KEPT as real no-op SURFACES only (none left in the dialog)

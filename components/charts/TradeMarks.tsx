@@ -12,14 +12,15 @@
  * layer. Vela never sees broker credentials or executes orders directly.
  */
 
-import { useEffect, useMemo, useRef } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { getChart } from "@/lib/chart-registry";
 import { mawsFeed } from "@/lib/maws/feed";
 import { formatPrice } from "@/lib/maws/feed";
 import { useBrokerBook } from "@/lib/selectors/broker";
+import { useLiveStore } from "@/lib/live/store";
 import { useAppStore } from "@/lib/store";
 import { dispatchProtect, dispatchCancelOrder } from "@/lib/trading/dispatch";
-import { findProtectiveOrderId } from "@/lib/trade-marks";
+import { findProtectiveOrderId, validExitPrice } from "@/lib/trade-marks";
 import type { TradeZonesData } from "@/lib/vela-layers";
 import type { DrawingStyle } from "@/lib/charting";
 import type { ChartPaneState } from "@/types";
@@ -49,13 +50,21 @@ export function TradeMarks({ pane }: { pane: ChartPaneState }) {
   const { orders, positions } = useBrokerBook();
   const updateAlert = useAppStore((s) => s.updateAlert);
   const removeAlert = useAppStore((s) => s.removeAlert);
-  const updateOrder = useAppStore((s) => s.updateOrder);
-  const removeOrder = useAppStore((s) => s.removeOrder);
-  const updatePosition = useAppStore((s) => s.updatePosition);
-  const removePosition = useAppStore((s) => s.removePosition);
   const replay = useAppStore((s) => s.replay);
   const live = useAppStore((s) => s.connectedBroker) === "binance";
   const busy = useRef(false);
+  /** Bumped when a drag is refused, so the sync effect restores the stored price. */
+  const [revertTick, setRevertTick] = useState(0);
+
+  /**
+   * A TP/SL drag may not cross the entry: the broker would accept it as a
+   * bracket on the wrong side (a "stop" in profit / "target" in loss). Refuse
+   * it, tell the user, and snap the line back to the stored price.
+   */
+  const rejectExitDrag = (message: string) => {
+    useLiveStore.getState().notify("error", message);
+    setRevertTick((t) => t + 1);
+  };
 
   const replaying = replay?.paneId === pane.id;
 
@@ -85,8 +94,12 @@ export function TradeMarks({ pane }: { pane: ChartPaneState }) {
           label: `${buy ? "Buy" : "Sell"} ${o.type === "stop" ? "Stop" : o.type === "market" ? "Market" : "Limit"} ${o.qty}`,
           color: buy ? settings.buyLineColor : settings.sellLineColor,
           lineStyle: o.type === "stop" ? "dotted" : "dashed",
-          onMove: (price) => updateOrder(o.id, { price }),
-          onRemove: () => removeOrder(o.id),
+          onMove: (_price) => {
+            // Orders shown on chart are live; mutations go through the API.
+          },
+          onRemove: () => {
+            if (live) void dispatchCancelOrder(o.id);
+          },
         });
       }
     }
@@ -101,8 +114,12 @@ export function TradeMarks({ pane }: { pane: ChartPaneState }) {
           label: `${long ? "Long" : "Short"} ${p.qty} @ ${formatPrice(p.symbol, p.entry)}`,
           color,
           lineStyle: "solid",
-          onMove: (price) => updatePosition(p.id, { entry: price }),
-          onRemove: () => removePosition(p.id),
+          onMove: (_price) => {
+            // Position entry shown on chart; moves are not supported for live positions.
+          },
+          onRemove: () => {
+            // Closing a position from chart marks is done via the positions panel.
+          },
         });
       }
       if (settings.showTpSlLines && p.tp != null) {
@@ -113,14 +130,16 @@ export function TradeMarks({ pane }: { pane: ChartPaneState }) {
           color: settings.tpLineColor,
           lineStyle: "dashed",
           onMove: (price) => {
+            if (!validExitPrice(p.side, p.entry, "tp", price)) {
+              rejectExitDrag("Take profit must be on the profit side of the entry");
+              return;
+            }
             if (live) {
               if (busy.current) return;
               busy.current = true;
               void dispatchProtect(p.symbol, price, p.sl).finally(() => {
                 busy.current = false;
               });
-            } else {
-              updatePosition(p.id, { tp: price });
             }
           },
           onRemove: () => {
@@ -133,8 +152,6 @@ export function TradeMarks({ pane }: { pane: ChartPaneState }) {
                 p.sl,
               );
               if (orderId) void dispatchCancelOrder(orderId);
-            } else {
-              updatePosition(p.id, { tp: null });
             }
           },
         });
@@ -147,14 +164,16 @@ export function TradeMarks({ pane }: { pane: ChartPaneState }) {
           color: settings.slLineColor,
           lineStyle: "dashed",
           onMove: (price) => {
+            if (!validExitPrice(p.side, p.entry, "sl", price)) {
+              rejectExitDrag("Stop loss must be on the loss side of the entry");
+              return;
+            }
             if (live) {
               if (busy.current) return;
               busy.current = true;
               void dispatchProtect(p.symbol, p.tp, price).finally(() => {
                 busy.current = false;
               });
-            } else {
-              updatePosition(p.id, { sl: price });
             }
           },
           onRemove: () => {
@@ -167,8 +186,6 @@ export function TradeMarks({ pane }: { pane: ChartPaneState }) {
                 p.sl,
               );
               if (orderId) void dispatchCancelOrder(orderId);
-            } else {
-              updatePosition(p.id, { sl: null });
             }
           },
         });
@@ -180,15 +197,19 @@ export function TradeMarks({ pane }: { pane: ChartPaneState }) {
           label: `Liq ${p.leverage}x ${formatPrice(p.symbol, p.liq)}`,
           color: settings.liqLineColor,
           lineStyle: "dotted",
-          onMove: (price) => updatePosition(p.id, { liq: price }),
-          onRemove: () => updatePosition(p.id, { liq: null }),
+          onMove: (_price) => {
+            // Liquidation line is read-only.
+          },
+          onRemove: () => {
+            // Liquidation line is read-only.
+          },
         });
       }
     }
     return list;
   }, [
     alerts, orders, positions, pane.symbol, settings, live,
-    updateAlert, removeAlert, updateOrder, removeOrder, updatePosition, removePosition,
+    updateAlert, removeAlert,
   ]);
 
   const marksRef = useRef(marks);
@@ -294,7 +315,7 @@ export function TradeMarks({ pane }: { pane: ChartPaneState }) {
       cancelled = true;
       if (timer) window.clearTimeout(timer);
     };
-  }, [pane.id, marks, replaying]);
+  }, [pane.id, marks, replaying, revertTick]);
 
   // Vela → store: drag events on our lines.
   useEffect(() => {

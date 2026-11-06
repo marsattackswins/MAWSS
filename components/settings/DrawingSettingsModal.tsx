@@ -39,6 +39,7 @@ import {
 } from "@/lib/drawings";
 import { getSymbol } from "@/lib/maws/universe";
 import { useAppStore } from "@/lib/store";
+import { useLiveStore } from "@/lib/live/store";
 import { resolveSymbolTrading } from "@/lib/trading/symbol-settings";
 import { cloneVisibility } from "@/lib/visibility";
 import type {
@@ -305,7 +306,7 @@ export function DrawingSettingsModal() {
   const target = useAppStore((s) => s.drawingSettingsTarget);
   const setTarget = useAppStore((s) => s.setDrawingSettingsTarget);
   const panes = useAppStore((s) => s.panes);
-  const mockBalance = useAppStore((s) => s.mockBalance);
+  const accountBalance = useLiveStore((s) => s.account)?.balance ?? 0;
   const updateDrawing = useAppStore((s) => s.updateDrawing);
   const [genericTab, setGenericTab] = useState<GenericTab>("style");
   const [fibTab, setFibTab] = useState<FibTab>("style");
@@ -333,7 +334,7 @@ export function DrawingSettingsModal() {
 
   const inputDefaults = useMemo(
     () => ({
-      accountSize: mockBalance,
+      accountSize: accountBalance,
       lotSize: trading?.margin ?? 100,
       risk:
         trading?.sizingMode === "percent"
@@ -342,7 +343,7 @@ export function DrawingSettingsModal() {
       riskUnit: (trading?.sizingMode === "percent" ? "percent" : "money") as PositionRiskUnit,
       leverage: trading?.leverage ?? 10,
     }),
-    [mockBalance, trading],
+    [accountBalance, trading],
   );
 
   useEffect(() => {
@@ -353,7 +354,7 @@ export function DrawingSettingsModal() {
     }
     const t = pane ? resolveSymbolTrading(pane.symbol) : null;
     const defaults = {
-      accountSize: useAppStore.getState().mockBalance,
+      accountSize: useLiveStore.getState().account?.balance ?? 0,
       lotSize: t?.margin ?? 100,
       risk:
         t?.sizingMode === "percent" ? (t?.marginPercent ?? 1) : (t?.margin ?? 100),

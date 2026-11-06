@@ -49,3 +49,39 @@ describe("shell bottom-area layout", () => {
     expect(appShell).not.toContain("ChartAutoScale");
   });
 });
+
+describe("topbar disconnected trading state", () => {
+  test("BuySellStrip renders a Disconnected label (data-testid) when disconnected=true", () => {
+    // This is a structural assertion — the `data-testid="topbar-disconnected"` label
+    // must be present in the JSX so the E2E test can locate it.
+    expect(topBar).toContain('data-testid="topbar-disconnected"');
+    expect(topBar).toContain("Disconnected");
+  });
+
+  test("BuySellStrip wraps Sell/Buy buttons in a conditional branch (disconnected variable)", () => {
+    // When disconnected=true, the Sell/Buy buttons must not render.
+    // Structurally: the buttons are wrapped inside `{disconnected ? ... : <>...</>}`.
+    // Verify the disconnected guard exists.
+    expect(topBar).toContain("disconnected");
+    // Sell and Buy are only in the non-disconnected branch.
+    expect(topBar).toContain('"Sell at bid"');
+    expect(topBar).toContain('"Buy at ask"');
+  });
+
+  test("disconnected is true when connectedBroker is not binance", () => {
+    // The computed variable: connectedBroker !== "binance"
+    // Structural: this assignment must appear in the TopBar source.
+    expect(topBar).toContain("connectedBroker !== \"binance\"");
+  });
+
+  test("title for the Disconnected label describes the required action", () => {
+    expect(topBar).toContain("Connect a trading profile to trade");
+  });
+
+  test("paper trading components are absent from AppShell and TopBar", () => {
+    expect(appShell).not.toContain("MockBrokerLoop");
+    expect(appShell).not.toContain("AccountSettingsModal");
+    expect(topBar).not.toContain("connectMock");
+    expect(topBar).not.toContain("paper");
+  });
+});

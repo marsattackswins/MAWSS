@@ -1,7 +1,7 @@
 /** Chrome colors for shell UI (everything except the chart canvas). */
 
-import { LIGHT_THEME, resolveTheme, type ThemeName } from "@/lib/charting";
-import type { ChartSettings } from "@/types";
+import { LIGHT_THEME, resolveTheme, resolveThemeIndicatorColors, type ThemeName } from "@/lib/charting";
+import type { ChartSettings, IndicatorInstance, IndicatorSettingsMap } from "@/types";
 
 export type AppSettings = {
   /** Page / shell background */
@@ -20,6 +20,14 @@ export type AppSettings = {
   textColor: string;
   /** Secondary / muted text */
   mutedColor: string;
+  /** Tertiary / faint text */
+  faintColor?: string;
+  /** Bullish / positive values */
+  upColor?: string;
+  /** Bearish / negative values */
+  downColor?: string;
+  /** Accent / interactive highlights */
+  accentColor?: string;
   /** When true, individual color pickers are visible in the Theme settings tab. */
   advancedColors?: boolean;
 };
@@ -33,6 +41,10 @@ export const DEFAULT_APP_SETTINGS: AppSettings = {
   hoverColor: "#1a1a1a",
   textColor: "#d1d4dc",
   mutedColor: "#787b86",
+  faintColor: "#4c525e",
+  upColor: "#089981",
+  downColor: "#f23645",
+  accentColor: "#2962ff",
 };
 
 const HEX = /^#([0-9a-fA-F]{3}|[0-9a-fA-F]{6}|[0-9a-fA-F]{8})$/;
@@ -55,6 +67,10 @@ export function normalizeAppSettings(
     hoverColor: colorOr(base.hoverColor, raw?.hoverColor),
     textColor: colorOr(base.textColor, raw?.textColor),
     mutedColor: colorOr(base.mutedColor, raw?.mutedColor),
+    faintColor: colorOr(base.faintColor || "#4c525e", raw?.faintColor),
+    upColor: colorOr(base.upColor || "#089981", raw?.upColor),
+    downColor: colorOr(base.downColor || "#f23645", raw?.downColor),
+    accentColor: colorOr(base.accentColor || "#2962ff", raw?.accentColor),
     advancedColors: raw?.advancedColors ?? false,
   };
 }
@@ -72,6 +88,11 @@ export function applyAppTheme(settings: AppSettings) {
   root.style.setProperty("--app-hover", s.hoverColor);
   root.style.setProperty("--app-text", s.textColor);
   root.style.setProperty("--app-muted", s.mutedColor);
+  root.style.setProperty("--app-faint", s.faintColor || "#4c525e");
+  root.style.setProperty("--app-up", s.upColor || "#089981");
+  root.style.setProperty("--app-down", s.downColor || "#f23645");
+  root.style.setProperty("--app-accent", s.accentColor || "#2962ff");
+
   // Alias used by some shell widgets
   root.style.setProperty("--maws-bg", s.backgroundColor);
   root.style.setProperty("--maws-panel", s.panelColor);
@@ -81,6 +102,11 @@ export function applyAppTheme(settings: AppSettings) {
   root.style.setProperty("--maws-hover", s.hoverColor);
   root.style.setProperty("--maws-text", s.textColor);
   root.style.setProperty("--maws-muted", s.mutedColor);
+  root.style.setProperty("--maws-faint", s.faintColor || "#4c525e");
+  root.style.setProperty("--maws-up", s.upColor || "#089981");
+  root.style.setProperty("--maws-down", s.downColor || "#f23645");
+  root.style.setProperty("--maws-accent", s.accentColor || "#2962ff");
+
   // Keep legacy TV tokens in sync for anything still referencing them.
   root.style.setProperty("--color-tv-bg", s.backgroundColor);
   root.style.setProperty("--color-tv-panel", s.panelColor);
@@ -89,6 +115,10 @@ export function applyAppTheme(settings: AppSettings) {
   root.style.setProperty("--color-tv-border", s.borderColor);
   root.style.setProperty("--color-tv-text", s.textColor);
   root.style.setProperty("--color-tv-muted", s.mutedColor);
+  root.style.setProperty("--color-tv-faint", s.faintColor || "#4c525e");
+  root.style.setProperty("--color-tv-green", s.upColor || "#089981");
+  root.style.setProperty("--color-tv-red", s.downColor || "#f23645");
+  root.style.setProperty("--color-tv-blue", s.accentColor || "#2962ff");
 }
 
 // ── Vela theme ↔ app theme ─────────────────────────────────────────────────
@@ -97,10 +127,8 @@ export function applyAppTheme(settings: AppSettings) {
  *  AND every shell panel (TopBar, watchlist, docks, modals). */
 export function appSettingsFromVelaTheme(themeName: ThemeName): AppSettings {
   const t = resolveTheme(themeName);
-  // Shell panels ALWAYS take the theme's canvas tone, whatever the theme: the
-  // docks/watchlist read as part of the same surface as the chart. Vela's
-  // own `bgPanel` is a separate dialog-surface token — using it for the shell
-  // made classic/light docks a visibly different color from the chart.
+  const accent = themeName === "gruvbox" ? "#fabd2f" : "#2962ff";
+  const faint = t.textMuted ?? (themeName === "light" ? "#94a3b8" : "#4c525e");
   return {
     backgroundColor: t.background,
     panelColor: t.background,
@@ -110,6 +138,10 @@ export function appSettingsFromVelaTheme(themeName: ThemeName): AppSettings {
     hoverColor: t.bgHover ?? t.bgChip ?? t.border ?? t.borderColor,
     textColor: t.textPrimary ?? t.textColor,
     mutedColor: t.textSecondary ?? t.textColor,
+    faintColor: faint,
+    upColor: t.upColor,
+    downColor: t.downColor,
+    accentColor: accent,
   };
 }
 
@@ -124,8 +156,10 @@ export function velaThemeNameFromAppSettings(settings: AppSettings): ThemeName {
     typeof t?.background === "string" ? t.background.trim().toLowerCase() : "";
   const light = themeBg(LIGHT_THEME);
   const classic = themeBg(resolveTheme("classic"));
+  const gruvbox = themeBg(resolveTheme("gruvbox"));
   if (light && bg === light) return "light";
   if (classic && bg === classic) return "classic";
+  if (gruvbox && bg === gruvbox) return "gruvbox";
   return "dark";
 }
 
@@ -212,4 +246,76 @@ export function chartSettingsFromVelaTheme(
     scaleTextColor: t.textColor,
     scaleLineColor: t.borderColor,
   };
+}
+
+/** Updates default indicator settings to match a newly selected theme. */
+export function themeIndicatorSettings(
+  themeName: ThemeName,
+  current: IndicatorSettingsMap,
+): IndicatorSettingsMap {
+  const p = resolveThemeIndicatorColors(themeName);
+  return {
+    ...current,
+    vwap: { ...current.vwap, color: p.vwap },
+    ema: { ...current.ema, color: p.ema },
+    bb: {
+      ...current.bb,
+      basis: { ...current.bb.basis, color: p.bbBasis },
+      upper: { ...current.bb.upper, color: p.bbUpper },
+      lower: { ...current.bb.lower, color: p.bbLower },
+      backgroundColor: p.bbBasis,
+    },
+    rsi: { ...current.rsi, color: p.rsi },
+    stoch: {
+      ...current.stoch,
+      k: { ...current.stoch.k, color: p.stochK },
+      d: { ...current.stoch.d, color: p.stochD },
+    },
+    atr: { ...current.atr, color: p.atr },
+    adx: { ...current.adx, color: p.adx },
+  };
+}
+
+/** Recolor an active study to match the theme if it was using default theme colors. */
+export function themeStudySettings(themeName: ThemeName, study: IndicatorInstance): IndicatorInstance {
+  const p = resolveThemeIndicatorColors(themeName);
+  // Cast to any so spread-merging a single color field doesn't conflict with
+  // the strict discriminated-union on IndicatorInstance["settings"].
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const s = study.settings as any;
+  if (!s) return study;
+  switch (study.type) {
+    case "vwap":
+      return { ...study, settings: { ...s, color: p.vwap } as IndicatorInstance["settings"] };
+    case "ema":
+      return { ...study, settings: { ...s, color: p.ema } as IndicatorInstance["settings"] };
+    case "bb":
+      return {
+        ...study,
+        settings: {
+          ...s,
+          basis: s.basis ? { ...s.basis, color: p.bbBasis } : s.basis,
+          upper: s.upper ? { ...s.upper, color: p.bbUpper } : s.upper,
+          lower: s.lower ? { ...s.lower, color: p.bbLower } : s.lower,
+          backgroundColor: p.bbBasis,
+        } as IndicatorInstance["settings"],
+      };
+    case "rsi":
+      return { ...study, settings: { ...s, color: p.rsi } as IndicatorInstance["settings"] };
+    case "stoch":
+      return {
+        ...study,
+        settings: {
+          ...s,
+          k: s.k ? { ...s.k, color: p.stochK } : s.k,
+          d: s.d ? { ...s.d, color: p.stochD } : s.d,
+        } as IndicatorInstance["settings"],
+      };
+    case "atr":
+      return { ...study, settings: { ...s, color: p.atr } as IndicatorInstance["settings"] };
+    case "adx":
+      return { ...study, settings: { ...s, color: p.adx } as IndicatorInstance["settings"] };
+    default:
+      return study;
+  }
 }

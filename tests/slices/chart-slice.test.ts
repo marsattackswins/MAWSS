@@ -11,7 +11,6 @@ import {
   DEFAULT_CHART_SETTINGS,
   DEFAULT_INDICATOR_SETTINGS,
   DEFAULT_LAYOUT_SYNC,
-  DEFAULT_PAPER_ACCOUNT,
 } from "@/types";
 import type { ChartPaneState } from "@/types";
 
@@ -30,8 +29,7 @@ import type { ChartPaneState } from "@/types";
  *     chart field from the composed store (50-key schema itself is pinned by
  *     tests/persistence-compat.test.ts);
  *   - cross-slice defaultLeverage contract: patchSymbolTrading's fallback
- *     still reads chartSettings.defaultLeverage (read-only) and
- *     resetPaperAccount (root-owned, untouched) still writes it;
+ *     still reads chartSettings.defaultLeverage (read-only);
  *   - the collective indicator visibility switch preserves each study's own
  *     hidden setting;
  *   - atomicity: counting-set harness proves setSymbol / setIndicatorSettingsOpen
@@ -534,18 +532,6 @@ describe("chart-slice actions (real root store)", () => {
     expect(now.symbolTrading["NEWUSDT"]?.leverage).toBe(25);
     // The fallback is read-only: chartSettings must not be mutated.
     expect(now.chartSettings.defaultLeverage).toBe(25);
-  });
-
-  it("resetPaperAccount (root-owned) still writes chartSettings.defaultLeverage", () => {
-    const s = useAppStore.getState();
-    s.patchChartSettings({ defaultLeverage: 99, grid: false });
-    s.resetPaperAccount();
-    const now = useAppStore.getState();
-    expect(now.chartSettings.defaultLeverage).toBe(
-      DEFAULT_PAPER_ACCOUNT.leverage.crypto,
-    );
-    // Only defaultLeverage is touched — the rest of chartSettings survives.
-    expect(now.chartSettings.grid).toBe(false);
   });
 });
 

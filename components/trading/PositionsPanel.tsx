@@ -11,14 +11,8 @@ import {
   dispatchCancelOrder,
   dispatchClosePosition,
 } from "@/lib/trading/dispatch";
-import {
-  disconnectBroker,
-  formatNum,
-  formatUsd,
-  ordersMargin,
-  positionPnl,
-  usedMargin,
-} from "@/lib/trading/mock";
+import { formatNum, formatUsd } from "@/lib/trading/format";
+import { PerformancePanel } from "@/components/trading/PerformancePanel";
 import { timezoneIana } from "@/lib/timezone";
 import { useQuotes } from "@/lib/use-quotes";
 import type { BalanceHistoryEntry, OrderHistoryEntry } from "@/types";
@@ -52,7 +46,7 @@ export function FreshnessBadge({ live }: { live: boolean }) {
     </span>
   );
 }
-import { ChevronDown, ChevronsDown, Columns3, Download, LogOut, Maximize2, Plug, Settings } from "lucide-react";
+import { ChevronDown, ChevronsDown, Columns3, Download, LogOut, Maximize2, Plug } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 
 function Metric({
@@ -170,15 +164,13 @@ type OrderFilter = "all" | "filled" | "cancelled" | "rejected";
 
 export function useTradingMetrics() {
   const connected = useAppStore((s) => s.connectedBroker);
-  const balance = useAppStore((s) => s.mockBalance);
-  const realized = useAppStore((s) => s.mockRealized);
   const leverage = useAppStore((s) => s.chartSettings.defaultLeverage);
   const liveAccount = useLiveStore((s) => s.account);
   // Authoritative lifetime metrics from the server-side exchange income
   // ledger — NOT the capped latest-50-fill list.
   const liveMetrics = useLiveStore((s) => s.accountMetrics);
   const liveFills = useLiveStore((s) => s.fills);
-  // Exactly one book (live for binance, paper otherwise) — never a mix.
+  // Exactly one book (live for binance) — never a mix.
   const { orders, positions } = useBrokerBook();
   const quotes = useQuotes();
   const lastOf = (symbol: string) => quotes.find((q) => q.symbol === symbol)?.last ?? 0;
@@ -193,13 +185,13 @@ export function useTradingMetrics() {
     equitySource: "fallback" as const,
   };
   const liveMetricsSafe = liveMetrics ?? { realizedPnl: 0, commission: 0, fundingFee: 0, netRealized: 0, fetchedAt: null };
-  const unrealized = live ? liveAcc.unrealized : positions.reduce((sum, p) => sum + positionPnl(p, lastOf(p.symbol)), 0);
-  const margin = live ? liveAcc.margin : usedMargin(positions);
-  const orderMargin = live ? 0 : ordersMargin(orders, leverage);
-  const equity = live ? liveAcc.equity : balance + margin + unrealized;
-  const accountBalance = live ? liveAcc.balance : balance + margin;
-  const available = live ? liveAcc.available : balance;
-  const realizedShown = live ? liveMetricsSafe.realizedPnl : realized;
+  const unrealized = live ? liveAcc.unrealized : 0;
+  const margin = live ? liveAcc.margin : 0;
+  const orderMargin = live ? 0 : 0;
+  const equity = live ? liveAcc.equity : 0;
+  const accountBalance = live ? liveAcc.balance : 0;
+  const available = live ? liveAcc.available : 0;
+  const realizedShown = live ? liveMetricsSafe.realizedPnl : 0;
   const buffer = margin + orderMargin <= 0 ? 100 : (equity / (margin + orderMargin)) * 100;
   const pnlTone = (v: number): "up" | "down" | "muted" =>
     v > 0 ? "up" : v < 0 ? "down" : "muted";
@@ -291,17 +283,15 @@ export type PosRow = {
 };
 
 export function computePosRows(
-  positions: Array<Parameters<typeof positionPnl>[0] & { id: string; mark?: number; unrealized?: number; notional?: number; marginType?: string; isolatedMargin?: number; isolatedWallet?: number; markAgeMs?: number; markPriceStale?: boolean }>,
+  positions: Array<{ id: string; symbol: string; side: "long" | "short"; entry: number; qty: number; leverage: number; tp: number | null; sl: number | null; liq: number | null; mark?: number; unrealized?: number; notional?: number; marginType?: string; isolatedMargin?: number; isolatedWallet?: number; markAgeMs?: number; markPriceStale?: boolean }>,
   live: boolean,
   lastOf: (symbol: string) => number,
 ): PosRow[] {
   return live
     ? positions.map((p) => {
         const last = (p.mark && p.mark > 0) ? p.mark : p.entry;
-        const pnl = (p.mark && p.mark > 0) ? positionPnl(p, last) : (p.unrealized ?? 0);
+        const pnl = (p.mark && p.mark > 0) ? (p.side === "long" ? (last - p.entry) * p.qty : (p.entry - last) * p.qty) : (p.unrealized ?? 0);
         const notional = p.qty * last;
-        // Use Binance isolatedWallet for isolated positions (matches Binance UI display).
-        // Fallback to isolatedMargin if isolatedWallet unavailable, then estimate.
         const margin = (p.marginType === "isolated" && p.isolatedWallet != null && p.isolatedWallet > 0)
           ? p.isolatedWallet
           : (p.marginType === "isolated" && p.isolatedMargin != null && p.isolatedMargin > 0)
@@ -339,7 +329,7 @@ export function computePosRows(
           sl: p.sl,
           leverage: p.leverage,
           last,
-          pnl: positionPnl(p, last),
+          pnl: p.side === "long" ? (last - p.entry) * p.qty : (p.entry - last) * p.qty,
           notional,
           margin: notional / Math.max(1, p.leverage),
         };
@@ -348,16 +338,11 @@ export function computePosRows(
 
 export function PositionsPanel() {
   const tab = useAppStore((s) => s.bottomTab);
-  const orderHistory = useAppStore((s) => s.orderHistory);
-  const balanceHistory = useAppStore((s) => s.balanceHistory);
-  const journal = useAppStore((s) => s.journal);
   const timezone = useAppStore((s) => s.chartSettings.timezone);
   const stampTz = timezoneIana(timezone);
   const setBrokerDialogOpen = useAppStore((s) => s.setBrokerDialogOpen);
-  const setAccountSettingsOpen = useAppStore((s) => s.setAccountSettingsOpen);
   const setBottomOpen = useAppStore((s) => s.setBottomOpen);
   const setBottomHeight = useAppStore((s) => s.setBottomHeight);
-  const setConnectedBroker = useAppStore((s) => s.setConnectedBroker);
   const liveProfileId = useLiveStore((s) => s.profileId);
   const livePhase = useLiveStore((s) => s.phase);
   const liveReady = useLiveStore((s) => s.ready);
@@ -410,7 +395,7 @@ export function PositionsPanel() {
         fillPrice: f.price,
         status: "filled" as const,
       }))
-    : orderHistory;
+    : [];
 
   const filledCount = histRows.filter((o) => o.status === "filled").length;
   const cancelledCount = histRows.filter((o) => o.status === "cancelled").length;
@@ -421,9 +406,8 @@ export function PositionsPanel() {
       : histRows.filter((o) => o.status === orderFilter);
 
   // Live fills are the exchange-side record of every execution, including
-  // closing ones (non-zero realized P&L). Derive balance-history and journal
-  // rows from them so closes are recorded in both tabs, mirroring paper mode.
-  const liveBalanceRows: BalanceHistoryEntry[] = live
+  // closing ones (non-zero realized P&L).
+  const balanceRows: BalanceHistoryEntry[] = live
     ? liveFills.map((f) => ({
         id: `fill-${f.ts}-${f.symbol}-${f.side}-${f.qty}-${f.price}`,
         time: f.ts,
@@ -434,7 +418,8 @@ export function PositionsPanel() {
         symbol: f.symbol,
       }))
     : [];
-  const liveJournalRows = live
+
+  const journalRows = live
     ? liveFills
         .filter((f) => f.realizedPnl !== 0)
         .map((f) => ({
@@ -443,14 +428,6 @@ export function PositionsPanel() {
           text: `Close position for symbol ${f.symbol} at price ${f.price} for ${f.qty} units. Realized P&L ${f.realizedPnl >= 0 ? "+" : ""}${f.realizedPnl.toFixed(2)} USD.`,
         }))
     : [];
-
-  const balanceRows = live
-    ? liveBalanceRows
-    : balanceHistory.filter(
-        (b) =>
-          b.type === "realized_pnl" || b.type === "deposit" || b.type === "withdrawal",
-      );
-  const journalRows = live ? liveJournalRows : journal;
 
   return (
     <div className="flex h-full min-h-0 flex-col bg-[var(--maws-panel)]">
@@ -461,13 +438,11 @@ export function PositionsPanel() {
             className="flex items-center gap-1 text-[13px] font-semibold text-(--app-text) hover:text-white"
             onClick={() => setBrokerMenuOpen((v) => !v)}
           >
-            {connected === "mock"
-              ? "Paper Trading"
-              : connected === "binance"
-                ? liveProfileId
-                  ? profileLabel(liveProfileId)
-                  : "Binance Futures"
-                : "Trade with your broker"}
+            {connected === "binance"
+              ? liveProfileId
+                ? profileLabel(liveProfileId)
+                : "Binance Futures"
+              : "Trade with your broker"}
             <ChevronDown size={14} className="text-(--app-muted)" />
             {freshness}
             {live && !liveReady ? <span className="ml-1 text-[10px] font-normal text-[#f0b90b]">{profilePhaseLabel(livePhase)}</span> : null}
@@ -496,9 +471,6 @@ export function PositionsPanel() {
                   setBrokerMenuOpen(false);
                   if (connected === "binance") {
                     void disconnectLiveBroker();
-                    setConnectedBroker(null);
-                  } else {
-                    disconnectBroker();
                   }
                   setBottomOpen(false);
                 }}
@@ -508,18 +480,6 @@ export function PositionsPanel() {
               </button>
             </div>
           )}
-        </div>
-
-        <div className="flex shrink-0 items-center gap-1 text-[12px] text-(--app-text)">
-          <span>Account</span>
-          <button
-            type="button"
-            title="Account settings"
-            className="flex h-5 w-5 items-center justify-center rounded-[3px] text-(--app-muted) hover:bg-(--app-hover) hover:text-(--app-text)"
-            onClick={() => setAccountSettingsOpen(true)}
-          >
-            <Settings size={13} />
-          </button>
         </div>
 
         <div className="ml-auto flex shrink-0 items-center gap-0.5">
@@ -844,6 +804,8 @@ export function PositionsPanel() {
             </div>
           )
         ) : null}
+
+        {tab === "performance" ? <PerformancePanel histRows={histRows} /> : null}
 
         {tab === "journal" ? (
           journalRows.length === 0 ? (

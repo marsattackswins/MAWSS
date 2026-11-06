@@ -286,7 +286,7 @@ export class Reconciler {
       // Binance caps userTrades at 7-day windows (-4165): split the anchor
       // range into sequential <=7d chunks. Anchors within the cap produce a
       // single unchanged request; over-wide legacy anchors are clamped.
-      const windows = chunkUserTradeWindows(anchorStart, now);
+      const windows = chunkUserTradeWindows(anchorStart, Math.max(now, anchorStart + 1));
       if (windows.length === 0) continue;
       if (windows.length > 1) {
         log.warn("userTrades backfill chunked to respect the 7-day API cap", { symbol, windows: windows.length });

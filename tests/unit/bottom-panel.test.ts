@@ -11,7 +11,6 @@ import { renderToStaticMarkup } from "react-dom/server";import { BottomPanel,
 } from "@/components/shell/BottomPanel";
 import { computePosRows, PositionsPanel, TradingMetrics } from "@/components/trading/PositionsPanel";
 import { useLiveStore } from "@/lib/live/store";
-import { disconnectBroker } from "@/lib/trading/mock";
 import { useAppStore } from "@/lib/store";
 
 const emptyLive = {
@@ -67,12 +66,6 @@ describe("bottom trading panel attachment visibility", () => {
     useAppStore.setState({ brokerDialogOpen: true });
 
     expect(panelMarkup()).toBe("");
-  });
-
-  test("Paper Trading renders the panel after Paper is attached", () => {
-    useAppStore.setState({ connectedBroker: "mock" });
-
-    expect(panelVisible()).toBe(true);
   });
 
   test("Testnet renders only after server-confirmed readiness", () => {
@@ -135,19 +128,6 @@ describe("bottom trading panel attachment visibility", () => {
     expect(panelVisible()).toBe(false);
   });
 
-  test("disconnect removes the panel without cancelling or flattening paper books", () => {
-    const orders = [{ id: "paper-order" } as never];
-    const positions = [{ id: "paper-position" } as never];
-    useAppStore.setState({ connectedBroker: "mock", orders, positions });
-    expect(panelVisible()).toBe(true);
-
-    disconnectBroker();
-
-    expect(panelVisible()).toBe(false);
-    expect(useAppStore.getState().orders).toEqual(orders);
-    expect(useAppStore.getState().positions).toEqual(positions);
-  });
-
   test("failed switching preserves the previous confirmed panel", () => {
     useAppStore.setState({ connectedBroker: "binance" });
     useLiveStore.setState({
@@ -171,12 +151,13 @@ describe("bottom trading panel attachment visibility", () => {
     },
   );
 
-  test("keeps all five tabs in a fixed toolbar slot with visible active state", () => {
+  test("keeps all six tabs in a fixed toolbar slot with visible active state", () => {
     expect(PANEL_TABS.map((item) => item.label)).toEqual([
       "Positions",
       "Orders",
       "Order History",
       "Balance History",
+      "Performance",
       "Trading Journal",
     ]);
     expect(PANEL_TOOLBAR_HEIGHT).toBe(32);
@@ -201,7 +182,6 @@ describe("bottom trading panel attachment visibility", () => {
   });
 
   test("metrics strip shows the six compact segmented metrics", () => {
-    useAppStore.setState({ connectedBroker: "mock" });
     const markup = renderToStaticMarkup(createElement(TradingMetrics));
 
     for (const label of ["Balance", "Equity", "Realized", "Unrealized", "Available", "Buffer"]) {
@@ -213,16 +193,6 @@ describe("bottom trading panel attachment visibility", () => {
     // Segmented pill: uppercase labels over values with divider borders.
     expect(markup).toContain("uppercase");
     expect(markup).toContain("border-l");
-  });
-
-  test("P&L metrics carry explicit signs and buffer is an integer percentage", () => {
-    useAppStore.setState({ connectedBroker: "mock", mockRealized: 0 });
-    const markup = renderToStaticMarkup(createElement(TradingMetrics));
-
-    // Zero P&L renders with an explicit plus sign and neutral-positive tone.
-    expect(markup).toContain(">+0.00<");
-    expect(markup).toContain("100%");
-    expect(markup).not.toContain(">0.00<");
   });
 
   test("expanded and dragged panel heights are capped by half the application height", () => {
@@ -279,18 +249,18 @@ describe("bottom trading panel attachment visibility", () => {
     // Should use server-calculated unrealized PnL (15,000), not calculate from entry (which would be 0)
     expect(rowNoMark.pnl).toBe(15_000);
 
-    // Case 3: Paper mode (live=false) still uses last-trade price for backwards compatibility
-    const rowsPaper = computePosRows(
+    // Case 3: Non-live mode (live=false) still uses last-trade price for backwards compatibility
+    const rowsOffline = computePosRows(
       [{ ...livePositions[0], tp: null, sl: null, liq: null }],
       false,
       (sym) => (sym === "BTCUSDT" ? 62_000 : 0),
     );
-    expect(rowsPaper).toHaveLength(1);
-    const rowPaper = rowsPaper[0];
-    expect(rowPaper.last).toBe(62_000);
-    expect(rowPaper.notional).toBe(124_000);
-    expect(rowPaper.margin).toBe(12_400);
-    expect(rowPaper.pnl).toBe(24_000);
+    expect(rowsOffline).toHaveLength(1);
+    const rowOffline = rowsOffline[0];
+    expect(rowOffline.last).toBe(62_000);
+    expect(rowOffline.notional).toBe(124_000);
+    expect(rowOffline.margin).toBe(12_400);
+    expect(rowOffline.pnl).toBe(24_000);
   });
 
   test("live position margin uses Binance isolatedWallet when available (matches Binance UI)", () => {

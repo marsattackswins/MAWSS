@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { mawsFeed } from "@/lib/maws/feed";
 import { useAppStore } from "@/lib/store";
+import { useLiveStore } from "@/lib/live/store";
 import type { Quote } from "@/types";
 
 function quoteUiEqual(a: Quote | undefined, b: Quote | undefined) {
@@ -85,7 +86,7 @@ export function useSyncHotSymbols(enabled = true) {
       .map((p) => p.symbol)
       .join("\0"),
   );
-  const tradeKey = useAppStore((s) =>
+  const tradeKey = useLiveStore((s) =>
     [...s.orders.map((o) => o.symbol), ...s.positions.map((p) => p.symbol)]
       .sort()
       .join("\0"),

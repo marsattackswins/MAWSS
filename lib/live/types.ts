@@ -1,7 +1,7 @@
 /** Client-side mirror of the server DTOs. Never imports server-only code. */
 
-export type LiveProfileId = "paper" | "binance-testnet" | "binance-production";
-export type LiveProfileEnvironment = "paper" | "testnet" | "production";
+export type LiveProfileId = "binance-testnet" | "binance-production";
+export type LiveProfileEnvironment = "testnet" | "production";
 export type LiveProfilePhase = "idle" | "switching" | "ready" | "degraded" | "detached" | "failed";
 
 export interface ProfileRuntimeStatusDto {

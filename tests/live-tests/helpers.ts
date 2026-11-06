@@ -29,17 +29,6 @@ export function tempDbPath(): string {
 }
 
 const TEST_PROFILES: ProfileRegistry = {
-  paper: {
-    profileId: "paper",
-    label: "Paper",
-    environment: "paper",
-    configured: false,
-    executionEnabled: false,
-    apiKey: null,
-    apiSecret: null,
-    restEndpoint: "https://fapi.binance.com",
-    webSocketEndpoint: "wss://fstream.binance.com",
-  },
   "binance-testnet": {
     profileId: "binance-testnet",
     label: "Binance Testnet",
@@ -53,7 +42,7 @@ const TEST_PROFILES: ProfileRegistry = {
   },
   "binance-production": {
     profileId: "binance-production",
-    label: "Binance Production",
+    label: "Binance Live",
     environment: "production",
     configured: false,
     executionEnabled: true,
@@ -68,7 +57,7 @@ export function makeCfg(overrides: Partial<EnvConfig> = {}): EnvConfig {
   return {
     env: "testnet",
     brokerType: "binance",
-    defaultProfile: "paper",
+    defaultProfile: "binance-testnet",
     activeProfileId: "binance-testnet",
     profiles: TEST_PROFILES,
     dbPath: tempDbPath(),

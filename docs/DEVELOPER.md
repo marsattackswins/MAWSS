@@ -33,7 +33,7 @@ cp .env.example .env
 
 **Local Development Defaults**:
 - `MAWS_ENV=local` starts in Chart Only with no active broker profile
-- No credentials are needed for charting or browser-local Paper Trading
+- No credentials are needed for charting
 - Add separate Testnet/Production profile credentials and `MAWS_OPERATOR_AUTH` only when attaching Binance from the UI
 - Keep all broker credentials server-side; never use a `NEXT_PUBLIC_` prefix
 
@@ -118,15 +118,8 @@ The global Jest thresholds are 70% for branches, functions, lines, and statement
 - `lib/trading/exit-conditions.ts`: 100% branch coverage
 - `lib/trading/symbol-settings.ts`: 100% branch coverage
 - `lib/market/feed-normalize.ts`: 100% branch coverage
-- `lib/trading/mock.ts`: 95% statements and 92% branches
 
 Use `npm run test:coverage` to inspect the generated report. Keep fixtures deterministic and tests isolated; integration tests must use unique order IDs and clean up orders and positions between runs.
-
-### Paper trading behavior
-
-Paper-trading exits are evaluated on each delivered tick by `resolveExitCondition(pos, last)`. Production paper trading does not simulate OHLC candles and does not resolve TP/SL based on which level was touched first inside a candle. The first delivered tick that breaches an exit level closes the position; the result is deterministic for a fixed position and tick sequence, but a different feed order can produce a different first exit.
-
-When one tick breaches multiple levels, the authoritative priority is **liquidation > stop loss > take profit** (`liq > sl > tp`). The fill price is the breached level price, not the tick price. Long and short comparisons include exact boundaries (`>=`/`<=` as appropriate). If no configured level is breached, no exit is returned.
 
 ### Debugging test failures
 
@@ -251,27 +244,6 @@ test('login flow', async ({ page }) => {
 ```
 
 ## Mocking and Fakes
-
-### Mock Broker
-
-The mock broker (`lib/trading/mock.ts`) simulates broker behavior for testing:
-
-```typescript
-import { MockBroker } from '@/lib/trading/mock';
-
-// Use mock broker in tests
-const mockBroker = new MockBroker();
-await mockBroker.connect();
-
-// Submit order
-const result = await mockBroker.submitOrder({
-  symbol: 'BTCUSDT',
-  side: 'buy',
-  type: 'market',
-  qty: '0.001',
-  clientOrderId: 'test-123',
-});
-```
 
 ### Mocking External Dependencies
 

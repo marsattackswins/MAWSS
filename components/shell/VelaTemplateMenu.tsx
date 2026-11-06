@@ -10,14 +10,15 @@
  */
 
 import { useEffect, useRef, useState, useSyncExternalStore } from "react";
-import { ChevronDown, FolderOpen, Trash2 } from "lucide-react";
+import { ChevronDown, FolderOpen, Star, Trash2 } from "lucide-react";
 import {
   applyTemplate,
   getTemplates,
   removeTemplate,
   saveTemplate,
   subscribeTemplates,
-  templateSummary,
+  templateIndicatorSummary,
+  toggleTemplateFavorite,
   type VelaChartTemplate,
 } from "@/lib/vela-templates";
 import { forEachChart } from "@/lib/chart-registry";
@@ -34,6 +35,9 @@ export function VelaTemplateMenu() {
 
   /** Which template patch most recently landed on this pane (actor highlight). */
   const [activeName, setActiveName] = useState<string | null>(null);
+  const sortedTemplates = [...templates].sort(
+    (a, b) => Number(Boolean(b.favorite)) - Number(Boolean(a.favorite)),
+  );
   const defaultTemplate = templates.find(
     (template) => template.name.trim().toLowerCase() === "maws",
   );
@@ -99,7 +103,7 @@ export function VelaTemplateMenu() {
               <div className="my-1 border-t border-(--app-border)" />
               <div className="menu-section-title">CHART TEMPLATES</div>
               <MaxScroll>
-                {templates.map((tpl) => (
+                {sortedTemplates.map((tpl) => (
                   <div key={tpl.id} className="flex items-center gap-1 px-2 hover:bg-(--app-hover)">
                     <button
                       type="button"
@@ -120,9 +124,25 @@ export function VelaTemplateMenu() {
                       >
                         {tpl.name}
                       </div>
-                      <div className="mt-0.5 truncate text-[11px] text-(--app-muted)">
-                        {templateSummary(tpl)}
+                      <div className="mt-0.5 line-clamp-2 text-[11px] leading-[15px] text-(--app-muted)">
+                        {templateIndicatorSummary(tpl)}
                       </div>
+                    </button>
+                    <button
+                      type="button"
+                      title={tpl.favorite ? "Remove from favorites" : "Add to favorites"}
+                      aria-label={tpl.favorite ? `Remove ${tpl.name} from favorites` : `Add ${tpl.name} to favorites`}
+                      aria-pressed={Boolean(tpl.favorite)}
+                      className={`flex h-7 w-7 shrink-0 items-center justify-center rounded-[4px] hover:bg-(--app-hover) ${
+                        tpl.favorite ? "text-[#f0b90b]" : "text-(--app-muted) hover:text-(--app-text)"
+                      }`}
+                      onClick={() => {
+                        if (!toggleTemplateFavorite(tpl.id)) {
+                          window.alert("Could not update the chart template favorite. Make sure browser storage is available.");
+                        }
+                      }}
+                    >
+                      <Star size={14} strokeWidth={1.6} fill={tpl.favorite ? "currentColor" : "none"} />
                     </button>
                     <button
                       type="button"

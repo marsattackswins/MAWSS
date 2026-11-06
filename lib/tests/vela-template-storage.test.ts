@@ -35,6 +35,7 @@ describe("Vela chart template storage", () => {
             indicatorTitles: true,
             indicatorValues: false,
           },
+          favorite: true,
           createdAt: 123,
         },
       ]),
@@ -55,6 +56,7 @@ describe("Vela chart template storage", () => {
           indicatorTitles: true,
           indicatorValues: false,
         },
+        favorite: true,
         createdAt: 123,
       },
     ]);

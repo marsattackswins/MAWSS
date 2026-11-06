@@ -10,14 +10,6 @@ import { useEffect, useMemo, useRef, useState, type FormEvent } from "react";
 
 const FALLBACK_PROFILES: ProfileMetadataDto[] = [
   {
-    profileId: "paper",
-    label: "Paper Trading",
-    environment: "paper",
-    configured: true,
-    requiresProductionConfirmation: false,
-    executionEnabled: false,
-  },
-  {
     profileId: "binance-testnet",
     label: "Binance Testnet",
     environment: "testnet",
@@ -27,7 +19,7 @@ const FALLBACK_PROFILES: ProfileMetadataDto[] = [
   },
   {
     profileId: "binance-production",
-    label: "Binance Production",
+    label: "Binance Live",
     environment: "production",
     configured: false,
     requiresProductionConfirmation: true,
@@ -36,24 +28,18 @@ const FALLBACK_PROFILES: ProfileMetadataDto[] = [
 ];
 
 const PROFILE_COPY: Record<LiveProfileId, { description: string; caution: string }> = {
-  paper: {
-    description: "Simulated orders and positions kept in this browser.",
-    caution: "Paper state never mixes with Binance state.",
-  },
   "binance-testnet": {
     description: "Server-managed Binance Futures Testnet account.",
     caution: "Uses server-side testnet configuration.",
   },
   "binance-production": {
-    description: "Server-managed Binance Production account.",
+    description: "Server-managed Binance Live account.",
     caution: "Real orders and positions may be affected.",
   },
 };
 
 function ProfileMark({ profileId }: { profileId: LiveProfileId }) {
-  if (profileId === "paper") {
-    return <span className="flex h-11 w-11 items-center justify-center rounded-[8px] border border-[#363a45] bg-(--app-elevated) text-[18px]">P</span>;
-  }
+  void profileId;
   return (
     <span className="flex h-11 w-11 items-center justify-center">
       <svg width="34" height="34" viewBox="0 0 24 24" fill="#f0b90b" aria-hidden="true">
@@ -66,7 +52,7 @@ function ProfileMark({ profileId }: { profileId: LiveProfileId }) {
 function safeLoadError(error: unknown): string {
   if (error instanceof LiveAuthError) return "Authenticate when you choose a Binance profile.";
   if (error instanceof LiveApiError && error.code === "env_local") {
-    return "Binance profiles are unavailable in local mode. Paper Trading remains available.";
+    return "Binance profiles are unavailable in local mode. Connect credentials first.";
   }
   if (error instanceof LiveApiError) return "Server profile status is unavailable.";
   return "Server profile status is unavailable.";
@@ -97,19 +83,19 @@ export function BrokerDialog() {
   const [productionChecked, setProductionChecked] = useState(false);
   const [authenticationRequired, setAuthenticationRequired] = useState(false);
   const [localUnavailable, setLocalUnavailable] = useState(false);
-  const [authTarget, setAuthTarget] = useState<Exclude<LiveProfileId, "paper"> | null>(null);
+  const [authTarget, setAuthTarget] = useState<LiveProfileId | null>(null);
   const [authPassword, setAuthPassword] = useState("");
   const [authBusy, setAuthBusy] = useState(false);
   const [authError, setAuthError] = useState<string | null>(null);
   const closeRef = useRef<HTMLButtonElement>(null);
 
-  const activeProfile = connectedBroker === "mock" ? "paper" : connectedBroker === "binance" ? liveProfile : null;
+  const activeProfile = connectedBroker === "binance" ? liveProfile : null;
   const switching = switchingTarget !== null || livePhase === "switching";
   const currentLabel = activeProfile ? profileLabel(activeProfile) : "Chart only";
   const currentStatus = livePhase === "switching" ? "Switching profile…" : liveReady ? profilePhaseLabel(livePhase) : livePhase !== "idle" ? profilePhaseLabel(livePhase) : "No active broker";
 
   const orderedProfiles = useMemo(
-    () => ["paper", "binance-testnet", "binance-production"].map((id) => profiles.find((profile) => profile.profileId === id) ?? FALLBACK_PROFILES.find((profile) => profile.profileId === id)!),
+    () => ["binance-testnet", "binance-production"].map((id) => profiles.find((profile) => profile.profileId === id) ?? FALLBACK_PROFILES.find((profile) => profile.profileId === id)!),
     [profiles],
   );
 
@@ -172,12 +158,6 @@ export function BrokerDialog() {
     return () => window.removeEventListener("keydown", onKey, true);
   }, [authTarget, open, productionConfirmation, setOpen]);
 
-  useEffect(() => {
-    if (open) return;
-    window.requestAnimationFrame(() => {
-      document.querySelector<HTMLElement>("[data-trade-trigger]")?.focus();
-    });
-  }, [open]);
 
   const closeDialog = () => {
     setOpen(false);
@@ -190,7 +170,7 @@ export function BrokerDialog() {
     setLoadError(null);
     try {
       const result = await switchLiveProfile(profileId, confirmProduction);
-      if (result === "ready" || result === "paper") {
+      if (result === "ready") {
         closeDialog();
       } else if (result === "error") {
         const current = useLiveStore.getState();
@@ -203,7 +183,7 @@ export function BrokerDialog() {
     }
   };
 
-  const requestBinanceProfile = async (profileId: Exclude<LiveProfileId, "paper">) => {
+  const requestBinanceProfile = async (profileId: LiveProfileId) => {
     if (switching) return;
     try {
       const session = await liveApi.session();
@@ -260,12 +240,8 @@ export function BrokerDialog() {
   };
 
   const selectProfile = (profile: ProfileMetadataDto) => {
-    const unavailable = profile.profileId !== "paper" && !profile.configured && !authenticationRequired;
-    if (switching || unavailable || (localUnavailable && profile.profileId !== "paper")) return;
-    if (profile.profileId === "paper") {
-      void startSwitch(profile.profileId);
-      return;
-    }
+    const unavailable = !profile.configured && !authenticationRequired;
+    if (switching || unavailable || localUnavailable) return;
     void requestBinanceProfile(profile.profileId);
   };
 
@@ -298,11 +274,11 @@ export function BrokerDialog() {
         ) : null}
         {loadError ? <div className="mx-5 mb-3 text-[12px] text-[#f0b90b]">{loadError}</div> : null}
 
-        <div className="grid grid-cols-3 gap-3 px-5 pb-5">
-          {loading ? <div className="col-span-3 flex items-center justify-center py-14 text-[12px] text-(--app-muted)"><LoaderCircle size={16} className="mr-2 animate-spin" />Loading server profiles…</div> : null}
+        <div className="grid grid-cols-2 gap-3 px-5 pb-5">
+          {loading ? <div className="col-span-2 flex items-center justify-center py-14 text-[12px] text-(--app-muted)"><LoaderCircle size={16} className="mr-2 animate-spin" />Loading server profiles…</div> : null}
           {!loading && orderedProfiles.map((profile) => {
             const selected = activeProfile === profile.profileId && livePhase !== "switching";
-            const unavailable = profile.profileId !== "paper" && !profile.configured && !authenticationRequired;
+            const unavailable = !profile.configured && !authenticationRequired;
             const copy = PROFILE_COPY[profile.profileId];
             return (
               <button
@@ -319,20 +295,16 @@ export function BrokerDialog() {
                 <span className="mt-1 text-[12px] leading-4 text-(--app-muted)">{copy.description}</span>
                 <span className="mt-auto flex items-center gap-1 pt-4 text-[11px] text-(--app-muted)">
                   {unavailable
-                    ? localUnavailable && profile.profileId !== "paper"
+                    ? localUnavailable
                       ? "Unavailable in local mode"
                       : "Not configured"
-                    : authenticationRequired && profile.profileId !== "paper" && !selected
+                    : authenticationRequired && !selected
                       ? "Authentication required"
                       : selected
-                        ? profile.profileId === "paper"
-                          ? "Available · Active"
-                          : livePhase === "degraded"
-                            ? "Configured · Active · Degraded"
-                            : "Configured · Active"
-                        : profile.profileId === "paper"
-                          ? "Available · Not active"
-                          : "Configured · Not active"}
+                        ? livePhase === "degraded"
+                          ? "Configured · Active · Degraded"
+                          : "Configured · Active"
+                        : "Configured · Not active"}
                   {!unavailable && !selected ? <ChevronRight size={13} /> : null}
                 </span>
               </button>
@@ -371,7 +343,7 @@ export function BrokerDialog() {
       {productionConfirmation ? (
         <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/60" onMouseDown={() => { setProductionConfirmation(false); setProductionChecked(false); }}>
           <div role="dialog" aria-modal="true" aria-labelledby="production-confirm-title" className="w-[430px] max-w-[calc(100vw-32px)] rounded-[8px] border border-[#f0b90b]/50 bg-[#17130a] p-5 shadow-[0_16px_60px_rgba(0,0,0,0.7)]" onMouseDown={(event) => event.stopPropagation()}>
-            <div id="production-confirm-title" className="text-[16px] font-semibold text-[#f0b90b]">You are connecting to Binance Production.</div>
+            <div id="production-confirm-title" className="text-[16px] font-semibold text-[#f0b90b]">You are connecting to Binance Live.</div>
             <p className="mt-3 text-[13px] leading-5 text-(--app-text)">This uses the server’s production credentials.</p>
             <p className="text-[13px] leading-5 text-(--app-text)">Existing orders and positions will not be cancelled or closed.</p>
             <p className="text-[13px] leading-5 text-(--app-text)">Switching may be blocked if exposure exists.</p>

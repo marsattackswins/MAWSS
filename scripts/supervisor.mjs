@@ -28,9 +28,14 @@
  *    fallback that works even if something else holds the app port.
  *  - Share a random token with the child (env + disk) so the app can tell
  *    supervisor calls from operator calls.
+ *  - Own the vendored Trade Journal sidecar on port 3400: the app proxies
+ *    /journal to it and nothing else starts it in supervisor mode, so without
+ *    this the journal button serves a connection-refused proxy. See
+ *    scripts/journal-sidecar.mjs.
  *
  * Ctrl+C stops the supervisor AND the child gracefully (via the app's own
- * stop endpoint; Windows cannot deliver SIGINT to a child process) and does
+ * stop endpoint; Windows cannot deliver SIGINT to a child process), takes the
+ * journal sidecar down with us, and does
  * NOT mark the app as "stay stopped" — the next supervisor run starts it.
  */
 
@@ -41,6 +46,7 @@ import crypto from "node:crypto";
 import { fileURLToPath } from "node:url";
 import { spawn } from "node:child_process";
 import { APP_PORT } from "./app-port.mjs";
+import { ensureJournalSidecar, stopJournalSidecar } from "./journal-sidecar.mjs";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const stateDir = path.join(root, ".maws");
@@ -472,11 +478,13 @@ function main() {
     if (stopping) return;
     stopping = true;
     log("Ctrl+C received; stopping supervisor and child gracefully");
+    stopJournalSidecar();
     void stopChild({ graceful: true }).then(() => process.exit(0));
   });
   process.on("SIGTERM", () => {
     if (stopping) return;
     stopping = true;
+    stopJournalSidecar();
     void stopChild({ graceful: true }).then(() => process.exit(0));
   });
 
@@ -488,6 +496,10 @@ function main() {
   } else {
     void startChild();
   }
+
+  // Independent of the app child's state: the journal answers whenever the app
+  // does, and a stop/start cycle must not have to wait on a cold sidecar.
+  void ensureJournalSidecar({ root, log });
 
   setInterval(healthCheck, POLL_MS);
 }

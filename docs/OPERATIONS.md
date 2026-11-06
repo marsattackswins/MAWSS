@@ -12,15 +12,15 @@ This document covers environment variables, configuration schema, secrets handli
 **Default**: `local`
 **Purpose**: Selects the server deployment context and risk enforcement. The active trading profile is selected from the UI.
 
-- `local`: Chart Only startup; Paper, Testnet, and Production can be attached from the UI when configured and authenticated
+- `local`: Chart Only startup; Testnet and Production can be attached from the UI when configured and authenticated
 - `testnet`: Binance USD-M Futures Testnet startup context, requires auth and testnet credentials
 - `shadow`: Production market data with read-only account, zero submissions
 - `production`: Real trading, requires all risk limits and execution gates
 
 #### MAWS_DEFAULT_PROFILE
 **Description**: Optional preferred profile metadata
-**Values**: `paper` | `binance-testnet` | `binance-production`
-**Default**: `paper`
+**Values**: `binance-testnet` | `binance-production`
+**Default**: `binance-testnet`
 **Purpose**: Optional metadata for deployments that want to label a preferred profile. It does not select or switch the active runtime; the UI profile chooser is authoritative after startup.
 
 #### MAWS_OPERATOR_AUTH
@@ -767,7 +767,7 @@ node scripts/restore-backup.mjs .maws/backups/<file>.db.enc
 ### Profile-Scoped Database Migration
 
 The browser profile selector is enabled for authenticated operators. Server-side profile switching is protected by the live profile API and coordinator. The profile-scoped schema migration separates
-paper, Binance Testnet, Binance Production, and shadow persistence. Existing rows without
+Binance Testnet, Binance Live, and shadow persistence (the `paper` key remains as a legacy DB key for historical data only). Existing rows without
 provenance are preserved under `profile_id = 'legacy-unknown'`; MAWS never classifies them
 from the current environment, credentials, symbols, timestamps, or IDs. Quarantined rows
 are excluded from active live queries, risk checks, P&L, reconciliation, health, selected
@@ -1039,7 +1039,7 @@ The admin dashboard is available at `http://localhost:3000/admin` and refreshes 
 
 ### Authentication and environment behavior
 
-- In `MAWS_ENV=local` (the default), `/api/health` and `/api/admin/health` allow anonymous access. Local startup is Chart Only; charting and browser-local Paper Trading remain available without credentials.
+- In `MAWS_ENV=local` (the default), `/api/health` and `/api/admin/health` allow anonymous access. Local startup is Chart Only; charting remains available without credentials.
 - When Binance profile credentials are configured, attaching Testnet or Production from Chart Only requires `MAWS_OPERATOR_AUTH` and an authenticated operator session. The profile chooser exposes only safe metadata.
 - Outside local mode, health and admin endpoints require either a valid operator session or the `x-maws-health-token` header when `MAWS_HEALTH_TOKEN` is configured. Keep the token out of URLs, query parameters, browser history, logs, and source control.
 - To use a session, sign in at `/login` and then return to `/admin`.

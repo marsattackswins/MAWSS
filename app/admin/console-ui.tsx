@@ -60,7 +60,7 @@ export function latency(value: number | string | undefined | null): string {
 export function formatEnvironment(env: string | null): string {
   if (env === "local") return "Chart Only";
   if (env === "testnet") return "Binance Testnet";
-  if (env === "production") return "Binance Production";
+  if (env === "production") return "Binance Live";
   return env ?? "Environment unavailable";
 }
 

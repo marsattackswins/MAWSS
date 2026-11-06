@@ -150,15 +150,7 @@ The Binance adapter (`lib/server/broker/binance/adapter.ts`) implements `IBroker
 - Implementing reconciliation logic
 - Handling Binance-specific rate limiting and filters
 
-### Mock Broker
-
-A mock broker (`lib/trading/mock.ts`) implements `IBroker` for:
-- Local development without real exchange
-- Testing without side effects
-- Simulating various scenarios (fills, rejections, etc.)
-
 ## References
 
 - [Broker Interface](../../lib/server/broker/interface.ts)
 - [Binance Adapter](../../lib/server/broker/binance/adapter.ts)
-- [Mock Broker](../../lib/trading/mock.ts)

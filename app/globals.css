@@ -9,6 +9,10 @@
   --app-hover: #1a1a1a;
   --app-text: #d1d4dc;
   --app-muted: #787b86;
+  --app-faint: #4c525e;
+  --app-up: #089981;
+  --app-down: #f23645;
+  --app-accent: #2962ff;
   --maws-bg: var(--app-bg);
   --maws-panel: var(--app-panel);
   --maws-elevated: var(--app-elevated);
@@ -17,6 +21,10 @@
   --maws-hover: var(--app-hover);
   --maws-text: var(--app-text);
   --maws-muted: var(--app-muted);
+  --maws-faint: var(--app-faint);
+  --maws-up: var(--app-up);
+  --maws-down: var(--app-down);
+  --maws-accent: var(--app-accent);
 }
 
 @theme inline {
@@ -29,9 +37,10 @@
   --color-tv-input-border: var(--app-hover);
   --color-tv-text: var(--app-text);
   --color-tv-muted: var(--app-muted);
-  --color-tv-blue: #2962ff;
-  --color-tv-green: #26a69a;
-  --color-tv-red: #ef5350;
+  --color-tv-faint: var(--app-faint);
+  --color-tv-blue: var(--app-accent);
+  --color-tv-green: var(--app-up);
+  --color-tv-red: var(--app-down);
   --font-sans: "Trebuchet MS", Roboto, Ubuntu, sans-serif;
 }
 
@@ -691,18 +700,21 @@ input[type="number"]::-webkit-inner-spin-button {
 .wl-row:hover {
   background: var(--app-hover);
 }
-/* Selected instrument: the Vela-style marker bar hugging the row's left edge. */
-.wl-row.is-selected::before {
-  content: "";
+/* Selected instrument: animated sliding marker bar and row background */
+.wl-selected-indicator {
   position: absolute;
   left: 0;
   top: 0;
-  bottom: 0;
   width: 2px;
   border-radius: 0 2px 2px 0;
   background: var(--app-text);
   pointer-events: none;
+  z-index: 10;
 }
+.wl-selected-indicator.no-transition {
+  transition: none !important;
+}
+
 .wl-row.is-selected {
   background: var(--app-elevated);
 }

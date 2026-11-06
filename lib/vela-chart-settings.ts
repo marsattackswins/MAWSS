@@ -1,4 +1,5 @@
 import { useAppStore } from "@/lib/store";
+import { themeIndicatorSettings, themeStudySettings } from "@/lib/app-theme";
 import type { ChartSettings } from "@/types";
 
 /**
@@ -314,6 +315,17 @@ export function startChartSettingsEcho(): () => void {
  * look survives every chart rebuild.
  */
 export function applyThemeToCharts(themeName: ThemeName): void {
+  const st = useAppStore.getState();
+  const nextIndicators = themeIndicatorSettings(themeName, st.indicatorSettings);
+  st.setIndicatorSettings(nextIndicators);
+
+  // Recolor active studies across all panes to match the theme
+  const nextPanes = st.panes.map((pane) => ({
+    ...pane,
+    studies: pane.studies.map((s) => themeStudySettings(themeName, s)),
+  }));
+  useAppStore.setState({ panes: nextPanes });
+
   forEachChart((_, h) => {
     try {
       h.vela.setTheme(themeName);
@@ -443,16 +455,18 @@ export function mawsHostSections(): MawsHostSection[] {
           options: [
             ["dark", "Vela Muted (Dark)"],
             ["classic", "Standard Classic"],
-            ["light", "Light"],
+            ["light", "White"],
+            ["gruvbox", "Gruvbox"],
           ] as const,
           get: (): string => {
             const bg = stApp().backgroundColor.trim().toLowerCase();
             if (bg === "#ffffff") return "light";
             if (bg === "#131722") return "classic";
+            if (bg === "#282828") return "gruvbox";
             return "dark";
           },
           set: (v: string) => {
-            const name = (v === "classic" || v === "light" ? v : "dark") as ThemeName;
+            const name = (v === "classic" || v === "light" || v === "gruvbox" ? v : "dark") as ThemeName;
             // Apply CSS vars to shell immediately.
             const next = applyVelaThemeEverywhere(name);
             // Persist the new palette.

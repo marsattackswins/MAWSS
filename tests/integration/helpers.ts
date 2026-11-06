@@ -58,17 +58,6 @@ export function loadTestnetConfig(): EnvConfig {
   }
 
   const profiles: ProfileRegistry = {
-    paper: {
-      profileId: "paper",
-      label: "Paper",
-      environment: "paper",
-      configured: false,
-      executionEnabled: false,
-      apiKey: null,
-      apiSecret: null,
-      restEndpoint: "https://fapi.binance.com",
-      webSocketEndpoint: "wss://fstream.binance.com",
-    },
     "binance-testnet": {
       profileId: "binance-testnet",
       label: "Binance Testnet",
@@ -82,7 +71,7 @@ export function loadTestnetConfig(): EnvConfig {
     },
     "binance-production": {
       profileId: "binance-production",
-      label: "Binance Production",
+      label: "Binance Live",
       environment: "production",
       configured: false,
       executionEnabled: false,
@@ -96,7 +85,7 @@ export function loadTestnetConfig(): EnvConfig {
   return {
     env: "testnet",
     brokerType: "binance",
-    defaultProfile: "paper",
+    defaultProfile: "binance-testnet",
     activeProfileId: "binance-testnet",
     profiles,
     dbPath: tempDbPath(),

@@ -45,7 +45,6 @@ MAWS/
 │   ├── trading/             # Trading utilities
 │   │   ├── dispatch.ts      # Order dispatch
 │   │   ├── exit-conditions.ts
-│   │   ├── mock.ts          # Mock trading
 │   │   ├── symbol-settings.ts
 │   │   └── ui-orders.ts     # UI order helpers
 │   └── [client libraries]   # Client-side utilities

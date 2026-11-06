@@ -11,7 +11,7 @@
 import { describe, test, expect, beforeEach } from "@jest/globals";
 import {
   pnl24h,
-  paperPositionUnrealized,
+  positionUnrealized,
   livePositionUnrealized,
 } from "@/lib/server/metrics/pnl";
 import { liveState, resetLiveStateForTests } from "@/lib/server/binance/state";
@@ -105,8 +105,8 @@ describe("pnl_24h metric", () => {
   });
 
   test("helpers are numeric for clean inputs", () => {
-    expect(paperPositionUnrealized(paperLong, 65_000)).toBe(5_000);
-    expect(paperPositionUnrealized(paperShort, 2_900)).toBe(200);
+    expect(positionUnrealized(paperLong, 65_000)).toBe(5_000);
+    expect(positionUnrealized(paperShort, 2_900)).toBe(200);
     expect(livePositionUnrealized({ unrealizedProfit: "-123.45" })).toBe(-123.45);
     expect(livePositionUnrealized({ unrealizedProfit: "0" })).toBe(0);
   });

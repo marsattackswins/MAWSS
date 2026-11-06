@@ -21,7 +21,7 @@ import { useAppStore } from "@/lib/store";
 import { getChart } from "@/lib/chart-registry";
 import { syncPaneDrawingsFromVela } from "@/lib/vela-drawings";
 import { velaThemeNameFromAppSettings } from "@/lib/app-theme";
-import type { VelaTheme } from "@/lib/charting";
+import type { DrawingTypeKey, VelaTheme } from "@/lib/charting";
 import { useEffect, useRef } from "react";
 import {
   DrawingToolbar as VelaDrawingToolbar,
@@ -82,7 +82,7 @@ const PROMOTED_TOOLS: ReadonlySet<string> = new Set(["magnifier"]);
  */
 interface MoreSection {
   label: string;
-  tools: Array<{ type: string; label: string; icon: string }>;
+  tools: ToolbarDefinition["groups"][number]["tools"];
 }
 
 function mawsTopBarToolbar(): { definition: ToolbarDefinition; moreSections: MoreSection[] } {
@@ -140,10 +140,6 @@ function mawsTopBarToolbar(): { definition: ToolbarDefinition; moreSections: Mor
 
   // Collect all catalog sections for the MAWS-owned "more" flyout.
   // "more" is NOT part of the ToolbarDefinition — Vela never builds it.
-  const moreSections: MoreSection[] = remaining
-    .filter((g) => g.tools.length > 0)
-    .flatMap((g) => g.sections ?? [{ label: g.label, tools: g.tools }]);
-
   const definition: ToolbarDefinition = {
     groups: [
       ...quick,
@@ -154,6 +150,23 @@ function mawsTopBarToolbar(): { definition: ToolbarDefinition; moreSections: Mor
     ],
   };
 
+  const fullCatalog = defaultToolbar();
+  const barTools = definition.groups.flatMap((group) => group.tools);
+  const menuToolTypes = new Set([
+    ...remaining.flatMap((group) =>
+      (group.sections ?? [{ label: group.label, tools: group.tools }])
+        .flatMap((section) => section.tools.map((tool) => tool.type)),
+    ),
+    ...barTools.map((tool) => tool.type),
+  ]);
+  const moreSections: MoreSection[] = fullCatalog.groups
+    .flatMap((group) => group.sections ?? [{ label: group.label, tools: group.tools }])
+    .map((section) => ({
+      label: section.label,
+      tools: section.tools.filter((tool) => menuToolTypes.has(tool.type)),
+    }))
+    .filter((section) => section.tools.length > 0);
+
   return { definition, moreSections };
 }
 
@@ -163,6 +176,39 @@ function mawsTopBarToolbar(): { definition: ToolbarDefinition; moreSections: Mor
  *  bare group ids (what the earlier tool-cells-only files saved), `mode:*` for the
  *  bar's own mode buttons, `app:*` for the MAWS buttons (undo/redo/hide/CLR). */
 const BAR_ORDER_KEY = "maws.drawingBar.order.v1";
+const FAVORITES_KEY = "maws.drawingBar.favorites.v1";
+
+function initializeFavorites(
+  chart: NonNullable<ReturnType<typeof activeChart>>,
+  defaultTools: readonly DrawingTypeKey[],
+  knownTools: ReadonlySet<string>,
+): DrawingTypeKey[] {
+  let savedFavorites: DrawingTypeKey[] | null = null;
+  try {
+    const raw = localStorage.getItem(FAVORITES_KEY);
+    if (raw !== null) {
+      const parsed: unknown = JSON.parse(raw);
+      if (!Array.isArray(parsed)) {
+        console.error("[maws] Saved drawing-tool favorites are invalid.");
+      } else {
+        savedFavorites = parsed.filter(
+          (type): type is DrawingTypeKey => typeof type === "string" && knownTools.has(type),
+        );
+      }
+    }
+  } catch (error) {
+    console.error("[maws] Could not read drawing-tool favorite preferences.", error);
+  }
+
+  const favorites = savedFavorites ?? [...new Set([...defaultTools, ...chart.drawings.favorites()])];
+  chart.drawings.setFavorites(favorites);
+  try {
+    localStorage.setItem(FAVORITES_KEY, JSON.stringify(favorites));
+  } catch (error) {
+    console.error("[maws] Could not save drawing-tool favorite preferences.", error);
+  }
+  return chart.drawings.favorites();
+}
 
 function loadBarOrder(): string[] {
   try {
@@ -217,16 +263,102 @@ function makeBarButton(key: string, label: string, html: string, onClick: () => 
   return b;
 }
 
+// Favorite marker — the wishlist diamond of the ticker search (symbol-picker's
+// `diamond`/`diamond-filled`), redrawn on this file's 24-grid icon style.
+const DIAMOND_ICON = svgIcon('<path d="M12 3 21 12l-9 9L3 12Z"/>');
+const DIAMOND_FILLED_ICON = svgIcon('<path d="M12 3 21 12l-9 9L3 12Z" fill="currentColor"/>');
+type DrawingToolDefinition = ToolbarDefinition["groups"][number]["tools"][number];
+
+interface FavoriteUi {
+  setFavorites: (types: readonly DrawingTypeKey[]) => void;
+  setActiveTool: (type: DrawingTypeKey | null) => void;
+  destroy: () => void;
+}
+
+/** Render favorited tools as standalone toolbar buttons unless they already have one. */
+function mountFavoriteButtons(
+  root: HTMLElement,
+  tools: readonly DrawingToolDefinition[],
+  directTypes: ReadonlySet<DrawingTypeKey>,
+): FavoriteUi {
+  const byType = new Map(tools.map((tool) => [tool.type, tool]));
+  const buttons = new Map<DrawingTypeKey, HTMLButtonElement>();
+  let activeTool: DrawingTypeKey | null = null;
+
+  const setFavorites = (types: readonly DrawingTypeKey[]): void => {
+    const favorites = [...new Set(types)];
+    const favoriteSet = new Set(favorites);
+    for (const [type, button] of buttons) {
+      if (!favoriteSet.has(type) || directTypes.has(type)) {
+        button.remove();
+        buttons.delete(type);
+      }
+    }
+    for (const type of favorites) {
+      if (directTypes.has(type)) continue;
+      const tool = byType.get(type);
+      if (!tool) continue;
+      let button = buttons.get(type);
+      if (!button) {
+        button = makeBarButton(`favorite:${type}`, tool.label, tool.icon, () => {
+          activeChart()?.drawings.setTool(type);
+        });
+        button.draggable = true;
+        buttons.set(type, button);
+      }
+      button.dataset.on = activeTool === type ? "1" : "";
+      const moreButton = root.querySelector<HTMLElement>('[data-drag-key="app:more"]');
+      root.insertBefore(button, moreButton);
+    }
+  };
+
+  return {
+    setFavorites,
+    setActiveTool: (type) => {
+      activeTool = type;
+      for (const [favoriteType, button] of buttons) {
+        button.dataset.on = type === favoriteType ? "1" : "";
+      }
+    },
+    destroy: () => {
+      for (const button of buttons.values()) button.remove();
+      buttons.clear();
+    },
+  };
+}
+
+interface MoreButtonUi {
+  setFavorites: (types: readonly DrawingTypeKey[]) => void;
+  destroy: () => void;
+}
+
+function paintFavoriteButton(button: HTMLButtonElement, favorite: boolean): void {
+  const label = favorite ? "Remove from favorites" : "Add to favorites";
+  button.title = label;
+  button.setAttribute("aria-label", label);
+  button.setAttribute("aria-pressed", String(favorite));
+  button.style.color = favorite ? "#50d2c1" : "var(--app-muted)";
+  button.innerHTML = favorite ? DIAMOND_FILLED_ICON : DIAMOND_ICON;
+}
+
 /**
  * Build and mount the "more tools" button — a fully MAWS-owned button that opens
  * a custom flyout panel containing all catalog tools grouped by section.
  * Clicking the button ONLY toggles the panel; a tool is armed only when the user
- * clicks a row inside the panel. Returns a teardown function.
+ * clicks a row inside the panel.
  */
-function mountMoreButton(root: HTMLElement, host: HTMLElement, sections: MoreSection[]): () => void {
-  if (sections.length === 0) return () => {};
+function mountMoreButton(root: HTMLElement, host: HTMLElement, sections: MoreSection[]): MoreButtonUi {
+  if (sections.length === 0) return { setFavorites: () => {}, destroy: () => {} };
 
   let panel: HTMLDivElement | null = null;
+  let favorites = new Set<DrawingTypeKey>();
+  const favoriteButtons = new Map<DrawingTypeKey, HTMLButtonElement[]>();
+  const setFavorites = (types: readonly DrawingTypeKey[]): void => {
+    favorites = new Set(types);
+    for (const [type, buttons] of favoriteButtons) {
+      for (const button of buttons) paintFavoriteButton(button, favorites.has(type));
+    }
+  };
 
   // Built first so the close/outside/panel closures below can all reference it;
   // they only run from its own events, well after this initialization.
@@ -242,6 +374,7 @@ function mountMoreButton(root: HTMLElement, host: HTMLElement, sections: MoreSec
   const closePanel = (): void => {
     panel?.remove();
     panel = null;
+    favoriteButtons.clear();
     btn.dataset.on = "";
     document.removeEventListener("pointerdown", onOutside);
   };
@@ -296,39 +429,55 @@ function mountMoreButton(root: HTMLElement, host: HTMLElement, sections: MoreSec
 
       // Tool rows.
       for (const tool of sec.tools) {
-        const row = document.createElement("button");
-        row.type = "button";
-        row.setAttribute("aria-label", tool.label);
+        const row = document.createElement("div");
         row.style.cssText = [
           "display:flex",
           "align-items:center",
           "gap:8px",
-          "padding:8px 12px",
+          "padding:2px 6px 2px 12px",
           "width:100%",
           "text-align:left",
           "white-space:nowrap",
           "font-size:13px",
           "color:var(--app-text)",
-          "background:transparent",
-          "border:0",
-          "cursor:pointer",
         ].join(";");
         row.addEventListener("mouseover", () => { row.style.background = "var(--app-hover)"; });
         row.addEventListener("mouseout",  () => { row.style.background = "transparent"; });
 
+        const select = document.createElement("button");
+        select.type = "button";
+        select.setAttribute("aria-label", tool.label);
+        select.style.cssText = "display:flex;align-items:center;gap:8px;flex:1;min-width:0;padding:6px 0;text-align:left;white-space:nowrap;font-size:13px;color:var(--app-text);background:transparent;border:0;cursor:pointer;";
+
         const iconWrap = document.createElement("span");
         iconWrap.style.cssText = "width:16px;height:16px;display:flex;align-items:center;justify-content:center;flex:none;opacity:0.6;";
         iconWrap.innerHTML = tool.icon;
-        row.appendChild(iconWrap);
+        select.appendChild(iconWrap);
 
         const lbl = document.createElement("span");
         lbl.textContent = tool.label;
-        row.appendChild(lbl);
+        lbl.style.flex = "1";
+        select.appendChild(lbl);
+        row.appendChild(select);
 
-        const toolType = tool.type;
-        row.addEventListener("click", (e) => {
+        const fav = document.createElement("button");
+        fav.type = "button";
+        fav.style.cssText = "display:flex;align-items:center;justify-content:center;width:26px;height:26px;flex:none;border:0;border-radius:4px;background:transparent;cursor:pointer;color:var(--app-muted);";
+        paintFavoriteButton(fav, favorites.has(tool.type));
+        const rows = favoriteButtons.get(tool.type) ?? [];
+        rows.push(fav);
+        favoriteButtons.set(tool.type, rows);
+        fav.addEventListener("pointerdown", (e) => e.stopPropagation());
+        fav.addEventListener("click", (e) => {
           e.stopPropagation();
-          activeChart()?.drawings.setTool(toolType as Parameters<NonNullable<ReturnType<typeof activeChart>>["drawings"]["setTool"]>[0]);
+          e.preventDefault();
+          activeChart()?.drawings.setFavorite(tool.type, !favorites.has(tool.type));
+        });
+        row.appendChild(fav);
+
+        select.addEventListener("click", (e) => {
+          e.stopPropagation();
+          activeChart()?.drawings.setTool(tool.type);
           closePanel();
         });
         p.appendChild(row);
@@ -355,9 +504,12 @@ function mountMoreButton(root: HTMLElement, host: HTMLElement, sections: MoreSec
 
   root.appendChild(btn);
 
-  return () => {
-    closePanel();
-    btn.remove();
+  return {
+    setFavorites,
+    destroy: () => {
+      closePanel();
+      btn.remove();
+    },
   };
 }
 
@@ -658,6 +810,10 @@ export function VelaDrawingBar() {
   const activePaneId = useAppStore((s) => s.activePaneId);
   const hostRef = useRef<HTMLDivElement>(null);
   const barRef = useRef<VelaDrawingToolbar | null>(null);
+  const favoriteUiRef = useRef<FavoriteUi | null>(null);
+  const moreUiRef = useRef<MoreButtonUi | null>(null);
+  const defaultFavoriteToolsRef = useRef<DrawingTypeKey[]>([]);
+  const knownDrawingToolsRef = useRef<ReadonlySet<string>>(new Set());
 
   // State echo: keep the bar's tints in step with the chart. Vela's renderer
   // shortcuts (Escape, one-shot disarms) and the old per-chart rail changed tool
@@ -679,7 +835,23 @@ export function VelaDrawingBar() {
         return;
       }
       offs = [
-        chart.on("drawing:tool", ({ type }) => bar.setActiveTool(type)),
+        chart.on("drawing:tool", ({ type }) => {
+          bar.setActiveTool(type);
+          favoriteUiRef.current?.setActiveTool(type);
+        }),
+        chart.on("drawing:favorites", ({ favorites }) => {
+          const knownFavorites = favorites.filter(
+            (type): type is DrawingTypeKey => knownDrawingToolsRef.current.has(type),
+          );
+          try {
+            localStorage.setItem(FAVORITES_KEY, JSON.stringify(knownFavorites));
+          } catch (error) {
+            console.error("[maws] Could not save drawing-tool favorite preferences.", error);
+          }
+          bar.setFavorites(knownFavorites);
+          favoriteUiRef.current?.setFavorites(knownFavorites);
+          moreUiRef.current?.setFavorites(knownFavorites);
+        }),
         chart.on("drawing:snap", ({ mode }) => bar.setMagnetMode(mode)),
         chart.on("drawing:stay", ({ on }) => bar.setStayMode(on)),
         chart.on("drawing:mode", ({ mode }) => {
@@ -710,7 +882,16 @@ export function VelaDrawingBar() {
       // Seed from the chart's CURRENT state (the events above only fire on change).
       try {
         const d = chart.drawings;
+        const favorites = initializeFavorites(
+          chart,
+          defaultFavoriteToolsRef.current,
+          knownDrawingToolsRef.current,
+        );
+        bar.setFavorites(favorites);
+        favoriteUiRef.current?.setFavorites(favorites);
+        moreUiRef.current?.setFavorites(favorites);
         bar.setActiveTool(d.getTool());
+        favoriteUiRef.current?.setActiveTool(d.getTool());
         bar.setMagnetMode(d.getSnapMode());
         bar.setStayMode(d.getStayMode());
         const mode = d.getMode();
@@ -768,19 +949,35 @@ export function VelaDrawingBar() {
     // The bar is created BEFORE any `setDefinition` — push the MAWS quick-row layout now.
     const { definition: def, moreSections } = mawsTopBarToolbar();
     bar.setDefinition?.(def);
+    const directTools = def.groups.flatMap((group) => group.tools);
+    const directTypes = new Set(directTools.map((tool) => tool.type));
+    const allMenuTools = moreSections.flatMap((section) => section.tools);
+    defaultFavoriteToolsRef.current = [...directTypes];
+    knownDrawingToolsRef.current = new Set(allMenuTools.map((tool) => tool.type));
     const root = (bar as unknown as { root?: HTMLElement }).root;
-    let disposeMore: (() => void) | undefined;
+    let favoriteUi: FavoriteUi | undefined;
+    let moreUi: MoreButtonUi | undefined;
     let disposeReorder: (() => void) | undefined;
     let disposeOrient: (() => void) | undefined;
     if (root) {
       disposeOrient = orientHorizontal(root, host);
       mountAppButtons(root);
-      disposeMore = mountMoreButton(root, host, moreSections);
+      favoriteUi = mountFavoriteButtons(root, allMenuTools, directTypes);
+      moreUi = mountMoreButton(root, host, moreSections);
+      favoriteUiRef.current = favoriteUi;
+      moreUiRef.current = moreUi;
+      const favorites = activeChart()?.drawings.favorites() ?? [];
+      bar.setFavorites(favorites);
+      favoriteUi.setFavorites(favorites);
+      moreUi.setFavorites(favorites);
       disposeReorder = enableReorder(root, def);
     }
     return () => {
       disposeReorder?.();
-      disposeMore?.();
+      favoriteUi?.destroy();
+      moreUi?.destroy();
+      favoriteUiRef.current = null;
+      moreUiRef.current = null;
       disposeOrient?.();
       barRef.current = null;
       try {

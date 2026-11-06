@@ -5,11 +5,11 @@ import { ColResize } from "@/components/ui/ResizableColumns";
 import { formatPrice } from "@/lib/maws/feed";
 import { mawsFeed } from "@/lib/maws/feed";
 import { formatTicker } from "@/lib/maws/universe";
-import { StrategySymbolPanel } from "@/components/maws/StrategySymbolPanel";
+
 import { useAppStore } from "@/lib/store";
 import type { Quote } from "@/types";
 import { ChevronDown, MoreVertical } from "lucide-react";
-import { memo, useEffect, useRef, useState } from "react";
+import { memo, useEffect, useLayoutEffect, useRef, useState } from "react";
 
 const MIN_LAST_WIDTH = 45;
 const MIN_CHANGE_WIDTH = 40;
@@ -31,7 +31,7 @@ function DigitFlashPrice({ symbol, value }: { symbol: string; value: number }) {
     while (from < len && formatted[from] === prevStr[from]) from++;
     flashRef.current =
       from < formatted.length
-        ? { text: formatted, from, color: value > prevNum ? "#089981" : "#f23645" }
+        ? { text: formatted, from, color: value > prevNum ? "var(--app-up)" : "var(--app-down)" }
         : null;
   }
   useEffect(() => {
@@ -85,7 +85,6 @@ function useScreenerQuotes(): Map<string, Quote> {
 // ─── title bar ─────────────────────────────────────────────────────────────
 
 function TitleBar() {
-  const setRightOpen  = useAppStore((s) => s.setRightOpen);
   const watchlists = useAppStore((s) => s.watchlistGroups);
   const activeWatchlist = watchlists[0];
   const watchlistName = activeWatchlist?.name ?? "Watchlist";
@@ -241,7 +240,8 @@ function TitleBar() {
                 type="button"
                 role="menuitem"
                 onClick={deleteWatchlist}
-                className="block w-full px-3 py-1.5 text-left text-[12px] text-red-500 hover:bg-(--app-hover)"
+                className="block w-full px-3 py-1.5 text-left text-[12px] hover:bg-(--app-hover)"
+                style={{ color: "var(--app-down)" }}
               >
                 Delete
               </button>
@@ -250,12 +250,6 @@ function TitleBar() {
         </div>
       </div>
 
-      {/* ✕ closes the sidebar panel */}
-      <button type="button" title="Close" onClick={() => setRightOpen(false)} className="wl-icon-btn">
-        <svg width="12" height="12" viewBox="0 0 12 12" fill="none" aria-hidden="true">
-          <path d="M1.5 1.5l9 9M10.5 1.5l-9 9" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"/>
-        </svg>
-      </button>
     </div>
   );
 }
@@ -329,11 +323,12 @@ const WatchlistRow = memo(function WatchlistRow({
   const chgColor =
     changePct == null || changePct === 0
       ? "var(--app-muted)"
-      : changePct > 0 ? "#089981" : "#f23645";
+      : changePct > 0 ? "var(--app-up)" : "var(--app-down)";
 
   return (
     <div
       data-screener-card={symbol}
+      data-selected={selected ? "true" : undefined}
       style={{ borderColor: "var(--app-border)" }}
       className={[
         "wl-row border-b",
@@ -420,11 +415,12 @@ function PendingRow({
   const chgColor =
     !quote || quote.changePct === 0
       ? "var(--app-muted)"
-      : quote.changePct > 0 ? "#089981" : "#f23645";
+      : quote.changePct > 0 ? "var(--app-up)" : "var(--app-down)";
 
   return (
     <div
       data-screener-card={symbol}
+      data-selected={selected ? "true" : undefined}
       role="button"
       tabIndex={0}
       onClick={() => onOpen(symbol)}
@@ -479,8 +475,6 @@ export function StrategyScreener() {
   // canonical universe symbol ("XAUUSDT") — compare on the bare symbol so the
   // selected-row marker survives either form.
   const activeKey = active ? bareSymbol(active) : undefined;
-  const cardsHeight        = useAppStore((s) => s.strategyCardsHeight);
-  const setCardsHeight     = useAppStore((s) => s.setStrategyCardsHeight);
   const storedWidths       = useAppStore((s) => s.columnWidths["watchlist"]);
   const setColumnWidths    = useAppStore((s) => s.setColumnWidths);
 
@@ -572,6 +566,61 @@ export function StrategyScreener() {
 
   const displayOrder = previewOrder ?? watchlist;
 
+
+  const [indicator, setIndicator] = useState<{
+    top: number;
+    height: number;
+    ready: boolean;
+  }>({
+    top: 0,
+    height: 36,
+    ready: false,
+  });
+
+  useLayoutEffect(() => {
+    const listEl = listRef.current;
+    if (!listEl) return;
+
+    const selectedEl = listEl.querySelector<HTMLElement>('[data-selected="true"]');
+    if (!selectedEl) {
+      setIndicator((prev) => (prev.ready ? { ...prev, ready: false } : prev));
+      return;
+    }
+
+    const top = selectedEl.offsetTop;
+    const height = selectedEl.clientHeight || 36;
+
+    setIndicator((prev) => {
+      if (prev.ready && prev.top === top && prev.height === height) {
+        return prev;
+      }
+      return {
+        top,
+        height,
+        ready: true,
+      };
+    });
+  }, [activeKey, displayOrder]);
+
+  useEffect(() => {
+    const listEl = listRef.current;
+    if (!listEl) return;
+
+    const handleResize = () => {
+      const selectedEl = listEl.querySelector<HTMLElement>('[data-selected="true"]');
+      if (selectedEl) {
+        setIndicator({
+          top: selectedEl.offsetTop,
+          height: selectedEl.clientHeight || 36,
+          ready: true,
+        });
+      }
+    };
+
+    window.addEventListener("resize", handleResize);
+    return () => window.removeEventListener("resize", handleResize);
+  }, []);
+
   // ─── drag-to-reorder ────────────────────────────────────────────────────
 
   const moveDragToClientY = (clientY: number) => {
@@ -640,11 +689,7 @@ export function StrategyScreener() {
 
       {/* ── scrollable symbol list ── */}
       <div
-        className="relative min-h-0 shrink-0 overflow-hidden"
-        style={{
-          height:    active ? cardsHeight : "100%",
-          maxHeight: active ? "calc(100% - 120px)" : "100%",
-        }}
+        className="relative min-h-0 flex-1 overflow-hidden"
       >
         <div className="flex h-full flex-col overflow-auto">
           <ColumnHeader
@@ -660,7 +705,20 @@ export function StrategyScreener() {
               No symbols in watchlist.
             </div>
           ) : (
-            <div ref={listRef}>
+            <div ref={listRef} className="relative">
+              <div
+                className={`wl-selected-indicator ${!indicator.ready || dragSymbol != null ? "no-transition" : ""}`}
+                style={{
+                  transform: `translate3d(0, ${indicator.top}px, 0)`,
+                  height: `${indicator.height}px`,
+                  opacity: indicator.ready ? 1 : 0,
+                  transition:
+                    indicator.ready && dragSymbol == null
+                      ? "transform 0.18s cubic-bezier(0.2, 0.8, 0.25, 1), height 0.18s cubic-bezier(0.2, 0.8, 0.25, 1), opacity 0.12s ease"
+                      : "none",
+                }}
+                aria-hidden="true"
+              />
               {displayOrder.map((sym) => {
                 const q = quotes.get(bareSymbol(sym));
                 const quoteReady = q != null;
@@ -697,48 +755,9 @@ export function StrategyScreener() {
             </div>
           )}
         </div>
-
-        {/* resize handle between list and symbol panel */}
-        {active && (
-          <div
-            className="absolute bottom-0 left-0 z-20 h-1.5 w-full cursor-row-resize bg-transparent"
-            title="Drag to resize"
-            onDoubleClick={() => setCardsHeight(320)}
-            onMouseDown={(e) => {
-              e.preventDefault();
-              const startY = e.clientY;
-              const listEl = e.currentTarget.parentElement;
-              const startH = listEl ? listEl.getBoundingClientRect().height : cardsHeight;
-              const box = boxRef.current?.getBoundingClientRect();
-              const titleBarH =
-                boxRef.current?.firstElementChild instanceof HTMLElement
-                  ? boxRef.current.firstElementChild.offsetHeight
-                  : 42;
-              const max = Math.max(96, (box?.height ?? 600) - titleBarH - 120);
-              const prevSelect = document.body.style.userSelect;
-              const prevCursor = document.body.style.cursor;
-              document.body.style.userSelect = "none";
-              document.body.style.cursor = "row-resize";
-
-              const move = (ev: MouseEvent) => {
-                const dy = ev.clientY - startY;
-                setCardsHeight(Math.min(max, Math.max(96, Math.round(startH + dy))));
-              };
-              const up = () => {
-                document.body.style.userSelect = prevSelect;
-                document.body.style.cursor = prevCursor;
-                window.removeEventListener("mousemove", move);
-                window.removeEventListener("mouseup",   up);
-              };
-              window.addEventListener("mousemove", move);
-              window.addEventListener("mouseup",   up);
-            }}
-          />
-        )}
       </div>
 
-      {/* ── active-symbol detail panel ── */}
-      {active && <StrategySymbolPanel symbol={active} />}
+
     </div>
   );
 }

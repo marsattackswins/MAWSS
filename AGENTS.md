@@ -22,7 +22,7 @@ Vendored source of LuxAlgo's vela charting library (Apache-2.0 — keep `lib/cha
 The app serves on port **3000, always** — `scripts/app-port.mjs` holds that constant and
 dev, supervisor and standalone all import it. Never add a `PORT` / `MAWS_PORT` override
 or a "next free port" fallback: the browser keys saved workspace state (layout, chart +
-app settings, drawings, watchlist, paper account) by ORIGIN, so any other port opens an
+app settings, drawings, watchlist) by ORIGIN, so any other port opens an
 empty, default workspace. `npm run dev` refuses to start when 3000 is taken instead of
 letting Next walk up to 3001.
 

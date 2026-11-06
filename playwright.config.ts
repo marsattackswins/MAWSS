@@ -51,6 +51,14 @@ export default defineConfig({
     baseURL: "http://localhost:3001",
     viewport: { width: 1440, height: 900 },
   },
+  // E2E CI POLICY (see .github/workflows/e2e.yml):
+  // - The disconnected.spec.ts and smoke.spec.ts suites use FakeBinanceFeed (no
+  //   real exchange) and run in CI on every PR via the e2e.yml workflow.
+  // - order-lifecycle.spec.ts is skipped pending a Testnet rewrite.
+  // - No real credentials are needed or injected: playwright.config.ts blanks
+  //   all MAWS_* env vars. The webServer runs on port 3001 (isolated from the
+  //   dev workspace on 3000) so saved state keys (origin-scoped localStorage)
+  //   cannot cross-contaminate.
   webServer: {
     command: "npx next dev -p 3001",
     port: 3001,

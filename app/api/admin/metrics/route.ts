@@ -32,7 +32,7 @@ export async function GET(req: NextRequest) {
   try {
     const snapshot = metricsSnapshot();
 
-    // Unrealized P&L across open positions (live + paper). Computed from
+    // Unrealized P&L across open positions. Computed from
     // already-maintained in-memory state; no DB or network calls.
     const pnl = pnl24h();
 

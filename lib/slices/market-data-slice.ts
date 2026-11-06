@@ -1,4 +1,5 @@
 import { mawsFeed } from "@/lib/maws/feed";
+import { useLiveStore } from "@/lib/live/store";
 import type { Store } from "@/lib/store";
 
 /** Build the hot-symbol set from workspace state. */
@@ -6,8 +7,8 @@ export function collectHotSymbols(state: {
   watchlist: string[];
   layoutCount: number;
   panes: Array<{ symbol: string }>;
-  orders: Array<{ symbol: string }>;
-  positions: Array<{ symbol: string }>;
+  orders?: Array<{ symbol: string }>;
+  positions?: Array<{ symbol: string }>;
 }): string[] {
   const hot = new Set<string>();
   const add = (raw: string) => {
@@ -16,8 +17,8 @@ export function collectHotSymbols(state: {
   };
   for (const s of state.watchlist) add(s);
   for (const p of state.panes.slice(0, state.layoutCount)) add(p.symbol);
-  for (const o of state.orders) add(o.symbol);
-  for (const p of state.positions) add(p.symbol);
+  for (const o of state.orders ?? []) add(o.symbol);
+  for (const p of state.positions ?? []) add(p.symbol);
   return [...hot];
 }
 
@@ -42,7 +43,16 @@ export function createMarketDataSlice(set: RootSet, get: RootGet): MarketDataSli
     hotSymbols: [],
 
     syncHotSymbols: () => {
-      const hot = collectHotSymbols(get());
+      const appState = get();
+      // Merge live store orders/positions so hot symbols include trade-related symbols.
+      const liveState = useLiveStore.getState();
+      const hot = collectHotSymbols({
+        watchlist: appState.watchlist,
+        layoutCount: appState.layoutCount,
+        panes: appState.panes,
+        orders: liveState.orders,
+        positions: liveState.positions,
+      });
       set({ hotSymbols: hot });
       mawsFeed.setHotSymbols(hot);
     },

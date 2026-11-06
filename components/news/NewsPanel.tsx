@@ -25,7 +25,7 @@ function NewsRow({ item, now }: { item: NewsItem; now: number }) {
       }}
       className={`block w-full rounded-md border border-[var(--maws-border)] bg-[var(--maws-panel)] px-3 py-2.5 text-left transition-colors ${
         open
-          ? "cursor-pointer hover:border-[#2a2a2a] hover:bg-[var(--maws-elevated)]"
+          ? "cursor-pointer hover:border-(--app-border) hover:bg-[var(--maws-elevated)]"
           : "cursor-default opacity-80"
       }`}
     >
@@ -36,7 +36,7 @@ function NewsRow({ item, now }: { item: NewsItem; now: number }) {
             {item.category ? ` · ${item.category}` : ""}
           </span>
           {open ? (
-            <ExternalLink size={10} className="shrink-0 text-[#5b9cf6]" aria-hidden />
+            <ExternalLink size={10} className="shrink-0 text-(--app-accent)" aria-hidden />
           ) : null}
         </span>
         <span className="shrink-0 normal-case tracking-normal">{formatNewsAge(item.at, now)}</span>
@@ -128,14 +128,14 @@ export function NewsPanel() {
       <div className="flex h-8 shrink-0 items-center justify-between border-b border-(--app-border) px-2">
         <div className="flex min-w-0 items-center gap-2">
           <span className="text-[13px] font-semibold text-(--app-text)">News</span>
-          <span className="truncate text-[10px] uppercase tracking-wide text-[#4c525e]">
+          <span className="truncate text-[10px] uppercase tracking-wide text-(--app-faint)">
             Finnhub
             {tab === "asset" ? ` · ${formatTicker(pane.symbol)}` : ""}
           </span>
           <button
             type="button"
             title="Reload news"
-            className="flex h-5 items-center gap-1 rounded px-1 text-[10px] text-[#4c525e] hover:bg-(--app-hover) hover:text-(--app-text)"
+            className="flex h-5 items-center gap-1 rounded px-1 text-[10px] text-(--app-faint) hover:bg-(--app-hover) hover:text-(--app-text)"
             onClick={() => setReloadToken((n) => n + 1)}
           >
             <RefreshCw size={10} />

@@ -12,6 +12,23 @@ import { FakeHttp, freshEnv, installFakes, jsonRes, makeCfg, accountFixture, BTC
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
+/**
+ * The reconciliation snapshot and the mark-price poller both write position PnL,
+ * and their fixtures disagree (positionRisk reports "0", premiumIndex implies
+ * 1.2), so whichever ran last at an arbitrary endpoint is a race. Liveness is
+ * proven by PnL leaving the seeded value at *any* sample in the window.
+ */
+async function sleepWatchingPnl(symbol: string, ms: number): Promise<string[]> {
+  const seen: string[] = [];
+  const end = Date.now() + ms;
+  while (Date.now() < end) {
+    await sleep(50);
+    const pnl = liveState().positions.get(symbol)?.unrealizedProfit;
+    if (pnl !== undefined) seen.push(pnl);
+  }
+  return seen;
+}
+
 let manager: BinanceLiveManager;
 let http: FakeHttp;
 let events: Array<{ event: string; data: unknown }>;
@@ -62,7 +79,7 @@ describe("timer liveness after startup", () => {
 
     const reconBefore = http.callsTo("/fapi/v2/positionRisk").length;
     events.length = 0;
-    await sleep(7_500);
+    const pnlSeen = await sleepWatchingPnl("BTCUSDT", 7_500);
 
     // Reconciliation interval: positionRisk is refetched on each run.
     const reconRuns = http.callsTo("/fapi/v2/positionRisk").length - reconBefore;
@@ -77,7 +94,7 @@ describe("timer liveness after startup", () => {
     expect(events.some((e) => e.event === "account-update")).toBe(true);
 
     // PnL actually moved from the seeded snapshot value.
-    expect(liveState().positions.get("BTCUSDT")?.unrealizedProfit).not.toBe("0");
+    expect(pnlSeen.some((pnl) => pnl !== "0")).toBe(true);
   }, 20_000);
 
   test("overlapping ensureStarted calls (connect racing switch) keep timers alive", async () => {
@@ -115,7 +132,7 @@ describe("timer liveness after startup", () => {
     expect(manager.status).toBe("ready");
 
     const reconBefore = http.callsTo("/fapi/v2/positionRisk").length;
-    await sleep(6_000);
+    const pnlSeen = await sleepWatchingPnl("BTCUSDT", 6_000);
 
     const reconRuns = http.callsTo("/fapi/v2/positionRisk").length - reconBefore;
     const markFetches = http.callsTo("/fapi/v1/premiumIndex").length;
@@ -125,6 +142,6 @@ describe("timer liveness after startup", () => {
 
     expect(reconRuns).toBeGreaterThanOrEqual(1); // interval alive after the race
     expect(markFetches).toBeGreaterThanOrEqual(2); // poller alive after the race
-    expect(liveState().positions.get("BTCUSDT")?.unrealizedProfit).not.toBe("0");
+    expect(pnlSeen.some((pnl) => pnl !== "0")).toBe(true);
   }, 20_000);
 });

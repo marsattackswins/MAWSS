@@ -1,4 +1,5 @@
 import { useAppStore } from "@/lib/store";
+import { useLiveStore } from "@/lib/live/store";
 import { getSymbol } from "@/lib/maws/universe";
 import {
   DEFAULT_SYMBOL_TRADING,
@@ -48,6 +49,7 @@ export function resolveSymbolTrading(symbol: string): SymbolTradingSettings {
     margin: saved.margin ?? DEFAULT_SYMBOL_TRADING.margin,
     marginPercent: saved.marginPercent ?? DEFAULT_SYMBOL_TRADING.marginPercent,
     sizingMode: saved.sizingMode ?? DEFAULT_SYMBOL_TRADING.sizingMode,
+    confirmOrders: saved.confirmOrders ?? DEFAULT_SYMBOL_TRADING.confirmOrders,
     // No per-symbol override ⇒ the GLOBAL "Order type" row in Settings → Trading
     // governs, the same way leverage falls back to its global default.
     defaultOrderType:
@@ -61,7 +63,8 @@ export function resolveSymbolTrading(symbol: string): SymbolTradingSettings {
 export function resolveMarginAmount(symbol: string): number {
   const t = resolveSymbolTrading(symbol);
   if (t.sizingMode === "percent") {
-    const balance = useAppStore.getState().mockBalance;
+    const account = useLiveStore.getState().account;
+    const balance = account?.balance ?? 0;
     return Math.max(0, balance * (t.marginPercent / 100));
   }
   return Math.max(0, t.margin);
@@ -163,7 +166,7 @@ export function resolvePositionOrderQty(
     drawing.positionRiskUnit != null;
   if (!hasOverride) return resolveOrderQty(symbol, price);
 
-  const balance = useAppStore.getState().mockBalance;
+  const balance = useLiveStore.getState().account?.balance ?? 0;
   const account =
     drawing.positionAccountSizeMode === "custom" &&
     drawing.positionAccountSize != null &&
@@ -202,7 +205,7 @@ export function topbarSeedMargin(symbol: string): number {
   const t = resolveSymbolTrading(symbol);
   const margin =
     t.sizingMode === "percent"
-      ? Math.max(0, useAppStore.getState().mockBalance) * (t.marginPercent / 100)
+      ? Math.max(0, useLiveStore.getState().account?.balance ?? 0) * (t.marginPercent / 100)
       : Math.max(0, t.margin);
   return Math.max(
     TOPBAR_MARGIN_MIN,

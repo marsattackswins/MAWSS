@@ -2,11 +2,10 @@ import "server-only";
 
 export type MawsEnv = "local" | "testnet" | "shadow" | "production";
 export type BrokerType = "binance";
-export type ProfileId = "paper" | "binance-testnet" | "binance-production";
-export type ProfileEnvironment = "paper" | "testnet" | "production";
+export type ProfileId = "binance-testnet" | "binance-production";
+export type ProfileEnvironment = "testnet" | "production";
 
 export const PROFILE_IDS: readonly ProfileId[] = [
-  "paper",
   "binance-testnet",
   "binance-production",
 ];
@@ -17,6 +16,7 @@ export interface ServerProfileConfig {
   environment: ProfileEnvironment;
   configured: boolean;
   executionEnabled: boolean;
+  confirmOrders?: boolean;
   apiKey: string | null;
   apiSecret: string | null;
   restEndpoint: string;
@@ -32,6 +32,7 @@ export interface SafeProfileMetadata {
   configured: boolean;
   requiresProductionConfirmation: boolean;
   executionEnabled: boolean;
+  confirmOrders?: boolean;
 }
 
 export interface EnvConfig {
@@ -154,12 +155,14 @@ function pairsEqual(left: CredentialPair, right: CredentialPair): boolean {
 }
 
 function parseDefaultProfile(raw: string | undefined): ProfileId {
-  const value = (raw ?? "paper").trim().toLowerCase();
-  if (value === "paper" || value === "binance-testnet" || value === "binance-production") {
+  const value = (raw ?? "binance-testnet").trim().toLowerCase();
+  if (value === "binance-testnet" || value === "binance-production") {
     return value;
   }
+  // Legacy "paper" value — treat as no preference (default to testnet).
+  if (value === "paper") return "binance-testnet";
   throw new Error(
-    "MAWS_DEFAULT_PROFILE must be one of paper|binance-testnet|binance-production",
+    "MAWS_DEFAULT_PROFILE must be one of binance-testnet|binance-production",
   );
 }
 
@@ -176,7 +179,6 @@ function credentialProfileForEnvironment(env: MawsEnv): ProfileId | null {
 }
 
 function profileEndpoints(profileId: ProfileId): { rest: string; uds: string } {
-  if (profileId === "paper") return HOST_MAP.local;
   if (profileId === "binance-testnet") return HOST_MAP.testnet;
   return HOST_MAP.production;
 }
@@ -187,6 +189,7 @@ function makeProfile(
   environment: ProfileEnvironment,
   source: CredentialPair,
   executionEnabled: boolean,
+  confirmOrders?: boolean,
 ): ServerProfileConfig {
   const endpoints = profileEndpoints(profileId);
   return {
@@ -195,6 +198,7 @@ function makeProfile(
     environment,
     configured: isComplete(source),
     executionEnabled,
+    confirmOrders,
     apiKey: source.apiKey,
     apiSecret: source.apiSecret,
     restEndpoint: endpoints.rest,
@@ -227,20 +231,21 @@ function buildProfiles(
   }
 
   return {
-    paper: makeProfile("paper", "Paper", "paper", { apiKey: null, apiSecret: null }, false),
     "binance-testnet": makeProfile(
       "binance-testnet",
       "Binance Testnet",
       "testnet",
       testnetCredentials,
       isComplete(testnetCredentials),
+      source.MAWS_BINANCE_TESTNET_CONFIRM_ORDERS === "true" || false,
     ),
     "binance-production": makeProfile(
       "binance-production",
-      "Binance Production",
+      "Binance Live",
       "production",
       productionCredentials,
       isComplete(productionCredentials),
+      source.MAWS_BINANCE_PRODUCTION_CONFIRM_ORDERS === "true" || false,
     ),
   };
 }
@@ -256,6 +261,7 @@ export function safeProfileMetadata(profiles: ProfileRegistry): SafeProfileMetad
       configured: profile.configured,
       requiresProductionConfirmation: profile.profileId === "binance-production",
       executionEnabled: profile.executionEnabled,
+      confirmOrders: profile.confirmOrders ?? false,
     };
   });
 }

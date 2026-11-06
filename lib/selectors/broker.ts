@@ -1,8 +1,8 @@
 /**
  * Broker book selection: one source of truth for which orders/positions the
- * UI renders. `connectedBroker === "binance"` shows the live book; anything
- * else (mock/paper, or nothing connected) shows the paper book. The two books
- * are never merged — the chart and panels always render exactly one.
+ * UI renders. Only `connectedBroker === "binance"` shows the live book;
+ * in all other states (disconnected) the books are empty — there is no
+ * paper book to fall back to.
  */
 
 import { useAppStore, type Store } from "@/lib/store";
@@ -18,29 +18,30 @@ export interface BrokerBook {
   positions: BookPosition[];
 }
 
+/** Empty book returned when no live broker is connected. */
+const EMPTY_BOOK: BrokerBook = { orders: [], positions: [] };
+
 /**
- * Pure selector over a combined store snapshot. Live book takes precedence
- * when (and only when) the binance broker is the connected one; otherwise the
- * paper book is returned. Never merges the two.
+ * Pure selector over a combined store snapshot. Live book is returned
+ * when (and only when) the binance broker is the connected one.
+ * Returns an empty book when disconnected — there is no fallback paper book.
  */
 export function getBrokerBook(
-  app: Pick<Store, "connectedBroker" | "orders" | "positions">,
+  app: Pick<Store, "connectedBroker">,
   live: Pick<ReturnType<typeof useLiveStore.getState>, "orders" | "positions">,
 ): BrokerBook {
   if (app.connectedBroker === "binance") {
     return { orders: live.orders as ChartOrder[], positions: live.positions as BookPosition[] };
   }
-  return { orders: app.orders, positions: app.positions as BookPosition[] };
+  return EMPTY_BOOK;
 }
 
 /** Reactive variant for React components (subscribes to both stores). */
 export function useBrokerBook(): BrokerBook {
   const connectedBroker = useAppStore((s) => s.connectedBroker);
-  const orders = useAppStore((s) => s.orders);
-  const positions = useAppStore((s) => s.positions);
   const liveOrders = useLiveStore((s) => s.orders);
   const livePositions = useLiveStore((s) => s.positions);
-  return getBrokerBook({ connectedBroker, orders, positions }, { orders: liveOrders, positions: livePositions });
+  return getBrokerBook({ connectedBroker }, { orders: liveOrders, positions: livePositions });
 }
 
 export type { OrderDto, PositionDto };

@@ -94,6 +94,8 @@ export function sliceKeyFor(zIndex: number, boundaries: readonly number[]): numb
  */
 export class UserDrawingController implements IDrawingsRendererPort {
     private ctx: CanvasRenderingContext2D | null = null;
+    /** No drawing or transient to paint: the canvas is cleared and removed from the compositor. */
+    private blank = true;
     private drawings: Drawing[] = [];
     /** Ids painted on an interleave layer this frame — the top canvas paints only their handles. */
     private sliced = new Set<string>();
@@ -953,6 +955,11 @@ export class UserDrawingController implements IDrawingsRendererPort {
     render(): void {
         const ctx = this.ctx;
         if (!ctx) return;
+        if (!this.hasDrawingContent()) {
+            this.clearBlank();
+            return;
+        }
+        this.show();
         const dpr = this.deps.dpr();
         ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
         ctx.clearRect(0, 0, this.canvas.width / dpr, this.canvas.height / dpr);
@@ -1002,6 +1009,33 @@ export class UserDrawingController implements IDrawingsRendererPort {
         if (this.measure.isActive()) this.measure.paint(ctx, proj, this.deps.theme());
         const marquee = this.interaction.marqueeRect();
         if (marquee) this.painter.paintMarquee(ctx, marquee);
+    }
+
+    /** Whether this layer has any pixels to show (drawings, selection, or a live transient). */
+    private hasDrawingContent(): boolean {
+        return this.drawings.length > 0
+            || this.selectedIds.size > 0
+            || this.hoveredId !== null
+            || this.activeTool !== null
+            || this.externalGhost !== null
+            || this.textEditor !== null
+            || this.measure.isActive()
+            || this.interaction.isPlacing()
+            || this.interaction.isDragging()
+            || this.interaction.ghost() !== null;
+    }
+
+    /** Clear the stale frame once, then hide the (fully transparent) canvas. */
+    private clearBlank(): void {
+        const ctx = this.ctx;
+        if (!ctx || this.blank) return;
+        ctx.setTransform(1, 0, 0, 1, 0, 0);
+        ctx.clearRect(0, 0, this.canvas.width, this.canvas.height);
+        this.blank = true;
+    }
+
+    private show(): void {
+        this.blank = false;
     }
 
     destroy(): void {

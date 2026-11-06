@@ -25,7 +25,8 @@ export function RightDock() {
   const dock = useAppStore((s) => s.rightDock);
   const setRightDock = useAppStore((s) => s.setRightDock);
   const rightOpen = useAppStore((s) => s.rightOpen);
-  const setRightOpen = useAppStore((s) => s.setRightOpen);
+  const rightPanelOpen = useAppStore((s) => s.rightPanelOpen);
+  const setRightPanelOpen = useAppStore((s) => s.setRightPanelOpen);
   const order = useAppStore((s) => s.rightDockOrder);
   const setRightDockOrder = useAppStore((s) => s.setRightDockOrder);
 
@@ -66,15 +67,21 @@ export function RightDock() {
     if (!sameDockOrder(next, savedIds)) setRightDockOrder(next);
   };
 
+  // When the top-bar arrow stows the whole right side, the rail goes with it.
+  // (A rail icon still folds only its own panel body — see the click handler.)
+  if (!rightOpen) return null;
+
   return (
     <aside
-      className="flex w-[44px] shrink-0 flex-col items-center gap-1 border-l py-2"
+      className="flex w-[44px] shrink-0 flex-col items-center gap-1 border-l pt-2"
       style={{ background: "var(--maws-panel)", borderColor: "var(--maws-border)" }}
       aria-label="Right panel shortcuts"
     >
       {items.map((item) => {
         const Icon = item.icon;
-        const active = rightOpen && dock === item.id;
+        // Highlighted only while its panel body is actually showing; a stowed panel leaves
+        // the rail unlit so the click that brings it back reads as "open this".
+        const active = rightOpen && rightPanelOpen && dock === item.id;
         const dragging = dragId === item.id;
         return (
           <button
@@ -85,7 +92,9 @@ export function RightDock() {
             aria-label={item.label}
             onClick={() => {
               if (draggedRef.current) return;
-              if (active) setRightOpen(false);
+              // A rail icon folds only ITS OWN panel body — the rail itself always stays.
+              // Folding the whole right side (panel + rail) belongs to the top-bar arrow.
+              if (active) setRightPanelOpen(false);
               else setRightDock(item.id);
             }}
             onDragStart={(e) => {
