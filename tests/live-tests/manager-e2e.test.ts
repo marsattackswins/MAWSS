@@ -24,6 +24,22 @@ const flush = async () => {
   for (let i = 0; i < 5; i++) await new Promise((r) => setTimeout(r, 0));
 };
 
+async function waitForRiskSnapshot(predicate: () => boolean, timeoutMs = 2_000): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (predicate()) return;
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+  throw new Error("Timed out waiting for account-update risk snapshot");
+}
+
+async function applyManagerAccountUpdate(event: unknown): Promise<void> {
+  const processEvent = (manager as unknown as {
+    processEvent: (event: unknown) => void | Promise<void>;
+  }).processEvent.bind(manager);
+  await processEvent(event);
+}
+
 async function startManager(overrides: Record<string, () => unknown> = {}) {
   const cfg = freshEnv(makeCfg());
   http = new FakeHttp();
@@ -331,6 +347,23 @@ describe("BinanceLiveManager end-to-end (fake testnet)", () => {
 
   test("ACCOUNT_UPDATE events refresh balance state", async () => {
     await startManager();
+    http.route("/fapi/v2/account", () =>
+      jsonRes(accountFixture({
+        totalWalletBalance: "1500",
+        totalMarginBalance: "1500",
+        availableBalance: "1500",
+      })),
+    );
+    http.route("/fapi/v2/positionRisk", () => jsonRes([{
+      symbol: "BTCUSDT",
+      positionAmt: "0.001",
+      entryPrice: "50000",
+      markPrice: "50000",
+      unRealizedProfit: "1",
+      liquidationPrice: "40000",
+      leverage: "5",
+      positionSide: "BOTH",
+    }]));
     const ws = FakeWs.last();
     ws.emitOpen();
     await flush();
@@ -347,6 +380,126 @@ describe("BinanceLiveManager end-to-end (fake testnet)", () => {
     expect(liveState().account?.totalWalletBalance).toBe("1500");
     expect(liveState().positions.get("BTCUSDT")?.qty).toBe("0.001");
     expect(events.some((e) => e.event === "account-update")).toBe(true);
+  });
+
+  test("position fill marks margin risk stale until the account and position snapshot refresh lands", async () => {
+    let positionRows = [{
+      symbol: "BTCUSDT",
+      positionAmt: "0.001",
+      entryPrice: "50000",
+      markPrice: "50000",
+      unRealizedProfit: "0",
+      liquidationPrice: "40000",
+      leverage: "5",
+      positionSide: "BOTH",
+    }];
+    await startManager({
+      "/fapi/v2/account": () => accountFixture({ totalMaintMargin: "25" }),
+      "/fapi/v2/positionRisk": () => positionRows,
+    });
+    const initialMarginSnapshotAt = liveState().account!.marginHealthFetchedAt;
+    expect(manager.getRiskSnapshot().marginDataFresh).toBe(true);
+
+    positionRows = [{ ...positionRows[0], positionAmt: "0.002", liquidationPrice: "42000" }];
+    await applyManagerAccountUpdate({
+      e: "ACCOUNT_UPDATE",
+      E: Date.now(),
+      T: Date.now(),
+      a: {
+        B: [{ a: "USDT", wb: "1000", cw: "950", bc: "0" }],
+        P: [{ s: "BTCUSDT", pa: "0.002", ep: "50000", cr: "0", up: "0", mt: "isolated", iw: "0", ps: "BOTH" }],
+      },
+    });
+
+    const fillPosition = liveState().positions.get("BTCUSDT")!;
+    expect(fillPosition.riskSnapshotFetchedAt).toBe(0);
+    expect(fillPosition.liquidationPrice).toBe("");
+    expect(manager.getRiskSnapshot().marginDataFresh).toBe(false);
+    expect(liveState().account).toMatchObject({
+      maintenanceMargin: "25",
+      marginHealthBalance: "1000",
+      marginHealthFetchedAt: initialMarginSnapshotAt,
+    });
+
+    await waitForRiskSnapshot(() =>
+      liveState().positions.get("BTCUSDT")?.liquidationPrice === "42000" &&
+      manager.getRiskSnapshot().marginDataFresh === true,
+    );
+    expect(liveState().positions.get("BTCUSDT")?.qty).toBe("0.002");
+  });
+
+  test("failed account-update position refresh leaves liquidation risk stale", async () => {
+    const positionRows = [{
+      symbol: "BTCUSDT",
+      positionAmt: "0.001",
+      entryPrice: "50000",
+      markPrice: "50000",
+      unRealizedProfit: "0",
+      liquidationPrice: "40000",
+      leverage: "5",
+      positionSide: "BOTH",
+    }];
+    await startManager({
+      "/fapi/v2/positionRisk": () => positionRows,
+    });
+    const positionRiskCallCount = http.callsTo("/fapi/v2/positionRisk").length;
+    http.scriptApiError("/fapi/v2/positionRisk", -1000, "test refresh failure");
+
+    await applyManagerAccountUpdate({
+      e: "ACCOUNT_UPDATE",
+      E: Date.now(),
+      T: Date.now(),
+      a: {
+        B: [{ a: "USDT", wb: "1000", cw: "950", bc: "0" }],
+        P: [{ s: "BTCUSDT", pa: "0.002", ep: "50000", cr: "0", up: "0", mt: "isolated", iw: "0", ps: "BOTH" }],
+      },
+    });
+    await waitForRiskSnapshot(
+      () => http.callsTo("/fapi/v2/positionRisk").length > positionRiskCallCount,
+    );
+    await new Promise((resolve) => setTimeout(resolve, 25));
+
+    expect(liveState().positions.get("BTCUSDT")?.liquidationPrice).toBe("");
+    expect(manager.getRiskSnapshot().marginDataFresh).toBe(false);
+  });
+
+  test("bursts of position ACCOUNT_UPDATE events coalesce into one risk snapshot refresh", async () => {
+    let positionRows = [{
+      symbol: "BTCUSDT",
+      positionAmt: "0.001",
+      entryPrice: "50000",
+      markPrice: "50000",
+      unRealizedProfit: "0",
+      liquidationPrice: "40000",
+      leverage: "5",
+      positionSide: "BOTH",
+    }];
+    await startManager({
+      "/fapi/v2/positionRisk": () => positionRows,
+    });
+    const accountCallsBefore = http.callsTo("/fapi/v2/account").length;
+    const positionRiskCallsBefore = http.callsTo("/fapi/v2/positionRisk").length;
+
+    for (const qty of ["0.002", "0.003", "0.004"]) {
+      positionRows = [{ ...positionRows[0], positionAmt: qty, liquidationPrice: "42000" }];
+      await applyManagerAccountUpdate({
+        e: "ACCOUNT_UPDATE",
+        E: Date.now(),
+        T: Date.now(),
+        a: {
+          B: [{ a: "USDT", wb: "1000", cw: "950", bc: "0" }],
+          P: [{ s: "BTCUSDT", pa: qty, ep: "50000", cr: "0", up: "0", mt: "isolated", iw: "0", ps: "BOTH" }],
+        },
+      });
+    }
+
+    await waitForRiskSnapshot(() =>
+      liveState().positions.get("BTCUSDT")?.qty === "0.004" &&
+      liveState().positions.get("BTCUSDT")?.liquidationPrice === "42000" &&
+      manager.getRiskSnapshot().marginDataFresh === true,
+    );
+    expect(http.callsTo("/fapi/v2/account")).toHaveLength(accountCallsBefore + 1);
+    expect(http.callsTo("/fapi/v2/positionRisk")).toHaveLength(positionRiskCallsBefore + 1);
   });
 
   test("kill switch engaged mid-session blocks new submissions", async () => {

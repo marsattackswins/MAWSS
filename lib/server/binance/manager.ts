@@ -67,6 +67,7 @@ const MARK_PRICE_REFRESH_MS_FALLBACK = 15_000;
  * clockIsHealthy / buildHealthStatus, so the signal stays fresh with margin.
  */
 const CLOCK_REFRESH_MS = 2.5 * 60 * 1000;
+const ACCOUNT_UPDATE_SNAPSHOT_DEBOUNCE_MS = 50;
 
 export class BinanceLiveManager {
   status: ManagerStatus = "idle";
@@ -82,6 +83,10 @@ export class BinanceLiveManager {
   private stream: UserDataStream | null = null;
   private recon: Reconciler;
   private reconTimer: ReturnType<typeof setInterval> | null = null;
+  private accountUpdateSnapshotTimer: ReturnType<typeof setTimeout> | null = null;
+  private accountUpdateSnapshotPromise: Promise<void> | null = null;
+  private accountUpdateSnapshotPending = false;
+  private accountUpdateSnapshotRevision = 0;
   private lifecycleGeneration = 0;
   /**
    * Periodic proactive clock resync. Without it the clock signal goes stale
@@ -178,6 +183,10 @@ export class BinanceLiveManager {
     if (this.markPriceTimer) {
       clearTimeout(this.markPriceTimer);
       this.markPriceTimer = null;
+    }
+    if (this.accountUpdateSnapshotTimer) {
+      clearTimeout(this.accountUpdateSnapshotTimer);
+      this.accountUpdateSnapshotTimer = null;
     }
     this.markPriceStream.stop();
   }
@@ -593,6 +602,64 @@ export class BinanceLiveManager {
     publishLive("snapshot", { at: Date.now() });
   }
 
+  private scheduleAccountUpdateSnapshot(): void {
+    this.accountUpdateSnapshotRevision += 1;
+    if (this.accountUpdateSnapshotPromise) {
+      this.accountUpdateSnapshotPending = true;
+      return;
+    }
+    if (this.accountUpdateSnapshotTimer) clearTimeout(this.accountUpdateSnapshotTimer);
+    const generation = this.lifecycleGeneration;
+    this.accountUpdateSnapshotTimer = setTimeout(() => {
+      this.accountUpdateSnapshotTimer = null;
+      void this.refreshAfterAccountUpdate(generation).catch((err: unknown) => {
+        if (this.isGenerationCurrent(generation)) {
+          log.warn("post-ACCOUNT_UPDATE risk snapshot refresh failed; risk data remains stale", {
+            error: String(err),
+          });
+        }
+      });
+    }, ACCOUNT_UPDATE_SNAPSHOT_DEBOUNCE_MS);
+  }
+
+  private async refreshAfterAccountUpdate(generation: number): Promise<void> {
+    if (this.accountUpdateSnapshotPromise) {
+      this.accountUpdateSnapshotPending = true;
+      return this.accountUpdateSnapshotPromise;
+    }
+
+    const refresh = async (): Promise<void> => {
+      do {
+        this.accountUpdateSnapshotPending = false;
+        const revision = this.accountUpdateSnapshotRevision;
+        const [account, positions] = await Promise.all([
+          this.rest.getAccount(),
+          this.rest.getPositionRisk(),
+        ]);
+        if (!this.isGenerationCurrent(generation)) return;
+        if (revision !== this.accountUpdateSnapshotRevision) {
+          this.accountUpdateSnapshotPending = true;
+          continue;
+        }
+        applyAccountSnapshot(account);
+        applyPositionSnapshot(positions);
+        updateTradingGauges();
+        publishLive("snapshot", { at: Date.now() });
+        publishLive("account-update", { at: Date.now() });
+      } while (this.accountUpdateSnapshotPending && this.isGenerationCurrent(generation));
+    };
+
+    const promise = refresh();
+    this.accountUpdateSnapshotPromise = promise;
+    try {
+      await promise;
+    } finally {
+      if (this.accountUpdateSnapshotPromise === promise) {
+        this.accountUpdateSnapshotPromise = null;
+      }
+    }
+  }
+
   private processEvent(ev: UserStreamEvent, generation = this.lifecycleGeneration): void | Promise<void> {
     if (!this.isGenerationCurrent(generation)) return;
     return withRiskMutationSync(() => {
@@ -707,9 +774,10 @@ export class BinanceLiveManager {
       } else {
         if (ev.e === "ACCOUNT_UPDATE") {
           const accountEv = ev as AccountUpdateEvent;
-          applyAccountEvent(accountEv);
+          const positionAmountChanged = applyAccountEvent(accountEv);
           updateTradingGauges();
           publishLive("account-update", { at: Date.now() });
+          if (positionAmountChanged) this.scheduleAccountUpdateSnapshot();
           // ACCOUNT_UPDATE `up` values are fill-time snapshots, not current
           // quotes. Immediately refresh the mark for every touched symbol so
           // the position's PnL becomes mark-derived again (applyMarkPrice).

@@ -475,7 +475,8 @@ function extractFill(o: OrderTradeUpdateEvent["o"], skipTradeIds: ReadonlySet<st
   return skipTradeIds.has(fill.tradeId) ? [] : [fill];
 }
 
-export function applyAccountEvent(ev: AccountUpdateEvent): void {
+export function applyAccountEvent(ev: AccountUpdateEvent): boolean {
+  let positionAmountChanged = false;
   const usdt = ev.a.B.find((b) => b.a === "USDT");
   if (usdt && state.account) {
     state.account = {
@@ -502,18 +503,22 @@ export function applyAccountEvent(ev: AccountUpdateEvent): void {
   }
   for (const p of ev.a.P) {
     const amt = num(p.pa);
+    const prev = state.positions.get(p.s);
     if (isZero(amt)) {
+      if (prev) positionAmountChanged = true;
       state.positions.delete(p.s);
       continue;
     }
-    const prev = state.positions.get(p.s);
     const absQty = isNegative(amt) ? toStr({ units: -amt.units, scale: amt.scale }) : toStr(amt);
+    const side = isNegative(amt) ? "short" : "long";
+    const amountChanged = !prev || prev.side !== side || prev.qty !== absQty;
+    if (amountChanged) positionAmountChanged = true;
     // ACCOUNT_UPDATE carries no leverage field, so seed from the last
     // ACCOUNT_CONFIG_UPDATE instead of guessing 1x.
     const leverage = state.symbolLeverage.get(p.s) ?? prev?.leverage ?? "1";
     state.positions.set(p.s, {
       symbol: p.s,
-      side: isNegative(amt) ? "short" : "long",
+      side,
       qty: absQty,
       entryPrice: p.ep,
       markPrice: prev?.markPrice ?? p.ep,
@@ -522,9 +527,9 @@ export function applyAccountEvent(ev: AccountUpdateEvent): void {
       unrealizedProfit: p.up,
       markPriceSource: "fill-fallback",
       leverage,
-      liquidationPrice: prev?.liquidationPrice ?? "0",
+      liquidationPrice: amountChanged ? "" : prev?.liquidationPrice ?? "0",
       notional: prev?.notional ?? "",
-      riskSnapshotFetchedAt: prev?.riskSnapshotFetchedAt ?? 0,
+      riskSnapshotFetchedAt: amountChanged ? 0 : prev?.riskSnapshotFetchedAt ?? 0,
       updatedAt: ev.E,
     });
   }
@@ -546,4 +551,5 @@ export function applyAccountEvent(ev: AccountUpdateEvent): void {
     };
   }
   state.lastEventTime = Math.max(state.lastEventTime ?? 0, ev.E);
+  return positionAmountChanged;
 }
