@@ -1667,5 +1667,6 @@ describe("server-side reverse position", () => {
 
     expect(result.error).toContain("authoritative hypothetical post-flip margin and liquidation risk data is unavailable");
     expect(placeCalls(h)).toHaveLength(0);
+    expect(h.http.callsTo("/fapi/v2/positionRisk")).toHaveLength(1);
   });
 });

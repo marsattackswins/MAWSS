@@ -344,9 +344,6 @@ export class OrderService {
     if (this.uncertainIntents().some((intent) => intent.symbol === input.symbol)) {
       return `Reverse for ${input.symbol} is blocked while an order outcome remains uncertain`;
     }
-    if (!this.deps.projectReverseRisk) {
-      return "Reverse is disabled: authoritative hypothetical post-flip margin and liquidation risk data is unavailable; close the position normally";
-    }
     return null;
   }
 
