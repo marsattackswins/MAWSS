@@ -153,54 +153,42 @@ export async function dispatchClosePositionFraction(
   return { ok: false, error: "partial_close_unavailable" };
 }
 
-/**
- * Reverse: flatten through the guarded close path, then open the opposite side
- * at market with the same quantity.
- */
 export async function dispatchReversePosition(input: {
   idOrSymbol: string;
   symbol: string;
   side: "long" | "short";
   qty: number;
 }): Promise<{ ok: boolean; error?: string }> {
-  if (isLiveBrokerConnected()) {
-    const halt = tradingHaltReason();
-    if (halt !== null) {
-      notifyError(`Trading halted: ${halt}`);
-      return { ok: false, error: "trading_halted" };
-    }
-    try {
-      const qty = String(Math.abs(input.qty));
-      const result = await liveApi.reversePosition({
-        symbol: input.symbol,
-        newQty: qty,
-        expectedPositionQty: qty,
-        expectedPositionSide: input.side,
-        clientOrderId: crypto.randomUUID(),
-      });
-      if (!result.ok) {
-        notifyError(result.error ?? "Reverse rejected");
-        return { ok: false, error: result.error ?? "Reverse rejected" };
-      }
-      if (result.error) notifyError(result.error);
-      return { ok: true, error: result.error };
-    } catch (err) {
-      const message = describe(err);
-      notifyError(message);
-      return { ok: false, error: message };
-    }
+  if (!isLiveBrokerConnected()) {
+    const message = "Reverse is disabled. Close the position, then open the opposite side.";
+    notifyError(message);
+    return { ok: false, error: message };
   }
-
-  const closed = await dispatchClosePosition(input.idOrSymbol);
-  if (!closed.ok) return closed;
-  return dispatchSubmitOrder({
-    symbol: input.symbol,
-    side: input.side === "long" ? "sell" : "buy",
-    type: "market",
-    price: 0,
-    qty: Math.abs(input.qty),
-    clientOrderId: crypto.randomUUID(),
-  });
+  const halt = tradingHaltReason();
+  if (halt !== null) {
+    notifyError(`Trading halted: ${halt}`);
+    return { ok: false, error: "trading_halted" };
+  }
+  try {
+    const qty = String(Math.abs(input.qty));
+    const result = await liveApi.reversePosition({
+      symbol: input.symbol,
+      newQty: qty,
+      expectedPositionQty: qty,
+      expectedPositionSide: input.side,
+      clientOrderId: crypto.randomUUID(),
+    });
+    if (!result.ok) {
+      notifyError(result.error ?? "Reverse rejected");
+      return { ok: false, error: result.error ?? "Reverse rejected" };
+    }
+    if (result.error) notifyError(result.error);
+    return { ok: true, error: result.error };
+  } catch (err) {
+    const message = describe(err);
+    notifyError(message);
+    return { ok: false, error: message };
+  }
 }
 
 export async function dispatchProtect(

@@ -29,7 +29,6 @@ import {
   dispatchClosePosition,
   dispatchClosePositionFraction,
   dispatchProtect,
-  dispatchReversePosition,
 } from "@/lib/trading/dispatch";
 import { CLOSE_FRACTIONS, validExitPrice } from "@/lib/trade-marks";
 import type { ChartPaneState } from "@/types";
@@ -147,30 +146,6 @@ function PositionPill({
         : await dispatchClosePositionFraction(position.id, fraction);
     setBusy(false);
     if (!result.ok) notify(result.error ?? "Close rejected");
-  };
-
-  const runReverse = async () => {
-    closeMenus();
-    const origin = live ? position.symbol : position.id;
-    const reverseSide = position.side === "long" ? "short" : "long";
-    const reverseQty = Math.abs(position.qty);
-    const approximateNotional = reverseQty * position.entry;
-    if (
-      !window.confirm(
-        `Reverse ${position.symbol} into a ${reverseSide} position of ${reverseQty} (approximately $${approximateNotional.toFixed(2)} notional at entry)? This submits one market order and removes existing TP/SL after the flip is confirmed.`,
-      )
-    ) {
-      return;
-    }
-    setBusy(true);
-    const result = await dispatchReversePosition({
-      idOrSymbol: origin,
-      symbol: position.symbol,
-      side: position.side,
-      qty: position.qty,
-    });
-    setBusy(false);
-    if (!result.ok) notify(result.error ?? "Reverse rejected");
   };
 
   /** Commit one exit leg at a price through the guarded path (paper: store, live: broker). */
@@ -388,11 +363,10 @@ function PositionPill({
 
           <button
             type="button"
-            title="Reverse position"
-            aria-label="Reverse position"
-            disabled={busy}
+            title="Reverse is disabled. Close the position, then open the opposite side."
+            aria-label="Reverse is disabled. Close the position, then open the opposite side."
+            disabled
             className="flex items-center border-l border-(--app-border) px-1.5 py-1 text-(--app-muted) hover:bg-(--app-hover) hover:text-(--app-text) disabled:opacity-40"
-            onClick={() => void runReverse()}
           >
             <ArrowLeftRight size={11} />
           </button>

@@ -11,7 +11,7 @@
  * the actions below are the exact functions those buttons call.
  */
 
-import { describe, test, expect, beforeEach, jest } from "@jest/globals";
+import { describe, test, expect, beforeEach, afterEach, jest } from "@jest/globals";
 import {
   CLOSE_FRACTIONS,
   clampCloseFraction,
@@ -22,6 +22,7 @@ import {
   dispatchReversePosition,
 } from "@/lib/trading/dispatch";
 import { useAppStore } from "@/lib/store";
+import { liveApi } from "@/lib/live/api";
 import { DEFAULT_CHART_SETTINGS } from "@/types";
 
 jest.mock("@/lib/trading/sounds", () => ({ playExecutionSound: jest.fn() }));
@@ -36,6 +37,10 @@ beforeEach(() => {
   useAppStore.setState({
     connectedBroker: null,
   });
+});
+
+afterEach(() => {
+  jest.restoreAllMocks();
 });
 
 describe("validExitPrice", () => {
@@ -92,16 +97,42 @@ describe("dispatchClosePositionFraction", () => {
 });
 
 describe("dispatchReversePosition", () => {
-  test("does not open the opposite side when the close is refused (disconnected)", async () => {
+  test("never sends a close-then-open sequence when disconnected", async () => {
+    const close = jest.spyOn(liveApi, "closePosition");
+    const submit = jest.spyOn(liveApi, "submitOrder");
+    const reverse = jest.spyOn(liveApi, "reversePosition");
     const result = await dispatchReversePosition({
       idOrSymbol: "BTCUSDT",
       symbol: "BTCUSDT",
       side: "long",
       qty: 2,
     });
-    // No live connection: close fails with not_connected and the reverse
-    // must not fall through to submit an order.
     expect(result.ok).toBe(false);
-    expect(result.error).toBe("not_connected");
+    expect(result.error).toBe("Reverse is disabled. Close the position, then open the opposite side.");
+    expect(close).not.toHaveBeenCalled();
+    expect(submit).not.toHaveBeenCalled();
+    expect(reverse).not.toHaveBeenCalled();
+  });
+
+  test("a connected reverse uses only the dedicated reverse endpoint", async () => {
+    useAppStore.setState({ connectedBroker: "binance" });
+    const close = jest.spyOn(liveApi, "closePosition");
+    const submit = jest.spyOn(liveApi, "submitOrder");
+    const reverse = jest.spyOn(liveApi, "reversePosition").mockResolvedValue({
+      ok: false,
+      clientOrderId: "reverse-test",
+      error: "Reverse is disabled. Close the position, then open the opposite side.",
+    });
+
+    await dispatchReversePosition({
+      idOrSymbol: "BTCUSDT",
+      symbol: "BTCUSDT",
+      side: "long",
+      qty: 2,
+    });
+
+    expect(reverse).toHaveBeenCalledTimes(1);
+    expect(close).not.toHaveBeenCalled();
+    expect(submit).not.toHaveBeenCalled();
   });
 });

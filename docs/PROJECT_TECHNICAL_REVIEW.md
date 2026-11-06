@@ -92,7 +92,7 @@ Accordingly, there are no implemented executable strategy rules to enumerate as 
 
 - UI order types include market, limit, and stop-market. The server supports Binance market, limit, stop-market, and take-profit-market operations, including native exchange conditional TP/SL orders.
 - Closing a position uses exchange position state and a reduce-only market order. The emergency close path has a guarded fallback for a specific reduce-only rejection case after rechecking position and open-order state.
-- The “reverse” UI action sends a close and then an opposite-side market order; the two requests are sequential API calls, not one atomic exchange operation.
+- The reverse UI action is disabled. A dedicated server reverse endpoint remains behind a default-off feature flag; its success path is fake-tested only and unavailable in production pending Testnet validation and authoritative hypothetical margin/liquidation risk data.
 - TP and SL protection are native conditional orders with `closePosition=true`, not simulated browser triggers. Replacing a protection order cancels the existing order before submitting its replacement.
 
 ### Position sizing and risk checks
@@ -261,7 +261,7 @@ The server has structured application/request/market logging, audit events in SQ
 
 1. **Profile switching contract:** The local-mode documentation and code behavior appear inconsistent (see above). This is the first operational contract to resolve.
 2. **Protective-order replacement gap:** TP/SL replacement cancels an existing protective order before placing its replacement. A subsequent rejected, timed-out, or uncertain submission can leave the position without that protection. The cancellation is checked, but the sequence cannot be atomic at Binance.
-3. **Reverse-position sequencing:** Close then open-opposite is not atomic and does not wait in the UI dispatch helper for confirmed full close fills. A partial/failed close can make the final position differ from the operator’s intention.
+3. **Reverse-position availability:** Reversal is disabled in the UI and by default in configuration. The server success path has only been tested with exchange fakes; production must remain disabled until Testnet validation and authoritative post-flip margin/liquidation risk assessment are implemented.
 4. **Risk guard scope:** The daily-loss check is based on realized P&L and does not bound unrealized losses or total drawdown; the default percentage is high. The caps are not a guarantee against liquidation, gaps, slippage, or exchange-side state changes.
 5. **Emergency flatten limitations:** It intentionally bypasses ordinary freezes/circuit gates and can partially fail due to exchange/network errors. Operators must verify resulting positions and open orders in Binance after using it.
 6. **Pending-exposure input integrity:** The risk helper skips a pending-exposure row it cannot parse, relying on the authoritative snapshot/reconciliation path to freeze unsafe state. Confirm that malformed persisted intent data always causes that independent freeze before treating the gross-exposure cap as fail-closed in every corruption case.

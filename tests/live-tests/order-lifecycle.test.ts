@@ -54,7 +54,11 @@ function setup(
   liveState().symbolLeverage.set("BTCUSDT", "1");
   const http = new FakeHttp();
   installFakes(http);
-  const cfg = { ...base, ...cfgOverrides };
+  const cfg = {
+    ...base,
+    ...(depOverrides.projectReverseRisk ? { reverseEnabled: true } : {}),
+    ...cfgOverrides,
+  };
   const profile = persistenceProfileFromConfig(cfg);
   const rest = new BinanceRestClient(cfg, new RateLimiter(cfg.rateInternalPerMin), async () => undefined);
   rest.setTransportForTests(http);
@@ -1660,7 +1664,7 @@ describe("server-side reverse position", () => {
   });
 
   test("reverse is fail-closed when no authoritative hypothetical risk projection exists", async () => {
-    const h = setup();
+    const h = setup({ reverseEnabled: true });
     installReverseExchange(h);
 
     const result = await h.svc.reversePosition(input("reverse-no-projection"));

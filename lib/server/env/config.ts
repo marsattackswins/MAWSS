@@ -75,6 +75,7 @@ export interface EnvConfig {
   trustProxy: boolean;
   backupKey: Buffer | null;
   healthToken: string | null;
+  reverseEnabled: boolean;
   binanceApiKey: string | null;
   binanceApiSecret: string | null;
   recvWindowMs: number;
@@ -402,6 +403,7 @@ export function loadEnvConfig(source: NodeJS.ProcessEnv = process.env): EnvConfi
     trustProxy: source.MAWS_TRUST_PROXY === "true",
     backupKey: hexKey(source.MAWS_BACKUP_KEY),
     healthToken: source.MAWS_HEALTH_TOKEN?.trim() || null,
+    reverseEnabled: source.MAWS_ENABLE_REVERSE === "true",
     // Keep the legacy active fields so all existing broker code retains its
     // process-startup behavior while credentials migrate to profile variables.
     binanceApiKey: activeCredentials.apiKey,
@@ -459,6 +461,9 @@ export function loadEnvConfig(source: NodeJS.ProcessEnv = process.env): EnvConfi
   // keeps shadow internal: it has production endpoints but no selectable profile ID.
 
   if (env === "production") {
+    if (cfg.reverseEnabled) {
+      throw new Error("MAWS_ENABLE_REVERSE cannot be enabled in production");
+    }
     const error = productionRiskConfigurationError(cfg);
     if (error) throw new Error(error);
   }

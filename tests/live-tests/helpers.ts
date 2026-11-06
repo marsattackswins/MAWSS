@@ -66,6 +66,7 @@ export function makeCfg(overrides: Partial<EnvConfig> = {}): EnvConfig {
     trustProxy: false,
     backupKey: null,
     healthToken: null,
+    reverseEnabled: false,
     binanceApiKey: "test-api-key",
     binanceApiSecret: "test-api-secret",
     recvWindowMs: 5000,

@@ -37,6 +37,7 @@ describe("environment configuration (fail closed)", () => {
     const cfg = loadEnvConfig(envSrc({}));
     expect(cfg.env).toBe("local");
     expect(cfg.recvWindowMs).toBe(5000);
+    expect(cfg.reverseEnabled).toBe(false);
 
     expect(cfg.risk.maxOrderNotionalUsd).toBe(50);
     expect(cfg.risk.maxLeverage).toBe(10);
@@ -103,6 +104,21 @@ describe("environment configuration (fail closed)", () => {
       ...VALID_RISK_CAPS,
       MAWS_RISK_MAX_ORDER_NOTIONAL: "0",
     }))).toThrow(/positive finite/);
+  });
+
+  test("reverse can be explicitly enabled outside production only", () => {
+    const testnet = loadEnvConfig(envSrc({
+      MAWS_ENV: "testnet",
+      MAWS_OPERATOR_AUTH: AUTH,
+      MAWS_ENABLE_REVERSE: "true",
+      ...KEYS,
+    }));
+    expect(testnet.reverseEnabled).toBe(true);
+
+    const production = { MAWS_ENV: "production", MAWS_OPERATOR_AUTH: AUTH, ...KEYS, ...VALID_RISK_CAPS };
+    expect(() => loadEnvConfig(envSrc({ ...production, MAWS_ENABLE_REVERSE: "true" })))
+      .toThrow(/MAWS_ENABLE_REVERSE cannot be enabled in production/);
+    expect(loadEnvConfig(envSrc(production)).reverseEnabled).toBe(false);
   });
 
   test("production rejects negative risk caps", () => {

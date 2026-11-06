@@ -344,6 +344,9 @@ export class OrderService {
     if (this.uncertainIntents().some((intent) => intent.symbol === input.symbol)) {
       return `Reverse for ${input.symbol} is blocked while an order outcome remains uncertain`;
     }
+    if (!this.deps.cfg.reverseEnabled) {
+      return "Reverse is disabled. Close the position, then open the opposite side.";
+    }
     return null;
   }
 
@@ -460,6 +463,8 @@ export class OrderService {
     projection: RiskSnapshot,
   ): Promise<ReverseSubmitAttempt> {
     try {
+      // This success path is tested with exchange fakes only. Keep the feature
+      // disabled by default and unavailable in production until Testnet validation.
       const orderResult = await this.submitOrderSerialized({
         symbol: input.symbol,
         side: market.currentSide === "long" ? "SELL" : "BUY",
