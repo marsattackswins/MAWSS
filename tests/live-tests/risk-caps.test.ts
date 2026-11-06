@@ -101,6 +101,29 @@ describe("server-side risk caps", () => {
     expect(placeCalls(h)).toHaveLength(0);
   });
 
+  test("price collar violations use a dedicated error code", () => {
+    const cfg = makeCfg({ risk: { ...makeCfg().risk, priceCollarPct: 5 } });
+    const errors = checkRisk(
+      cfg,
+      {
+        balanceUsd: 1000,
+        grossExposureUsd: 0,
+        openOrderCount: 0,
+        openPositionCount: 0,
+        realizedTodayUsd: 0,
+        unrealizedPnlUsd: 0,
+        unrealizedPnlFresh: true,
+      },
+      { type: "LIMIT", qty: "0.0001", effectivePrice: "53000", reduceOnly: false },
+      "50000",
+    );
+
+    expect(errors).toContain(
+      "RISK_PRICE_COLLAR: price 53000 is 6.00% from reference 50000; collar is 5%",
+    );
+    expect(errors.join(";")).not.toContain("RISK_MAX_ORDER_NOTIONAL");
+  });
+
   test("order that would exceed gross exposure cap is rejected", async () => {
     const h = setup(
       { risk: { maxGrossExposureUsd: 100 } },

@@ -112,7 +112,7 @@ export function checkRisk(
     const diff = Math.abs(pctDiff(parseDec(order.effectivePrice), parseDec(referencePrice)));
     if (diff > risk.priceCollarPct) {
       errors.push(
-        `RISK_MAX_ORDER_NOTIONAL: price ${order.effectivePrice} is ${diff.toFixed(2)}% from reference ${referencePrice}; collar is ${risk.priceCollarPct}%`,
+        `RISK_PRICE_COLLAR: price ${order.effectivePrice} is ${diff.toFixed(2)}% from reference ${referencePrice}; collar is ${risk.priceCollarPct}%`,
       );
     }
   }
