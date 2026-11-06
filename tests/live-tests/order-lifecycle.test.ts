@@ -90,7 +90,7 @@ describe("order submission (testnet lifecycle via fake exchange)", () => {
   });
 
   test("LIMIT order sends price and timeInForce=GTC", async () => {
-    const h = setup({ risk: { maxOrderNotionalUsd: 100, maxGrossExposureUsd: 1000, maxOpenOrders: 10, maxOpenPositions: 3, dailyLossPct: 5, priceCollarPct: 2, maxLeverage: 10 } });
+    const h = setup({ risk: { maxOrderNotionalUsd: 100, maxGrossExposureUsd: 1000, maxOpenOrders: 10, maxOpenPositions: 3, dailyLossPct: 5, priceCollarPct: 2, maxLeverage: 10, maxMarginRatio: 0.5, minLiquidationDistancePct: 10 } });
     h.http.route("/fapi/v1/order", () => jsonRes(orderFixture({ clientOrderId: "lm1", type: "LIMIT", status: "NEW" })));
     const res = await h.svc.submitOrder({ symbol: "BTCUSDT", side: "SELL", type: "LIMIT", qty: "0.001", price: "50000.5", clientOrderId: "lm1" });
     expect(res.ok).toBe(true);
@@ -132,7 +132,7 @@ describe("order submission (testnet lifecycle via fake exchange)", () => {
     // 81100). The LOT_SIZE step for the harness symbol is 0.001, so the
     // pre-flight validator must never see the off-grid value.
     const h = setup({
-      risk: { maxOrderNotionalUsd: 1000, maxGrossExposureUsd: 5000, maxOpenOrders: 10, maxOpenPositions: 3, dailyLossPct: 5, priceCollarPct: 2, maxLeverage: 10 },
+      risk: { maxOrderNotionalUsd: 1000, maxGrossExposureUsd: 5000, maxOpenOrders: 10, maxOpenPositions: 3, dailyLossPct: 5, priceCollarPct: 2, maxLeverage: 10, maxMarginRatio: 0.5, minLiquidationDistancePct: 10 },
     });
     h.http.route("/fapi/v1/order", () => jsonRes(orderFixture({ clientOrderId: "qt1", type: "MARKET", status: "NEW" })));
 

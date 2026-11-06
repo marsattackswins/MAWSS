@@ -855,6 +855,51 @@ export class BinanceLiveManager {
     const unrealizedPnlUsd = unrealizedPnlFresh
       ? positions.reduce((total, position) => total + Number(position.unrealizedProfit), 0)
       : null;
+    const marginDataFresh =
+      positions.length === 0 ||
+      (state.account !== null &&
+        Number.isFinite(state.account.marginHealthFetchedAt) &&
+        now - state.account.marginHealthFetchedAt <= this.cfg.snapshotMaxAgeMs &&
+        Number.isFinite(Number(state.account.marginHealthBalance)) &&
+        Number(state.account.marginHealthBalance) > 0 &&
+        state.account.maintenanceMargin !== "" &&
+        Number.isFinite(Number(state.account.maintenanceMargin)) &&
+        Number(state.account.maintenanceMargin) >= 0 &&
+        positions.every(
+          (position) => {
+            const liquidationPrice = position.liquidationPrice.trim();
+            const parsedLiquidationPrice = Number(liquidationPrice);
+            return (
+              position.markPriceSource === "exchange" &&
+              Number.isFinite(position.updatedAt) &&
+              now - position.updatedAt <= MARK_STALE_AFTER_MS &&
+              typeof position.riskSnapshotFetchedAt === "number" &&
+              Number.isFinite(position.riskSnapshotFetchedAt) &&
+              now - position.riskSnapshotFetchedAt <= this.cfg.snapshotMaxAgeMs &&
+              Number.isFinite(Number(position.markPrice)) &&
+              Number(position.markPrice) > 0 &&
+              (liquidationPrice === "" ||
+                (Number.isFinite(parsedLiquidationPrice) && parsedLiquidationPrice >= 0))
+            );
+          },
+        ));
+    const marginRatio =
+      marginDataFresh && positions.length > 0
+        ? Number(state.account!.maintenanceMargin) / Number(state.account!.marginHealthBalance)
+        : null;
+    const liquidationDistancesPct =
+      marginDataFresh
+        ? positions.flatMap((position) => {
+            const liquidationPrice = Number(position.liquidationPrice);
+            if (!Number.isFinite(liquidationPrice) || liquidationPrice <= 0) return [];
+            const markPrice = Number(position.markPrice);
+            return [
+              position.side === "long"
+                ? ((markPrice - liquidationPrice) / markPrice) * 100
+                : ((liquidationPrice - markPrice) / markPrice) * 100,
+            ];
+          })
+        : null;
     const workingOrders = [...state.openOrders.values()]
       .map((order) => ({
         qty: order.origQty,
@@ -889,6 +934,9 @@ export class BinanceLiveManager {
       realizedTodayUsd: realizedSinceUtcMidnight(Date.now(), this.persistenceProfile),
       unrealizedPnlUsd,
       unrealizedPnlFresh,
+      marginRatio,
+      marginDataFresh,
+      liquidationDistancesPct,
       workingOrders,
       uncertainIntents,
     };

@@ -29,6 +29,9 @@ function setup(
     realizedTodayUsd?: number;
     unrealizedPnlUsd?: number | null;
     unrealizedPnlFresh?: boolean;
+    marginRatio?: number | null;
+    marginDataFresh?: boolean;
+    liquidationDistancesPct?: number[] | null;
   },
 ): Harness {
   const baseCfg = makeCfg();
@@ -58,6 +61,9 @@ function setup(
     realizedTodayUsd: 0,
     unrealizedPnlUsd: 0,
     unrealizedPnlFresh: true,
+    marginRatio: 0,
+    marginDataFresh: true,
+    liquidationDistancesPct: [],
   };
   const svc = new OrderService({
     cfg,
@@ -72,6 +78,9 @@ function setup(
       realizedTodayUsd: snap.realizedTodayUsd ?? 0,
       unrealizedPnlUsd: snap.unrealizedPnlUsd === undefined ? 0 : snap.unrealizedPnlUsd,
       unrealizedPnlFresh: snap.unrealizedPnlFresh ?? true,
+      marginRatio: snap.marginRatio === undefined ? 0 : snap.marginRatio,
+      marginDataFresh: snap.marginDataFresh ?? true,
+      liquidationDistancesPct: snap.liquidationDistancesPct ?? [],
     }),
     freeze: (reason) => {
       freezes.push(reason);
@@ -304,6 +313,122 @@ describe("server-side risk caps", () => {
       ...base,
       unrealizedPnlFresh: true,
     }, order, "50000").join(";")).toContain("unrealized P&L is unavailable or stale");
+  });
+
+  test("margin ratio equal to the cap passes and just over it fails", () => {
+    const cfg = makeCfg({ risk: { ...makeCfg().risk, maxMarginRatio: 0.5 } });
+    const base = {
+      balanceUsd: 1000,
+      grossExposureUsd: 0,
+      openOrderCount: 0,
+      openPositionCount: 1,
+      realizedTodayUsd: 0,
+      unrealizedPnlUsd: 0,
+      unrealizedPnlFresh: true,
+      marginDataFresh: true,
+      liquidationDistancesPct: [10],
+    };
+    const order = { type: "MARKET", qty: "0.001", effectivePrice: "50000", reduceOnly: false };
+
+    expect(checkRisk(cfg, { ...base, marginRatio: 0.5 }, order, "50000")).not.toContain(
+      expect.stringContaining("RISK_MAX_MARGIN_RATIO"),
+    );
+    expect(checkRisk(cfg, { ...base, marginRatio: 0.5001 }, order, "50000").join(";")).toContain(
+      "RISK_MAX_MARGIN_RATIO",
+    );
+  });
+
+  test("liquidation distance equal to the minimum passes and just under it fails", () => {
+    const cfg = makeCfg({ risk: { ...makeCfg().risk, minLiquidationDistancePct: 10 } });
+    const base = {
+      balanceUsd: 1000,
+      grossExposureUsd: 0,
+      openOrderCount: 0,
+      openPositionCount: 1,
+      realizedTodayUsd: 0,
+      unrealizedPnlUsd: 0,
+      unrealizedPnlFresh: true,
+      marginRatio: 0.1,
+      marginDataFresh: true,
+    };
+    const order = { type: "MARKET", qty: "0.001", effectivePrice: "50000", reduceOnly: false };
+
+    expect(checkRisk(cfg, { ...base, liquidationDistancesPct: [10] }, order, "50000")).not.toContain(
+      expect.stringContaining("RISK_MIN_LIQ_DISTANCE"),
+    );
+    expect(checkRisk(cfg, { ...base, liquidationDistancesPct: [9.99] }, order, "50000").join(";")).toContain(
+      "RISK_MIN_LIQ_DISTANCE",
+    );
+  });
+
+  test.each([
+    ["zero liquidation prices", []],
+    ["missing liquidation prices", []],
+  ])("%s are treated as no liquidation risk", (_name, liquidationDistancesPct) => {
+    const cfg = makeCfg();
+    const errors = checkRisk(
+      cfg,
+      {
+        balanceUsd: 1000,
+        grossExposureUsd: 0,
+        openOrderCount: 0,
+        openPositionCount: 1,
+        realizedTodayUsd: 0,
+        unrealizedPnlUsd: 0,
+        unrealizedPnlFresh: true,
+        marginRatio: 0.1,
+        marginDataFresh: true,
+        liquidationDistancesPct,
+      },
+      { type: "MARKET", qty: "0.001", effectivePrice: "50000", reduceOnly: false },
+      "50000",
+    );
+    expect(errors).not.toContain(expect.stringContaining("RISK_MIN_LIQ_DISTANCE"));
+  });
+
+  test.each([
+    ["stale", { marginDataFresh: false, marginRatio: 0.1, liquidationDistancesPct: [10] }],
+    ["missing", { marginDataFresh: true, marginRatio: null, liquidationDistancesPct: null }],
+  ])("%s margin/liquidation data fails closed while positions are open", (_name, margin) => {
+    const cfg = makeCfg();
+    const errors = checkRisk(
+      cfg,
+      {
+        balanceUsd: 1000,
+        grossExposureUsd: 0,
+        openOrderCount: 0,
+        openPositionCount: 1,
+        realizedTodayUsd: 0,
+        unrealizedPnlUsd: 0,
+        unrealizedPnlFresh: true,
+        ...margin,
+      },
+      { type: "MARKET", qty: "0.001", effectivePrice: "50000", reduceOnly: false },
+      "50000",
+    );
+    expect(errors.join(";")).toContain("margin or liquidation data is unavailable or stale");
+  });
+
+  test("margin checks pass vacuously with no open positions", () => {
+    const cfg = makeCfg();
+    const errors = checkRisk(
+      cfg,
+      {
+        balanceUsd: 1000,
+        grossExposureUsd: 0,
+        openOrderCount: 0,
+        openPositionCount: 0,
+        realizedTodayUsd: 0,
+        unrealizedPnlUsd: 0,
+        unrealizedPnlFresh: true,
+        marginDataFresh: false,
+        marginRatio: null,
+        liquidationDistancesPct: null,
+      },
+      { type: "MARKET", qty: "0.001", effectivePrice: "50000", reduceOnly: false },
+      "50000",
+    );
+    expect(errors.join(";")).not.toContain("margin or liquidation data");
   });
 
   test.each([

@@ -129,7 +129,7 @@ node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"
 
 ### Risk Limit Variables
 
-All seven variables below must be explicitly configured with positive finite
+All nine variables below must be explicitly configured with positive finite
 values when `MAWS_ENV=production` or when attaching the Production profile.
 Production startup or profile attachment fails with the names of any missing
 variables. Testnet and local modes continue to use the documented defaults
@@ -181,6 +181,22 @@ Risk-increasing orders must provide a leverage at or below this cap or have a
 known, cached per-symbol leverage that is within the cap; unknown leverage is
 rejected rather than assumed.
 
+#### MAWS_RISK_MAX_MARGIN_RATIO
+**Description**: Maximum maintenance-margin / margin-balance ratio (decimal ratio, not percentage)
+**Default**: `0.5` (50%)
+**Production**: Required explicitly; must be positive finite number
+**Purpose**: Reject new risk-increasing orders when maintenance margin divided
+by margin balance exceeds this threshold. Equality passes; values above it fail.
+
+#### MAWS_RISK_MIN_LIQ_DISTANCE_PCT
+**Description**: Minimum mark-price distance from liquidation price (percentage)
+**Default**: `10`
+**Production**: Required explicitly; must be positive finite number
+**Purpose**: Reject new risk-increasing orders if any open position is closer
+than this percentage to liquidation. Equality passes; values below it fail.
+Choose a wider buffer when appropriate for the instrument, leverage, and
+strategy; the default is not a guarantee against liquidation.
+
 The daily loss guard uses realized P&L from the durable fills log since UTC
 midnight plus the sum of open-position unrealized P&L from mark-derived
 positions. The manager treats unrealized P&L as fresh only when the account
@@ -190,6 +206,17 @@ missing, non-finite, or stale data rejects risk-increasing orders; reduce-only,
 close, and emergency-close orders remain available. The existing realized-only
 daily-loss limit remains independently enforced in addition to the combined
 realized-plus-unrealized loss limit.
+
+Margin health uses `totalMaintMargin` and `totalMarginBalance` from the existing
+account snapshot; no additional exchange request is made. Position mark and
+liquidation prices come from the existing position-risk snapshot and mark-price
+updates. The margin snapshot must be within `MAWS_SNAPSHOT_MAX_AGE_MS`; open
+position marks must be exchange-derived and no more than 10 seconds old. Missing
+or stale data fails closed for risk-increasing orders while positions are open.
+Zero or missing liquidation prices are treated as not applicable. With no open
+positions, both margin-health checks pass without requiring those values.
+Reduce-only, close-position, `isClose`, and emergency-close orders remain
+exempt so they can reduce risk.
 
 ### Circuit Breaker Variables
 

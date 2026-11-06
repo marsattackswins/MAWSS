@@ -62,6 +62,7 @@ export interface AccountResponse {
   totalWalletBalance: string;
   totalUnrealizedProfit: string;
   totalMarginBalance: string;
+  totalMaintMargin?: string;
   availableBalance: string;
   maxWithdrawAmount: string;
   assets: AccountAsset[];

@@ -15,6 +15,8 @@ const VALID_RISK_CAPS = {
   MAWS_RISK_DAILY_LOSS_PCT: "50",
   MAWS_RISK_PRICE_COLLAR_PCT: "5",
   MAWS_RISK_MAX_LEVERAGE: "10",
+  MAWS_RISK_MAX_MARGIN_RATIO: "0.5",
+  MAWS_RISK_MIN_LIQ_DISTANCE_PCT: "10",
 };
 
 /** loadEnvConfig takes ProcessEnv; tests pass plain partial maps. */
@@ -38,6 +40,8 @@ describe("environment configuration (fail closed)", () => {
 
     expect(cfg.risk.maxOrderNotionalUsd).toBe(50);
     expect(cfg.risk.maxLeverage).toBe(10);
+    expect(cfg.risk.maxMarginRatio).toBe(0.5);
+    expect(cfg.risk.minLiquidationDistancePct).toBe(10);
   });
 
   test("non-local envs require operator auth in salt:hash form", () => {
@@ -53,6 +57,8 @@ describe("environment configuration (fail closed)", () => {
       dailyLossPct: 50,
       priceCollarPct: 5,
       maxLeverage: 10,
+      maxMarginRatio: 0.5,
+      minLiquidationDistancePct: 10,
     });
   });
 
@@ -126,6 +132,18 @@ describe("environment configuration (fail closed)", () => {
     }))).toThrow(/MAWS_RISK_MAX_LEVERAGE must be a positive finite number/);
   });
 
+  test.each([
+    ["MAWS_RISK_MAX_MARGIN_RATIO", "0"],
+    ["MAWS_RISK_MIN_LIQ_DISTANCE_PCT", "0"],
+  ])("production rejects %s set to zero", (name, value) => {
+    const base = { MAWS_ENV: "production", MAWS_OPERATOR_AUTH: AUTH, ...KEYS };
+    expect(() => loadEnvConfig(envSrc({
+      ...base,
+      ...VALID_RISK_CAPS,
+      [name]: value,
+    }))).toThrow(new RegExp(`${name} must be a positive finite number`));
+  });
+
   test("production requires every risk limit to be explicitly configured and names all missing variables", () => {
     const base = { MAWS_ENV: "production", MAWS_OPERATOR_AUTH: AUTH, ...KEYS };
     let message = "";
@@ -144,6 +162,8 @@ describe("environment configuration (fail closed)", () => {
       "MAWS_RISK_DAILY_LOSS_PCT",
       "MAWS_RISK_PRICE_COLLAR_PCT",
       "MAWS_RISK_MAX_LEVERAGE",
+      "MAWS_RISK_MAX_MARGIN_RATIO",
+      "MAWS_RISK_MIN_LIQ_DISTANCE_PCT",
     ]) {
       expect(message).toContain(name);
     }
@@ -160,6 +180,8 @@ describe("environment configuration (fail closed)", () => {
       MAWS_RISK_DAILY_LOSS_PCT: "10",
       MAWS_RISK_PRICE_COLLAR_PCT: "2",
       MAWS_RISK_MAX_LEVERAGE: "10",
+      MAWS_RISK_MAX_MARGIN_RATIO: "0.5",
+      MAWS_RISK_MIN_LIQ_DISTANCE_PCT: "10",
     }));
     expect(cfg.risk.maxOrderNotionalUsd).toBe(100);
     expect(cfg.risk.maxGrossExposureUsd).toBe(100);
@@ -168,6 +190,8 @@ describe("environment configuration (fail closed)", () => {
     expect(cfg.risk.dailyLossPct).toBe(10);
     expect(cfg.risk.priceCollarPct).toBe(2);
     expect(cfg.risk.maxLeverage).toBe(10);
+    expect(cfg.risk.maxMarginRatio).toBe(0.5);
+    expect(cfg.risk.minLiquidationDistancePct).toBe(10);
   });
 });
 

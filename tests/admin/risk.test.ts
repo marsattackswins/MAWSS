@@ -13,6 +13,8 @@ const risk = {
   dailyLossPct: 10,
   priceCollarPct: 5,
   maxLeverage: 10,
+  maxMarginRatio: 0.5,
+  minLiquidationDistancePct: 10,
 };
 
 function position(overrides: Partial<Parameters<typeof aggregateRiskCockpit>[0]["positions"][number]> = {}) {

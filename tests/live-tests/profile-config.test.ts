@@ -13,6 +13,8 @@ const RISK_CAPS = {
   MAWS_RISK_DAILY_LOSS_PCT: "50",
   MAWS_RISK_PRICE_COLLAR_PCT: "5",
   MAWS_RISK_MAX_LEVERAGE: "10",
+  MAWS_RISK_MAX_MARGIN_RATIO: "0.5",
+  MAWS_RISK_MIN_LIQ_DISTANCE_PCT: "10",
 };
 
 function env(values: Record<string, string> = {}): NodeJS.ProcessEnv {

@@ -85,6 +85,8 @@ export function makeCfg(overrides: Partial<EnvConfig> = {}): EnvConfig {
       dailyLossPct: 50,
       priceCollarPct: 5,
       maxLeverage: 10,
+      maxMarginRatio: 0.5,
+      minLiquidationDistancePct: 10,
     },
     circuitBreaker: {
       restFailureThreshold: 5,
@@ -311,6 +313,7 @@ export function accountFixture(overrides: Partial<Record<string, string>> = {}):
     totalWalletBalance: overrides.totalWalletBalance ?? "1000",
     totalUnrealizedProfit: overrides.totalUnrealizedProfit ?? "0",
     totalMarginBalance: overrides.totalMarginBalance ?? "1000",
+    totalMaintMargin: overrides.totalMaintMargin ?? "0",
     availableBalance: overrides.availableBalance ?? "1000",
     maxWithdrawAmount: "1000",
     assets: [

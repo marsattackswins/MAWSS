@@ -146,6 +146,8 @@ describe("profile API", () => {
       "MAWS_RISK_DAILY_LOSS_PCT",
       "MAWS_RISK_PRICE_COLLAR_PCT",
       "MAWS_RISK_MAX_LEVERAGE",
+      "MAWS_RISK_MAX_MARGIN_RATIO",
+      "MAWS_RISK_MIN_LIQ_DISTANCE_PCT",
     ];
     jest.spyOn(profileCoordinator(), "switchProfile").mockRejectedValue(
       new ProfileCoordinatorError(

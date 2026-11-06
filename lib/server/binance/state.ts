@@ -14,6 +14,10 @@ export interface LiveAccount {
   availableBalance: string;
   unrealizedProfit: string;
   marginBalance: string;
+  /** Exchange snapshot values used together for margin-health risk checks. */
+  maintenanceMargin: string;
+  marginHealthBalance: string;
+  marginHealthFetchedAt: number;
   /** True while marginBalance still holds the exchange-reported value.
    *  ACCOUNT_UPDATE events recompute it locally, downgrading the source. */
   marginFromExchange: boolean;
@@ -40,6 +44,8 @@ export interface LivePosition {
   marginType?: string;
   isolatedMargin?: string;
   isolatedWallet?: string;
+  /** Last authoritative position-risk snapshot (includes liquidation price). */
+  riskSnapshotFetchedAt?: number;
   updatedAt: number;
 }
 
@@ -149,6 +155,9 @@ export function applyAccountSnapshot(account: AccountResponse, now = Date.now())
     availableBalance: account.availableBalance,
     unrealizedProfit: account.totalUnrealizedProfit,
     marginBalance: account.totalMarginBalance,
+    maintenanceMargin: account.totalMaintMargin ?? "",
+    marginHealthBalance: account.totalMarginBalance,
+    marginHealthFetchedAt: now,
     marginFromExchange: true,
     fetchedAt: now,
   };
@@ -174,6 +183,7 @@ export function applyPositionSnapshot(rows: PositionRiskRow[], now = Date.now())
       marginType: r.marginType,
       isolatedMargin: r.isolatedMargin,
       isolatedWallet: r.isolatedWallet,
+      riskSnapshotFetchedAt: now,
       updatedAt: now,
     });
   }
@@ -483,6 +493,9 @@ export function applyAccountEvent(ev: AccountUpdateEvent): void {
       availableBalance: usdt.cw,
       unrealizedProfit: "0",
       marginBalance: "",
+      maintenanceMargin: "",
+      marginHealthBalance: "",
+      marginHealthFetchedAt: 0,
       marginFromExchange: false,
       fetchedAt: ev.E,
     };
@@ -511,6 +524,7 @@ export function applyAccountEvent(ev: AccountUpdateEvent): void {
       leverage,
       liquidationPrice: prev?.liquidationPrice ?? "0",
       notional: prev?.notional ?? "",
+      riskSnapshotFetchedAt: prev?.riskSnapshotFetchedAt ?? 0,
       updatedAt: ev.E,
     });
   }

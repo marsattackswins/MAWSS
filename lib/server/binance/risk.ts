@@ -26,6 +26,12 @@ export interface RiskSnapshot {
   unrealizedPnlUsd?: number | null;
   /** False when account/position marks are missing, stale, or not mark-derived. */
   unrealizedPnlFresh?: boolean;
+  /** Maintenance margin / exchange-reported margin balance. */
+  marginRatio?: number | null;
+  /** False if margin fields or required position marks are missing or stale. */
+  marginDataFresh?: boolean;
+  /** Per-position mark-to-liquidation distances; empty when none apply. */
+  liquidationDistancesPct?: number[] | null;
   /** Working exchange orders reserved against the gross cap. */
   workingOrders?: PendingRiskExposure[];
   /** Intents whose exchange outcome is not yet certain. */
@@ -106,6 +112,29 @@ export function checkRisk(
     const limit = (snap.balanceUsd * risk.dailyLossPct) / 100;
     if (combinedPnl < 0 && -combinedPnl >= limit) {
       errors.push(`EXECUTION_UNHEALTHY: daily realized and unrealized loss limit reached (${combinedPnl.toFixed(2)} USD)`);
+    }
+  }
+  if (snap.openPositionCount > 0) {
+    if (
+      snap.marginDataFresh !== true ||
+      !Number.isFinite(snap.marginRatio) ||
+      snap.marginRatio! < 0 ||
+      !Array.isArray(snap.liquidationDistancesPct) ||
+      snap.liquidationDistancesPct.some((distance) => !Number.isFinite(distance))
+    ) {
+      errors.push("EXECUTION_UNHEALTHY: margin or liquidation data is unavailable or stale; risk-increasing order rejected");
+    } else {
+      if (snap.marginRatio! > risk.maxMarginRatio) {
+        errors.push(
+          `RISK_MAX_MARGIN_RATIO: margin ratio ${(snap.marginRatio! * 100).toFixed(2)}% exceeds max ${(risk.maxMarginRatio * 100).toFixed(2)}%`,
+        );
+      }
+      if (snap.liquidationDistancesPct.some((distance) => distance < risk.minLiquidationDistancePct)) {
+        const distance = Math.min(...snap.liquidationDistancesPct);
+        errors.push(
+          `RISK_MIN_LIQ_DISTANCE: liquidation distance ${distance.toFixed(2)}% is below minimum ${risk.minLiquidationDistancePct}%`,
+        );
+      }
     }
   }
   if (referencePrice && (order.type === "LIMIT" || order.type === "STOP_MARKET" || order.type === "TAKE_PROFIT_MARKET")) {

@@ -76,12 +76,16 @@ describe("BinanceLiveManager end-to-end (fake testnet)", () => {
     expect(manager.getRiskSnapshot()).toMatchObject({
       unrealizedPnlUsd: -1,
       unrealizedPnlFresh: true,
+      marginDataFresh: true,
+      marginRatio: 0,
+      liquidationDistancesPct: [],
     });
 
     applyPositionSnapshot([positionRow], Date.now() - MARK_STALE_AFTER_MS - 1);
     expect(manager.getRiskSnapshot()).toMatchObject({
       unrealizedPnlUsd: null,
       unrealizedPnlFresh: false,
+      marginDataFresh: false,
     });
 
     applyPositionSnapshot([positionRow], Date.now());
@@ -92,12 +96,142 @@ describe("BinanceLiveManager end-to-end (fake testnet)", () => {
     expect(manager.getRiskSnapshot()).toMatchObject({
       unrealizedPnlUsd: null,
       unrealizedPnlFresh: false,
+      marginDataFresh: false,
     });
+  });
+
+  test("risk snapshot computes margin ratio and directional liquidation distance", async () => {
+    await startManager({
+      "/fapi/v2/account": () => accountFixture({ totalMaintMargin: "200" }),
+    });
+    const now = Date.now();
+    applyPositionSnapshot([
+      {
+        symbol: "BTCUSDT",
+        positionAmt: "1",
+        entryPrice: "100",
+        markPrice: "100",
+        unRealizedProfit: "0",
+        liquidationPrice: "90",
+        leverage: "5",
+        positionSide: "BOTH",
+      },
+      {
+        symbol: "ETHUSDT",
+        positionAmt: "-1",
+        entryPrice: "100",
+        markPrice: "100",
+        unRealizedProfit: "0",
+        liquidationPrice: "110",
+        leverage: "5",
+        positionSide: "BOTH",
+      },
+    ], now);
+
+    expect(manager.getRiskSnapshot()).toMatchObject({
+      marginRatio: 0.2,
+      marginDataFresh: true,
+      liquidationDistancesPct: [10, 10],
+    });
+  });
+
+  test("missing maintenance margin or stale margin snapshot is unavailable with open positions", async () => {
+    await startManager();
+    applyPositionSnapshot([{
+      symbol: "BTCUSDT",
+      positionAmt: "1",
+      entryPrice: "100",
+      markPrice: "100",
+      unRealizedProfit: "0",
+      liquidationPrice: "0",
+      leverage: "5",
+      positionSide: "BOTH",
+    }]);
+
+    liveState().account!.maintenanceMargin = "";
+    expect(manager.getRiskSnapshot().marginDataFresh).toBe(false);
+
+    liveState().account!.maintenanceMargin = "0";
+    liveState().account!.marginHealthFetchedAt = Date.now() - makeCfg().snapshotMaxAgeMs - 1;
+    expect(manager.getRiskSnapshot().marginDataFresh).toBe(false);
+  });
+
+  test("stale liquidation snapshot remains unavailable despite fresh mark updates", async () => {
+    await startManager();
+    const now = Date.now();
+    applyPositionSnapshot([{
+      symbol: "BTCUSDT",
+      positionAmt: "1",
+      entryPrice: "100",
+      markPrice: "100",
+      unRealizedProfit: "0",
+      liquidationPrice: "90",
+      leverage: "5",
+      positionSide: "BOTH",
+    }], now);
+    liveState().positions.get("BTCUSDT")!.riskSnapshotFetchedAt =
+      now - makeCfg().snapshotMaxAgeMs - 1;
+    liveState().positions.get("BTCUSDT")!.updatedAt = now;
+
+    expect(manager.getRiskSnapshot().marginDataFresh).toBe(false);
+  });
+
+  test("zero or missing liquidation prices produce no liquidation-distance constraint", async () => {
+    await startManager();
+    applyPositionSnapshot([
+      {
+        symbol: "BTCUSDT",
+        positionAmt: "1",
+        entryPrice: "100",
+        markPrice: "100",
+        unRealizedProfit: "0",
+        liquidationPrice: "0",
+        leverage: "5",
+        positionSide: "BOTH",
+      },
+      {
+        symbol: "ETHUSDT",
+        positionAmt: "-1",
+        entryPrice: "100",
+        markPrice: "100",
+        unRealizedProfit: "0",
+        liquidationPrice: "",
+        leverage: "5",
+        positionSide: "BOTH",
+      },
+    ]);
+
+    expect(manager.getRiskSnapshot()).toMatchObject({
+      marginDataFresh: true,
+      liquidationDistancesPct: [],
+    });
+  });
+
+  test("malformed liquidation data is unavailable while a position is open", async () => {
+    await startManager();
+    applyPositionSnapshot([{
+      symbol: "BTCUSDT",
+      positionAmt: "1",
+      entryPrice: "100",
+      markPrice: "100",
+      unRealizedProfit: "0",
+      liquidationPrice: "invalid",
+      leverage: "5",
+      positionSide: "BOTH",
+    }]);
+
+    expect(manager.getRiskSnapshot().marginDataFresh).toBe(false);
   });
 
   test("startup: clock, metadata, snapshot, stream, recon all reach ready", async () => {
     await startManager();
     expect(manager.status).toBe("ready");
+    expect(manager.getRiskSnapshot()).toMatchObject({
+      openPositionCount: 0,
+      marginDataFresh: true,
+      marginRatio: null,
+      liquidationDistancesPct: [],
+    });
     expect(manager.metadata.symbolCount()).toBeGreaterThanOrEqual(1);
     expect(manager.metadata.getConstraints("BTCUSDT")).not.toBeNull();
     expect(liveState().account?.totalWalletBalance).toBe("1000");

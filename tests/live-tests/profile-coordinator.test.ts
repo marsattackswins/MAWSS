@@ -175,6 +175,8 @@ describe("profile coordinator", () => {
       "MAWS_RISK_DAILY_LOSS_PCT",
       "MAWS_RISK_PRICE_COLLAR_PCT",
       "MAWS_RISK_MAX_LEVERAGE",
+      "MAWS_RISK_MAX_MARGIN_RATIO",
+      "MAWS_RISK_MIN_LIQ_DISTANCE_PCT",
     ];
     const cfg = makeCfg({ profiles: profileRegistry(), missingProductionRiskLimitVariables });
     const http = configure(cfg);
