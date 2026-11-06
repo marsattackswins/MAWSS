@@ -113,7 +113,7 @@ export function loadTestnetConfig(): EnvConfig {
       priceCollarPct: 10, // wider collar for testnet price variance
       maxLeverage: 10,
       maxMarginRatio: 0.5,
-      minLiquidationDistancePct: 10,
+      minLiquidationDistancePct: 5,
     },
     circuitBreaker: {
       restFailureThreshold: 10, // More tolerant for testnet

@@ -86,7 +86,7 @@ export function makeCfg(overrides: Partial<EnvConfig> = {}): EnvConfig {
       priceCollarPct: 5,
       maxLeverage: 10,
       maxMarginRatio: 0.5,
-      minLiquidationDistancePct: 10,
+      minLiquidationDistancePct: 5,
     },
     circuitBreaker: {
       restFailureThreshold: 5,

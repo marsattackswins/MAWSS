@@ -422,7 +422,7 @@ export function loadEnvConfig(source: NodeJS.ProcessEnv = process.env): EnvConfi
       priceCollarPct: num(source.MAWS_RISK_PRICE_COLLAR_PCT, 5),
       maxLeverage: num(source.MAWS_RISK_MAX_LEVERAGE, 10),
       maxMarginRatio: num(source.MAWS_RISK_MAX_MARGIN_RATIO, 0.5),
-      minLiquidationDistancePct: num(source.MAWS_RISK_MIN_LIQ_DISTANCE_PCT, 10),
+      minLiquidationDistancePct: num(source.MAWS_RISK_MIN_LIQ_DISTANCE_PCT, 5),
     },
     circuitBreaker: {
       // Binance REST API breaker (open after 5 failures in 60s, retry after 30s)

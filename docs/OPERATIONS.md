@@ -190,12 +190,18 @@ by margin balance exceeds this threshold. Equality passes; values above it fail.
 
 #### MAWS_RISK_MIN_LIQ_DISTANCE_PCT
 **Description**: Minimum mark-price distance from liquidation price (percentage)
-**Default**: `10`
+**Default**: `5`
 **Production**: Required explicitly; must be positive finite number
 **Purpose**: Reject new risk-increasing orders if any open position is closer
 than this percentage to liquidation. Equality passes; values below it fail.
 Choose a wider buffer when appropriate for the instrument, leverage, and
 strategy; the default is not a guarantee against liquidation.
+
+Choose `MAWS_RISK_MAX_LEVERAGE` and `MAWS_RISK_MIN_LIQ_DISTANCE_PCT` together.
+Higher leverage generally reduces the distance to liquidation, so an otherwise
+valid position at the leverage cap can be rejected by the minimum-distance
+guard. Calibrate both values for the symbols and maintenance-margin tiers you
+trade; neither setting guarantees that liquidation cannot occur.
 
 The daily loss guard uses realized P&L from the durable fills log since UTC
 midnight plus the sum of open-position unrealized P&L from mark-derived

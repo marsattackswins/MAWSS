@@ -41,7 +41,7 @@ describe("environment configuration (fail closed)", () => {
     expect(cfg.risk.maxOrderNotionalUsd).toBe(50);
     expect(cfg.risk.maxLeverage).toBe(10);
     expect(cfg.risk.maxMarginRatio).toBe(0.5);
-    expect(cfg.risk.minLiquidationDistancePct).toBe(10);
+    expect(cfg.risk.minLiquidationDistancePct).toBe(5);
   });
 
   test("non-local envs require operator auth in salt:hash form", () => {
@@ -58,7 +58,7 @@ describe("environment configuration (fail closed)", () => {
       priceCollarPct: 5,
       maxLeverage: 10,
       maxMarginRatio: 0.5,
-      minLiquidationDistancePct: 10,
+      minLiquidationDistancePct: 5,
     });
   });
 
