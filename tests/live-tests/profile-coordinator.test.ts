@@ -166,6 +166,33 @@ describe("profile coordinator", () => {
     });
   });
 
+  test("refuses Production attachment from Testnet when explicit risk limits are missing", async () => {
+    const missingProductionRiskLimitVariables = [
+      "MAWS_RISK_MAX_ORDER_NOTIONAL",
+      "MAWS_RISK_MAX_GROSS_EXPOSURE",
+      "MAWS_RISK_MAX_OPEN_ORDERS",
+      "MAWS_RISK_MAX_OPEN_POSITIONS",
+      "MAWS_RISK_DAILY_LOSS_PCT",
+      "MAWS_RISK_PRICE_COLLAR_PCT",
+    ];
+    const cfg = makeCfg({ profiles: profileRegistry(), missingProductionRiskLimitVariables });
+    const http = configure(cfg);
+    await startCoordinator();
+    const callsBeforeSwitch = http.calls.length;
+
+    await expect(profileCoordinator().switchProfile({
+      profileId: "binance-production",
+      confirmProduction: true,
+      requestId: "production-without-risk-limits",
+    })).rejects.toMatchObject({
+      code: "production_risk_limits_invalid",
+      message: expect.stringContaining(missingProductionRiskLimitVariables.join(", ")),
+    });
+
+    expect(http.calls).toHaveLength(callsBeforeSwitch);
+    expect(profileRuntimeStatus()).toMatchObject({ profileId: "binance-testnet", phase: "ready" });
+  });
+
   test("rejects a concurrent switch and blocks exposure without cancellation or flattening", async () => {
     const cfg = makeCfg({ profiles: profileRegistry() });
     let positionPresent = false;

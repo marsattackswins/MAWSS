@@ -11,6 +11,7 @@ import { getBroker, replaceBrokerForCoordinator, clearBrokerForCoordinator } fro
 import {
   PROFILE_IDS,
   serverConfig,
+  productionRiskConfigurationError,
   type EnvConfig,
   type ProfileId,
   type SafeProfileMetadata,
@@ -44,6 +45,7 @@ export type ProfileErrorCode =
   | "invalid_profile"
   | "production_confirmation_required"
   | "local_profile_switch_disabled"
+  | "production_risk_limits_invalid"
   | "profile_switch_in_progress"
   | "exposure_present"
   | "exposure_unknown"
@@ -96,6 +98,10 @@ function profileConfig(base: EnvConfig, profileId: ProfileId): EnvConfig {
   const profile = base.profiles[profileId];
   if (!profile.configured) {
     throw new ProfileCoordinatorError("configuration_unavailable");
+  }
+  if (profileId === "binance-production") {
+    const riskError = productionRiskConfigurationError(base);
+    if (riskError) throw new ProfileCoordinatorError("production_risk_limits_invalid", riskError);
   }
   return {
     ...base,

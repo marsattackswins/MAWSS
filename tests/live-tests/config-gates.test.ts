@@ -7,6 +7,14 @@ import { resetHealthSignalsForTests, setHealthSignal } from "@/lib/server/health
 
 const AUTH = "0123456789abcdef:fedcba9876543210";
 const KEYS = { MAWS_BINANCE_API_KEY: "k", MAWS_BINANCE_API_SECRET: "s" };
+const VALID_RISK_CAPS = {
+  MAWS_RISK_MAX_ORDER_NOTIONAL: "50",
+  MAWS_RISK_MAX_GROSS_EXPOSURE: "100",
+  MAWS_RISK_MAX_OPEN_ORDERS: "10",
+  MAWS_RISK_MAX_OPEN_POSITIONS: "3",
+  MAWS_RISK_DAILY_LOSS_PCT: "50",
+  MAWS_RISK_PRICE_COLLAR_PCT: "5",
+};
 
 /** loadEnvConfig takes ProcessEnv; tests pass plain partial maps. */
 const envSrc = (src: Record<string, string>) => src as unknown as NodeJS.ProcessEnv;
@@ -33,7 +41,16 @@ describe("environment configuration (fail closed)", () => {
   test("non-local envs require operator auth in salt:hash form", () => {
     expect(() => loadEnvConfig(envSrc({ MAWS_ENV: "testnet", ...KEYS }))).toThrow(/MAWS_OPERATOR_AUTH/);
     expect(() => loadEnvConfig(envSrc({ MAWS_ENV: "testnet", MAWS_OPERATOR_AUTH: "plaintext-password", ...KEYS }))).toThrow(/hex/);
-    expect(loadEnvConfig(envSrc({ MAWS_ENV: "testnet", MAWS_OPERATOR_AUTH: AUTH, ...KEYS })).env).toBe("testnet");
+    const testnet = loadEnvConfig(envSrc({ MAWS_ENV: "testnet", MAWS_OPERATOR_AUTH: AUTH, ...KEYS }));
+    expect(testnet.env).toBe("testnet");
+    expect(testnet.risk).toEqual({
+      maxOrderNotionalUsd: 50,
+      maxGrossExposureUsd: 100,
+      maxOpenOrders: 10,
+      maxOpenPositions: 3,
+      dailyLossPct: 50,
+      priceCollarPct: 5,
+    });
   });
 
   test("Binance credentials are required for testnet/shadow/production", () => {
@@ -72,17 +89,51 @@ describe("environment configuration (fail closed)", () => {
 
   test("production rejects zero risk caps (fail closed)", () => {
     const base = { MAWS_ENV: "production", MAWS_OPERATOR_AUTH: AUTH, ...KEYS };
-    expect(() => loadEnvConfig(envSrc({ ...base, MAWS_RISK_MAX_ORDER_NOTIONAL: "0" }))).toThrow(/positive finite/);
+    expect(() => loadEnvConfig(envSrc({
+      ...base,
+      ...VALID_RISK_CAPS,
+      MAWS_RISK_MAX_ORDER_NOTIONAL: "0",
+    }))).toThrow(/positive finite/);
   });
 
   test("production rejects negative risk caps", () => {
     const base = { MAWS_ENV: "production", MAWS_OPERATOR_AUTH: AUTH, ...KEYS };
-    expect(() => loadEnvConfig(envSrc({ ...base, MAWS_RISK_MAX_GROSS_EXPOSURE: "-100" }))).toThrow(/positive finite/);
+    expect(() => loadEnvConfig(envSrc({
+      ...base,
+      ...VALID_RISK_CAPS,
+      MAWS_RISK_MAX_GROSS_EXPOSURE: "-100",
+    }))).toThrow(/positive finite/);
   });
 
   test("production rejects NaN risk caps", () => {
     const base = { MAWS_ENV: "production", MAWS_OPERATOR_AUTH: AUTH, ...KEYS };
-    expect(() => loadEnvConfig(envSrc({ ...base, MAWS_RISK_MAX_OPEN_ORDERS: "abc" }))).toThrow(/numeric/);
+    expect(() => loadEnvConfig(envSrc({
+      ...base,
+      ...VALID_RISK_CAPS,
+      MAWS_RISK_MAX_OPEN_ORDERS: "abc",
+    }))).toThrow(/numeric/);
+  });
+
+  test("production requires every risk limit to be explicitly configured and names all missing variables", () => {
+    const base = { MAWS_ENV: "production", MAWS_OPERATOR_AUTH: AUTH, ...KEYS };
+    let message = "";
+    try {
+      loadEnvConfig(envSrc(base));
+    } catch (error) {
+      message = error instanceof Error ? error.message : String(error);
+    }
+
+    expect(message).toContain("explicitly configured");
+    for (const name of [
+      "MAWS_RISK_MAX_ORDER_NOTIONAL",
+      "MAWS_RISK_MAX_GROSS_EXPOSURE",
+      "MAWS_RISK_MAX_OPEN_ORDERS",
+      "MAWS_RISK_MAX_OPEN_POSITIONS",
+      "MAWS_RISK_DAILY_LOSS_PCT",
+      "MAWS_RISK_PRICE_COLLAR_PCT",
+    ]) {
+      expect(message).toContain(name);
+    }
   });
 
   test("production accepts valid positive risk caps", () => {
@@ -93,11 +144,15 @@ describe("environment configuration (fail closed)", () => {
       MAWS_RISK_MAX_GROSS_EXPOSURE: "100",
       MAWS_RISK_MAX_OPEN_ORDERS: "1",
       MAWS_RISK_MAX_OPEN_POSITIONS: "1",
+      MAWS_RISK_DAILY_LOSS_PCT: "10",
+      MAWS_RISK_PRICE_COLLAR_PCT: "2",
     }));
     expect(cfg.risk.maxOrderNotionalUsd).toBe(100);
     expect(cfg.risk.maxGrossExposureUsd).toBe(100);
     expect(cfg.risk.maxOpenOrders).toBe(1);
     expect(cfg.risk.maxOpenPositions).toBe(1);
+    expect(cfg.risk.dailyLossPct).toBe(10);
+    expect(cfg.risk.priceCollarPct).toBe(2);
   });
 });
 

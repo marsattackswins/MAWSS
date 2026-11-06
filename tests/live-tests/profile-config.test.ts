@@ -5,6 +5,14 @@ import {
 } from "@/lib/server/env/config";
 
 const AUTH = "0123456789abcdef:fedcba9876543210";
+const RISK_CAPS = {
+  MAWS_RISK_MAX_ORDER_NOTIONAL: "50",
+  MAWS_RISK_MAX_GROSS_EXPOSURE: "100",
+  MAWS_RISK_MAX_OPEN_ORDERS: "10",
+  MAWS_RISK_MAX_OPEN_POSITIONS: "3",
+  MAWS_RISK_DAILY_LOSS_PCT: "50",
+  MAWS_RISK_PRICE_COLLAR_PCT: "5",
+};
 
 function env(values: Record<string, string> = {}): NodeJS.ProcessEnv {
   return values as NodeJS.ProcessEnv;
@@ -78,6 +86,7 @@ describe("server profile configuration", () => {
       MAWS_OPERATOR_AUTH: AUTH,
       MAWS_BINANCE_API_KEY: "legacy-production-key",
       MAWS_BINANCE_API_SECRET: "legacy-production-secret",
+      ...RISK_CAPS,
     }));
     expect(production.activeProfileId).toBe("binance-production");
 
@@ -147,6 +156,7 @@ describe("server profile configuration", () => {
       MAWS_OPERATOR_AUTH: AUTH,
       MAWS_BINANCE_PRODUCTION_API_KEY: "production-key",
       MAWS_BINANCE_PRODUCTION_API_SECRET: "production-secret",
+      ...RISK_CAPS,
     }));
     expect(disabled.profiles["binance-production"].executionEnabled).toBe(true);
 
@@ -155,6 +165,7 @@ describe("server profile configuration", () => {
       MAWS_OPERATOR_AUTH: AUTH,
       MAWS_BINANCE_PRODUCTION_API_KEY: "production-key",
       MAWS_BINANCE_PRODUCTION_API_SECRET: "production-secret",
+      ...RISK_CAPS,
     }));
     expect(enabled.profiles["binance-production"].executionEnabled).toBe(true);
 

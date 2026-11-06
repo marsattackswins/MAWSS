@@ -12,6 +12,7 @@ const STATUS_BY_CODE: Record<ProfileCoordinatorError["code"], number> = {
   invalid_profile: 400,
   production_confirmation_required: 400,
   local_profile_switch_disabled: 403,
+  production_risk_limits_invalid: 503,
   profile_switch_in_progress: 409,
   exposure_present: 409,
   exposure_unknown: 409,
@@ -24,7 +25,10 @@ const STATUS_BY_CODE: Record<ProfileCoordinatorError["code"], number> = {
 };
 
 function switchError(error: ProfileCoordinatorError): Response {
-  return jsonError(STATUS_BY_CODE[error.code], error.code, "Profile operation could not be completed");
+  const message = error.code === "production_risk_limits_invalid"
+    ? error.message
+    : "Profile operation could not be completed";
+  return jsonError(STATUS_BY_CODE[error.code], error.code, message);
 }
 
 export async function POST(req: Request): Promise<Response> {

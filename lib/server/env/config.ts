@@ -23,6 +23,29 @@ export interface ServerProfileConfig {
   webSocketEndpoint: string;
 }
 
+export const PRODUCTION_RISK_LIMITS = [
+  ["MAWS_RISK_MAX_ORDER_NOTIONAL", "maxOrderNotionalUsd"],
+  ["MAWS_RISK_MAX_GROSS_EXPOSURE", "maxGrossExposureUsd"],
+  ["MAWS_RISK_MAX_OPEN_ORDERS", "maxOpenOrders"],
+  ["MAWS_RISK_MAX_OPEN_POSITIONS", "maxOpenPositions"],
+  ["MAWS_RISK_DAILY_LOSS_PCT", "dailyLossPct"],
+  ["MAWS_RISK_PRICE_COLLAR_PCT", "priceCollarPct"],
+] as const satisfies readonly (readonly [string, keyof EnvConfig["risk"]])[];
+
+export function productionRiskConfigurationError(cfg: EnvConfig): string | null {
+  const missing = cfg.missingProductionRiskLimitVariables ?? PRODUCTION_RISK_LIMITS.map(([name]) => name);
+  if (missing.length > 0) {
+    return `Production risk limits must be explicitly configured; missing: ${missing.join(", ")}`;
+  }
+  for (const [name, key] of PRODUCTION_RISK_LIMITS) {
+    const value = cfg.risk[key];
+    if (!Number.isFinite(value) || value <= 0) {
+      return `${name} must be a positive finite number in production, got: ${value}`;
+    }
+  }
+  return null;
+}
+
 export type ProfileRegistry = Record<ProfileId, ServerProfileConfig>;
 
 export interface SafeProfileMetadata {
@@ -67,6 +90,8 @@ export interface EnvConfig {
   /** Maximum age of the last authoritative account/positions/orders snapshot. */
   snapshotMaxAgeMs: number;
   alertWebhookUrl: string | null;
+  /** Production risk variables absent from the source environment. */
+  missingProductionRiskLimitVariables?: string[];
   risk: {
     maxOrderNotionalUsd: number;
     maxGrossExposureUsd: number;
@@ -349,6 +374,9 @@ export function loadEnvConfig(source: NodeJS.ProcessEnv = process.env): EnvConfi
   const brokerType = parseBrokerType(source.MAWS_BROKER_TYPE);
   const defaultProfile = parseDefaultProfile(source.MAWS_DEFAULT_PROFILE);
   const { activeProfileId, activeCredentials } = resolveCredentials(source, env);
+  const missingProductionRiskLimitVariables = PRODUCTION_RISK_LIMITS
+    .map(([name]) => name)
+    .filter((name) => !source[name]?.trim());
   const profiles = buildProfiles(
     source,
     activeCredentials,
@@ -378,6 +406,7 @@ export function loadEnvConfig(source: NodeJS.ProcessEnv = process.env): EnvConfi
     leaseTtlMs: num(source.MAWS_LEASE_TTL_MS, 5 * 60_000),
     snapshotMaxAgeMs: num(source.MAWS_SNAPSHOT_MAX_AGE_MS, 5 * 60_000),
     alertWebhookUrl: source.MAWS_ALERT_WEBHOOK_URL?.trim() || null,
+    missingProductionRiskLimitVariables,
     risk: {
       maxOrderNotionalUsd: num(source.MAWS_RISK_MAX_ORDER_NOTIONAL, 50),
       maxGrossExposureUsd: num(source.MAWS_RISK_MAX_GROSS_EXPOSURE, 100),
@@ -418,20 +447,8 @@ export function loadEnvConfig(source: NodeJS.ProcessEnv = process.env): EnvConfi
   // keeps shadow internal: it has production endpoints but no selectable profile ID.
 
   if (env === "production") {
-    const r = cfg.risk;
-    const fields: [string, number][] = [
-      ["MAWS_RISK_MAX_ORDER_NOTIONAL", r.maxOrderNotionalUsd],
-      ["MAWS_RISK_MAX_GROSS_EXPOSURE", r.maxGrossExposureUsd],
-      ["MAWS_RISK_MAX_OPEN_ORDERS", r.maxOpenOrders],
-      ["MAWS_RISK_MAX_OPEN_POSITIONS", r.maxOpenPositions],
-      ["MAWS_RISK_DAILY_LOSS_PCT", r.dailyLossPct],
-      ["MAWS_RISK_PRICE_COLLAR_PCT", r.priceCollarPct],
-    ];
-    for (const [name, val] of fields) {
-      if (!Number.isFinite(val) || val <= 0) {
-        throw new Error(`${name} must be a positive finite number in production, got: ${val}`);
-      }
-    }
+    const error = productionRiskConfigurationError(cfg);
+    if (error) throw new Error(error);
   }
 
   return cfg;

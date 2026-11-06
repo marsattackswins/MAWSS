@@ -129,40 +129,46 @@ node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"
 
 ### Risk Limit Variables
 
+All six variables below must be explicitly configured with positive finite
+values when `MAWS_ENV=production` or when attaching the Production profile.
+Production startup or profile attachment fails with the names of any missing
+variables. Testnet and local modes continue to use the documented defaults
+when these values are omitted.
+
 #### MAWS_RISK_MAX_ORDER_NOTIONAL
 **Description**: Maximum order notional value (USD)
 **Default**: `50`
-**Production**: Must be positive finite number
+**Production**: Required explicitly; must be positive finite number
 **Purpose**: Reject orders exceeding this notional
 
 #### MAWS_RISK_MAX_GROSS_EXPOSURE
 **Description**: Maximum gross exposure (USD)
 **Default**: `100`
-**Production**: Must be positive finite number
+**Production**: Required explicitly; must be positive finite number
 **Purpose**: Limit total position exposure
 
 #### MAWS_RISK_MAX_OPEN_ORDERS
 **Description**: Maximum open orders count
 **Default**: `10`
-**Production**: Must be positive finite number
+**Production**: Required explicitly; must be positive finite number
 **Purpose**: Limit concurrent open orders
 
 #### MAWS_RISK_MAX_OPEN_POSITIONS
 **Description**: Maximum open positions count
 **Default**: `3`
-**Production**: Must be positive finite number
+**Production**: Required explicitly; must be positive finite number
 **Purpose**: Limit concurrent open positions
 
 #### MAWS_RISK_DAILY_LOSS_PCT
 **Description**: Daily loss limit percentage
 **Default**: `50`
-**Production**: Must be positive finite number
+**Production**: Required explicitly; must be positive finite number
 **Purpose**: Stop trading after daily loss percentage
 
 #### MAWS_RISK_PRICE_COLLAR_PCT
 **Description**: Price collar percentage
 **Default**: `5`
-**Production**: Must be positive finite number
+**Production**: Required explicitly; must be positive finite number
 **Purpose**: Reject orders with prices outside collar
 
 ### Circuit Breaker Variables

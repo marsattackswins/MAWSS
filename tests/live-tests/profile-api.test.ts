@@ -4,7 +4,11 @@ import { GET as getProfiles } from "@/app/api/live/profiles/route";
 import { GET as getProfile } from "@/app/api/live/profile/route";
 import { POST as switchProfile } from "@/app/api/live/profile/switch/route";
 import { createSession, sessionCookieName } from "@/lib/server/auth/session";
-import { profileCoordinator, resetProfileCoordinatorForTests } from "@/lib/server/profile/coordinator";
+import {
+  ProfileCoordinatorError,
+  profileCoordinator,
+  resetProfileCoordinatorForTests,
+} from "@/lib/server/profile/coordinator";
 import { freshEnv, makeCfg } from "./helpers";
 
 function authenticatedRequest(path: string, init: RequestInit = {}, csrf: string | null = null): Request {
@@ -131,6 +135,34 @@ describe("profile API", () => {
 
     expect(response.status).toBe(200);
     expect(switchSpy).toHaveBeenCalledWith({ profileId: "binance-testnet" });
+  });
+
+  test("returns missing Production risk variable names from profile attachment errors", async () => {
+    const names = [
+      "MAWS_RISK_MAX_ORDER_NOTIONAL",
+      "MAWS_RISK_MAX_GROSS_EXPOSURE",
+      "MAWS_RISK_MAX_OPEN_ORDERS",
+      "MAWS_RISK_MAX_OPEN_POSITIONS",
+      "MAWS_RISK_DAILY_LOSS_PCT",
+      "MAWS_RISK_PRICE_COLLAR_PCT",
+    ];
+    jest.spyOn(profileCoordinator(), "switchProfile").mockRejectedValue(
+      new ProfileCoordinatorError(
+        "production_risk_limits_invalid",
+        `Production risk limits must be explicitly configured; missing: ${names.join(", ")}`,
+      ),
+    );
+
+    const response = await switchProfile(authenticatedRequest("/api/live/profile/switch", {
+      method: "POST",
+      body: JSON.stringify({ profileId: "binance-production", confirmProduction: true }),
+      headers: { "content-type": "application/json" },
+    }, session.csrfToken));
+
+    expect(response.status).toBe(503);
+    const body = await response.json();
+    expect(body.error.code).toBe("production_risk_limits_invalid");
+    for (const name of names) expect(body.error.message).toContain(name);
   });
 
   test("returns no-store safe metadata and excludes internal profiles and secrets", async () => {

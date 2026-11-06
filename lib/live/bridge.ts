@@ -76,7 +76,10 @@ function statusMatches(
 }
 
 function safeErrorText(error: unknown, fallback = "The live profile operation could not be completed."): string {
-  if (error instanceof LiveApiError) return PROFILE_ERROR_TEXT[error.code] ?? fallback;
+  if (error instanceof LiveApiError) {
+    if (error.code === "production_risk_limits_invalid") return error.message;
+    return PROFILE_ERROR_TEXT[error.code] ?? fallback;
+  }
   if (error instanceof LiveAuthError) return "Your operator session expired. Sign in again.";
   return fallback;
 }
