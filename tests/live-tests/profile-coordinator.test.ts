@@ -88,7 +88,7 @@ afterEach(() => {
 });
 
 describe("profile coordinator", () => {
-  test("starts local Chart Only without a manager and switches to Testnet then detaches", async () => {
+  test("starts local Chart Only without a manager and refuses Testnet or Production attachment", async () => {
     const cfg = makeCfg({
       env: "local",
       activeProfileId: null,
@@ -107,46 +107,24 @@ describe("profile coordinator", () => {
     });
     expect(http.calls).toHaveLength(0);
 
-    const testnetSwitch = profileCoordinator().switchProfile({
-      profileId: "binance-testnet",
-      requestId: "local-testnet-switch",
-    });
-    await emitLatestStreamOpen();
-    await expect(testnetSwitch).resolves.toMatchObject({
-      profileId: "binance-testnet",
-      environment: "testnet",
-      ready: true,
-    });
-
-    await expect(profileCoordinator().detach()).resolves.toMatchObject({
-      profileId: null,
-      environment: null,
-      phase: "idle",
-      ready: false,
-    });
-    expect(profileRuntimeStatus().managerStatus).toBe("idle");
-  });
-
-  test("reports a failed target cleanly when Chart Only has no profile to restore", async () => {
-    const cfg = makeCfg({
-      env: "local",
-      activeProfileId: null,
-      binanceApiKey: null,
-      binanceApiSecret: null,
-      profiles: profileRegistry(),
-    });
-    const http = configure(cfg);
-    http.script("/fapi/v1/exchangeInfo", () => jsonRes({ code: -1000, msg: "metadata unavailable" }, 503));
-
     await expect(profileCoordinator().switchProfile({
       profileId: "binance-testnet",
-      requestId: "chart-only-target-failure",
-    })).rejects.toMatchObject({ code: "target_start_failed" });
+      requestId: "local-testnet-switch",
+    })).rejects.toMatchObject({
+      code: "local_profile_switch_disabled",
+      message: expect.stringContaining("Chart Only"),
+    });
+    await expect(profileCoordinator().switchProfile({
+      profileId: "binance-production",
+      confirmProduction: true,
+      requestId: "local-production-switch",
+    })).rejects.toMatchObject({ code: "local_profile_switch_disabled" });
 
+    expect(http.calls).toHaveLength(0);
     expect(profileRuntimeStatus()).toMatchObject({
-      phase: "failed",
       profileId: null,
-      reasonCode: "target_start_failed",
+      phase: "idle",
+      ready: false,
     });
   });
 
@@ -175,6 +153,17 @@ describe("profile coordinator", () => {
     expect(liveManager().cfg.binanceApiSecret).toBe("production-secret");
     expect(http.calls.some((call) => call.url.startsWith("https://fapi.binance.com"))).toBe(true);
     expect(FakeWs.last().url.startsWith("wss://fstream.binance.com")).toBe(true);
+
+    const backToTestnet = profileCoordinator().switchProfile({
+      profileId: "binance-testnet",
+      requestId: "operator-switch-back-1",
+    });
+    await emitLatestStreamOpen(3);
+    await expect(backToTestnet).resolves.toMatchObject({
+      profileId: "binance-testnet",
+      environment: "testnet",
+      ready: true,
+    });
   });
 
   test("rejects a concurrent switch and blocks exposure without cancellation or flattening", async () => {
@@ -217,13 +206,7 @@ describe("profile coordinator", () => {
   });
 
   test("connects to testnet despite large clock drift (signing is offset-corrected)", async () => {
-    const cfg = makeCfg({
-      env: "local",
-      activeProfileId: null,
-      binanceApiKey: null,
-      binanceApiSecret: null,
-      profiles: profileRegistry(),
-    });
+    const cfg = makeCfg();
     const http = configure(cfg);
     // Simulate a rebooted Windows clock running ~2s behind the exchange.
     http.route("/fapi/v1/time", () => jsonRes({ serverTime: Date.now() + 2000 }));

@@ -11,6 +11,7 @@ export const dynamic = "force-dynamic";
 const STATUS_BY_CODE: Record<ProfileCoordinatorError["code"], number> = {
   invalid_profile: 400,
   production_confirmation_required: 400,
+  local_profile_switch_disabled: 403,
   profile_switch_in_progress: 409,
   exposure_present: 409,
   exposure_unknown: 409,
@@ -42,6 +43,16 @@ export async function POST(req: Request): Promise<Response> {
   const allowedKeys = new Set(["profileId", "confirmProduction", "requestId"]);
   if (Object.keys(body).some((key) => !allowedKeys.has(key))) {
     return jsonError(400, "invalid_profile", "Only profileId, confirmation, and requestId are accepted");
+  }
+  if (
+    cfg.env === "local" &&
+    (body.profileId === "binance-testnet" || body.profileId === "binance-production")
+  ) {
+    return jsonError(
+      403,
+      "local_profile_switch_disabled",
+      "MAWS_ENV=local is Chart Only; set MAWS_ENV=testnet or MAWS_ENV=production to attach a Binance profile",
+    );
   }
   try {
     const status = await profileCoordinator().switchProfile(body);

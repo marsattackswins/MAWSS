@@ -43,6 +43,7 @@ export type ProfileRuntimeStatus = {
 export type ProfileErrorCode =
   | "invalid_profile"
   | "production_confirmation_required"
+  | "local_profile_switch_disabled"
   | "profile_switch_in_progress"
   | "exposure_present"
   | "exposure_unknown"
@@ -54,7 +55,7 @@ export type ProfileErrorCode =
   | "stale_profile";
 
 export class ProfileCoordinatorError extends Error {
-  constructor(readonly code: ProfileErrorCode, message = code) {
+  constructor(readonly code: ProfileErrorCode, message: string = code) {
     super(message);
     this.name = "ProfileCoordinatorError";
   }
@@ -173,6 +174,7 @@ function reasonForHealth(config: EnvConfig, manager: BinanceLiveManager | null):
 
 export function profileErrorStatus(code: ProfileErrorCode): number {
   if (code === "invalid_profile" || code === "production_confirmation_required") return 400;
+  if (code === "local_profile_switch_disabled") return 403;
   if (code === "target_start_failed") return 502;
   if (code === "rollback_failed" || code === "configuration_unavailable") return 503;
   return 409;
@@ -298,6 +300,12 @@ export class ProfileCoordinator {
   async switchProfile(request: ProfileSwitchRequest): Promise<ProfileRuntimeStatus> {
     if (this.switchPromise) throw new ProfileCoordinatorError("profile_switch_in_progress");
     if (!isProfileId(request.profileId)) throw new ProfileCoordinatorError("invalid_profile");
+    if (serverConfig().env === "local") {
+      throw new ProfileCoordinatorError(
+        "local_profile_switch_disabled",
+        "MAWS_ENV=local is Chart Only; set MAWS_ENV=testnet or MAWS_ENV=production to attach a Binance profile",
+      );
+    }
     if (request.profileId === "binance-production" && request.confirmProduction !== true) {
       throw new ProfileCoordinatorError("production_confirmation_required");
     }

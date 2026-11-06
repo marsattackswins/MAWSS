@@ -23,6 +23,7 @@ const PROFILE_LABELS: Record<LiveProfileId, string> = {
 const PROFILE_ERROR_TEXT: Record<string, string> = {
   invalid_profile: "That profile is not available.",
   production_confirmation_required: "Production confirmation is required.",
+  local_profile_switch_disabled: "Binance profiles cannot be attached while MAWS_ENV=local; use a non-local runtime.",
   profile_switch_in_progress: "Another profile switch is already in progress.",
   exposure_present: "Switching is blocked because open positions or orders exist.",
   exposure_unknown: "Switching is blocked because exposure could not be confirmed.",

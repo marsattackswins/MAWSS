@@ -1,10 +1,10 @@
-import { afterEach, beforeEach, describe, expect, test } from "@jest/globals";
+import { afterEach, beforeEach, describe, expect, jest, test } from "@jest/globals";
 
 import { GET as getProfiles } from "@/app/api/live/profiles/route";
 import { GET as getProfile } from "@/app/api/live/profile/route";
 import { POST as switchProfile } from "@/app/api/live/profile/switch/route";
 import { createSession, sessionCookieName } from "@/lib/server/auth/session";
-import { resetProfileCoordinatorForTests } from "@/lib/server/profile/coordinator";
+import { profileCoordinator, resetProfileCoordinatorForTests } from "@/lib/server/profile/coordinator";
 import { freshEnv, makeCfg } from "./helpers";
 
 function authenticatedRequest(path: string, init: RequestInit = {}, csrf: string | null = null): Request {
@@ -85,6 +85,52 @@ describe("profile API", () => {
     const publicMetadata = await getProfiles(new Request("http://localhost:3000/api/live/profiles"));
     expect(publicMetadata.status).toBe(200);
     expect((await publicMetadata.json()).profiles).toHaveLength(2);
+  });
+
+  test.each(["binance-testnet", "binance-production"] as const)(
+    "local Chart Only rejects switching to %s at the route",
+    async (profileId) => {
+      const localCfg = makeCfg({ env: "local", activeProfileId: null, binanceApiKey: null, binanceApiSecret: null });
+      freshEnv(localCfg);
+      session = createSession("profile-api-local-test");
+      const switchSpy = jest.spyOn(profileCoordinator(), "switchProfile");
+
+      const response = await switchProfile(authenticatedRequest("/api/live/profile/switch", {
+        method: "POST",
+        body: JSON.stringify({ profileId, confirmProduction: true }),
+        headers: { "content-type": "application/json" },
+      }, session.csrfToken));
+
+      expect(response.status).toBe(403);
+      expect((await response.json()).error).toMatchObject({
+        code: "local_profile_switch_disabled",
+        message: expect.stringContaining("Chart Only"),
+      });
+      expect(switchSpy).not.toHaveBeenCalled();
+    },
+  );
+
+  test("non-local profile API continues to allow a configured profile switch", async () => {
+    const switchSpy = jest.spyOn(profileCoordinator(), "switchProfile").mockResolvedValue({
+      profileId: "binance-testnet",
+      environment: "testnet",
+      phase: "ready",
+      ready: true,
+      managerStatus: "ready",
+      streamHealthy: true,
+      executionAllowed: false,
+      generation: 1,
+      reasonCode: null,
+    });
+
+    const response = await switchProfile(authenticatedRequest("/api/live/profile/switch", {
+      method: "POST",
+      body: JSON.stringify({ profileId: "binance-testnet" }),
+      headers: { "content-type": "application/json" },
+    }, session.csrfToken));
+
+    expect(response.status).toBe(200);
+    expect(switchSpy).toHaveBeenCalledWith({ profileId: "binance-testnet" });
   });
 
   test("returns no-store safe metadata and excludes internal profiles and secrets", async () => {
