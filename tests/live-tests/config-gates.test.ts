@@ -14,6 +14,7 @@ const VALID_RISK_CAPS = {
   MAWS_RISK_MAX_OPEN_POSITIONS: "3",
   MAWS_RISK_DAILY_LOSS_PCT: "50",
   MAWS_RISK_PRICE_COLLAR_PCT: "5",
+  MAWS_RISK_MAX_LEVERAGE: "10",
 };
 
 /** loadEnvConfig takes ProcessEnv; tests pass plain partial maps. */
@@ -36,6 +37,7 @@ describe("environment configuration (fail closed)", () => {
     expect(cfg.recvWindowMs).toBe(5000);
 
     expect(cfg.risk.maxOrderNotionalUsd).toBe(50);
+    expect(cfg.risk.maxLeverage).toBe(10);
   });
 
   test("non-local envs require operator auth in salt:hash form", () => {
@@ -50,6 +52,7 @@ describe("environment configuration (fail closed)", () => {
       maxOpenPositions: 3,
       dailyLossPct: 50,
       priceCollarPct: 5,
+      maxLeverage: 10,
     });
   });
 
@@ -114,6 +117,15 @@ describe("environment configuration (fail closed)", () => {
     }))).toThrow(/numeric/);
   });
 
+  test("production rejects a zero maximum leverage", () => {
+    const base = { MAWS_ENV: "production", MAWS_OPERATOR_AUTH: AUTH, ...KEYS };
+    expect(() => loadEnvConfig(envSrc({
+      ...base,
+      ...VALID_RISK_CAPS,
+      MAWS_RISK_MAX_LEVERAGE: "0",
+    }))).toThrow(/MAWS_RISK_MAX_LEVERAGE must be a positive finite number/);
+  });
+
   test("production requires every risk limit to be explicitly configured and names all missing variables", () => {
     const base = { MAWS_ENV: "production", MAWS_OPERATOR_AUTH: AUTH, ...KEYS };
     let message = "";
@@ -131,6 +143,7 @@ describe("environment configuration (fail closed)", () => {
       "MAWS_RISK_MAX_OPEN_POSITIONS",
       "MAWS_RISK_DAILY_LOSS_PCT",
       "MAWS_RISK_PRICE_COLLAR_PCT",
+      "MAWS_RISK_MAX_LEVERAGE",
     ]) {
       expect(message).toContain(name);
     }
@@ -146,6 +159,7 @@ describe("environment configuration (fail closed)", () => {
       MAWS_RISK_MAX_OPEN_POSITIONS: "1",
       MAWS_RISK_DAILY_LOSS_PCT: "10",
       MAWS_RISK_PRICE_COLLAR_PCT: "2",
+      MAWS_RISK_MAX_LEVERAGE: "10",
     }));
     expect(cfg.risk.maxOrderNotionalUsd).toBe(100);
     expect(cfg.risk.maxGrossExposureUsd).toBe(100);
@@ -153,6 +167,7 @@ describe("environment configuration (fail closed)", () => {
     expect(cfg.risk.maxOpenPositions).toBe(1);
     expect(cfg.risk.dailyLossPct).toBe(10);
     expect(cfg.risk.priceCollarPct).toBe(2);
+    expect(cfg.risk.maxLeverage).toBe(10);
   });
 });
 

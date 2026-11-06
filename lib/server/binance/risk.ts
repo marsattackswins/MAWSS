@@ -22,6 +22,10 @@ export interface RiskSnapshot {
   openOrderCount: number;
   openPositionCount: number;
   realizedTodayUsd: number;
+  /** Sum of mark-derived unrealized P&L, or null when unavailable/stale. */
+  unrealizedPnlUsd?: number | null;
+  /** False when account/position marks are missing, stale, or not mark-derived. */
+  unrealizedPnlFresh?: boolean;
   /** Working exchange orders reserved against the gross cap. */
   workingOrders?: PendingRiskExposure[];
   /** Intents whose exchange outcome is not yet certain. */
@@ -34,6 +38,9 @@ export interface RiskOrderDraft {
   /** Price driving notional: limit price, stop price, or a mark/last reference. */
   effectivePrice: string;
   reduceOnly: boolean;
+  closePosition?: boolean;
+  emergencyClose?: boolean;
+  isClose?: boolean;
 }
 
 /** Realized P&L booked today (UTC) from the durable fills log. */
@@ -60,6 +67,8 @@ export function checkRisk(
   order: RiskOrderDraft,
   referencePrice: string | null,
 ): string[] {
+  if (order.reduceOnly || order.closePosition || order.emergencyClose || order.isClose) return [];
+
   const errors: string[] = [];
   const risk = cfg.risk;
   const notional = abs(mul(parseDec(order.effectivePrice), parseDec(order.qty)));
@@ -88,6 +97,15 @@ export function checkRisk(
     const limit = (snap.balanceUsd * risk.dailyLossPct) / 100;
     if (-snap.realizedTodayUsd >= limit) {
       errors.push(`EXECUTION_UNHEALTHY: daily realized loss limit reached (${snap.realizedTodayUsd.toFixed(2)} USD)`);
+    }
+  }
+  if (snap.unrealizedPnlFresh !== true || !Number.isFinite(snap.unrealizedPnlUsd)) {
+    errors.push("EXECUTION_UNHEALTHY: unrealized P&L is unavailable or stale; risk-increasing order rejected");
+  } else if (snap.balanceUsd > 0) {
+    const combinedPnl = snap.realizedTodayUsd + snap.unrealizedPnlUsd!;
+    const limit = (snap.balanceUsd * risk.dailyLossPct) / 100;
+    if (combinedPnl < 0 && -combinedPnl >= limit) {
+      errors.push(`EXECUTION_UNHEALTHY: daily realized and unrealized loss limit reached (${combinedPnl.toFixed(2)} USD)`);
     }
   }
   if (referencePrice && (order.type === "LIMIT" || order.type === "STOP_MARKET" || order.type === "TAKE_PROFIT_MARKET")) {

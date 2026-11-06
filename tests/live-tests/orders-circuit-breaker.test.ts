@@ -174,6 +174,7 @@ describe("POST /api/live/orders end-to-end with REST breaker open", () => {
     http.route("/fapi/v1/openOrders", () => jsonRes([]));
     http.route("/fapi/v1/listenKey", () => jsonRes({ listenKey: "LK-BRK" }));
     http.route("/fapi/v1/leverageBracket", () => jsonRes([]));
+    http.route("/fapi/v1/leverage", () => jsonRes({ leverage: 1, maxNotionalValue: "1000000" }));
     await getBroker().connect();
     FakeWs.last()?.emitOpen();
     await flush();
@@ -197,6 +198,7 @@ describe("POST /api/live/orders end-to-end with REST breaker open", () => {
           side: "BUY",
           type: "MARKET",
           qty: "0.001",
+          leverage: 1,
           clientOrderId,
         }),
       }),
@@ -275,6 +277,7 @@ describe("POST /api/live/orders end-to-end with REST breaker open", () => {
         side: "buy",
         type: "market",
         qty: "0.001",
+        leverage: 1,
         clientOrderId: "cid-brk-identity",
       }),
     ).rejects.toThrow(CircuitBreakerOpenError);

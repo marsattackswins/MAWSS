@@ -50,7 +50,7 @@ import {
 } from "./state";
 import { backfillHistoricalOrders, historySymbols, hydrateHistoricalOrders } from "./order-history";
 import { StreamLeaseUnavailableError, UserDataStream } from "./stream";
-import { MarkPriceStream } from "./mark-price-stream";
+import { MARK_STALE_AFTER_MS, MarkPriceStream } from "./mark-price-stream";
 import type { AccountUpdateEvent, OrderTradeUpdateEvent, UserStreamEvent } from "./types";
 import { getDb } from "../db/connection";
 import { trackFillReceived, trackFreezeTriggered, trackOrderFilled, trackSystemStart, trackSystemStop, trackUnfreezeCleared, updateTradingGauges } from "../metrics/instrument";
@@ -838,6 +838,23 @@ export class BinanceLiveManager {
 
   getRiskSnapshot(): RiskSnapshot {
     const state = liveState();
+    const now = Date.now();
+    const accountFresh =
+      state.account !== null &&
+      Number.isFinite(state.account.fetchedAt) &&
+      now - state.account.fetchedAt <= this.cfg.snapshotMaxAgeMs;
+    const positions = [...state.positions.values()];
+    const unrealizedPnlFresh =
+      accountFresh &&
+      positions.every((position) =>
+        position.markPriceSource === "exchange" &&
+        Number.isFinite(position.updatedAt) &&
+        now - position.updatedAt <= MARK_STALE_AFTER_MS &&
+        Number.isFinite(Number(position.unrealizedProfit)),
+      );
+    const unrealizedPnlUsd = unrealizedPnlFresh
+      ? positions.reduce((total, position) => total + Number(position.unrealizedProfit), 0)
+      : null;
     const workingOrders = [...state.openOrders.values()]
       .map((order) => ({
         qty: order.origQty,
@@ -870,6 +887,8 @@ export class BinanceLiveManager {
       openOrderCount: state.openOrders.size,
       openPositionCount: openPositionCount(),
       realizedTodayUsd: realizedSinceUtcMidnight(Date.now(), this.persistenceProfile),
+      unrealizedPnlUsd,
+      unrealizedPnlFresh,
       workingOrders,
       uncertainIntents,
     };

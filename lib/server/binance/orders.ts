@@ -178,7 +178,18 @@ export class OrderService {
    * Transport/breaker failures propagate so timeouts surface as uncertain.
    */
   private async syncLeverage(input: SubmitOrderInput): Promise<string | null> {
+    if (input.reduceOnly || input.closePosition || input.emergencyClose || input.isClose) return null;
     const leverage = normalizeLeverage(input.leverage);
+    const currentLeverageValue =
+      liveState().symbolLeverage.get(input.symbol) ??
+      liveState().positions.get(input.symbol)?.leverage;
+    const targetLeverage = leverage ?? (currentLeverageValue === undefined ? null : Number(currentLeverageValue));
+    if (targetLeverage === null || !Number.isFinite(targetLeverage) || targetLeverage < 1) {
+      return "RISK_MAX_LEVERAGE: current leverage is unknown; provide a leverage at or below the configured maximum";
+    }
+    if (targetLeverage > this.deps.cfg.risk.maxLeverage) {
+      return `RISK_MAX_LEVERAGE: leverage ${targetLeverage}x exceeds max ${this.deps.cfg.risk.maxLeverage}x`;
+    }
     // Only an absent value skips the sync. An explicit 1 must still be sent:
     // the exchange-side per-symbol setting persists whatever was last set, so
     // skipping 1x would margin the order at the stale value (the drift this

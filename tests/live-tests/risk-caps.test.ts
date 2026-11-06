@@ -2,6 +2,8 @@ import { BinanceRestClient } from "@/lib/server/binance/rest";
 import { RateLimiter } from "@/lib/server/binance/ratelimit";
 import { OrderService, type ReferencePrice } from "@/lib/server/binance/orders";
 import { extractConstraints } from "@/lib/server/binance/filters";
+import { checkRisk } from "@/lib/server/binance/risk";
+import { liveState } from "@/lib/server/binance/state";
 import { RUNTIME_KEYS, setRuntime } from "@/lib/server/runtime/flags";
 import type { EnvConfig } from "@/lib/server/env/config";
 import { BTCUSDT_INFO, FakeHttp, freshEnv, installFakes, jsonRes, makeCfg, orderFixture } from "./helpers";
@@ -19,10 +21,19 @@ type SetupOverrides = Omit<Partial<EnvConfig>, 'risk'> & {
 
 function setup(
   cfgOverrides: SetupOverrides = {},
-  riskSnapshot?: { balanceUsd?: number; grossExposureUsd?: number; openOrderCount?: number; openPositionCount?: number; realizedTodayUsd?: number },
+  riskSnapshot?: {
+    balanceUsd?: number;
+    grossExposureUsd?: number;
+    openOrderCount?: number;
+    openPositionCount?: number;
+    realizedTodayUsd?: number;
+    unrealizedPnlUsd?: number | null;
+    unrealizedPnlFresh?: boolean;
+  },
 ): Harness {
   const baseCfg = makeCfg();
   const base = freshEnv(baseCfg);
+  liveState().symbolLeverage.set("BTCUSDT", "1");
   const http = new FakeHttp();
   installFakes(http);
   
@@ -39,7 +50,15 @@ function setup(
 
   const constraints = extractConstraints(BTCUSDT_INFO);
   const freezes: string[] = [];
-  const snap = riskSnapshot ?? { balanceUsd: 1000, grossExposureUsd: 0, openOrderCount: 0, openPositionCount: 0, realizedTodayUsd: 0 };
+  const snap = riskSnapshot ?? {
+    balanceUsd: 1000,
+    grossExposureUsd: 0,
+    openOrderCount: 0,
+    openPositionCount: 0,
+    realizedTodayUsd: 0,
+    unrealizedPnlUsd: 0,
+    unrealizedPnlFresh: true,
+  };
   const svc = new OrderService({
     cfg,
     rest,
@@ -51,6 +70,8 @@ function setup(
       openOrderCount: snap.openOrderCount ?? 0,
       openPositionCount: snap.openPositionCount ?? 0,
       realizedTodayUsd: snap.realizedTodayUsd ?? 0,
+      unrealizedPnlUsd: snap.unrealizedPnlUsd === undefined ? 0 : snap.unrealizedPnlUsd,
+      unrealizedPnlFresh: snap.unrealizedPnlFresh ?? true,
     }),
     freeze: (reason) => {
       freezes.push(reason);
@@ -123,9 +144,173 @@ describe("server-side risk caps", () => {
     const res = await h.svc.submitOrder({
       symbol: "BTCUSDT", side: "SELL", type: "MARKET", qty: "0.001", reduceOnly: true, clientOrderId: "red1",
     });
-
     expect(res.ok).toBe(true);
     expect(placeCalls(h)).toHaveLength(1);
+  });
+
+  test("leverage at the configured cap is allowed", async () => {
+    const h = setup({ risk: { maxLeverage: 10 } });
+    h.http.route("/fapi/v1/leverage", () => jsonRes({ leverage: 10, maxNotionalValue: "1000000" }));
+    h.http.route("/fapi/v1/order", () => jsonRes(orderFixture({ clientOrderId: "lev10", status: "NEW" })));
+
+    const res = await h.svc.submitOrder({
+      symbol: "BTCUSDT", side: "BUY", type: "MARKET", qty: "0.001", leverage: 10, clientOrderId: "lev10",
+    });
+
+    expect(res.ok).toBe(true);
+    expect(h.http.callsTo("/fapi/v1/leverage")).toHaveLength(1);
+    expect(placeCalls(h)).toHaveLength(1);
+  });
+
+  test("leverage above the configured cap is rejected before changing leverage or placing an order", async () => {
+    const h = setup({ risk: { maxLeverage: 10 } });
+
+    const res = await h.svc.submitOrder({
+      symbol: "BTCUSDT", side: "BUY", type: "MARKET", qty: "0.001", leverage: 11, clientOrderId: "lev11",
+    });
+
+    expect(res.ok).toBe(false);
+    expect(res.error).toContain("RISK_MAX_LEVERAGE");
+    expect(h.http.callsTo("/fapi/v1/leverage")).toHaveLength(0);
+    expect(placeCalls(h)).toHaveLength(0);
+  });
+
+  test("orders without a leverage request reject when the known symbol leverage is above the cap", async () => {
+    const h = setup({ risk: { maxLeverage: 10 } });
+    liveState().symbolLeverage.set("BTCUSDT", "11");
+
+    const res = await h.svc.submitOrder({
+      symbol: "BTCUSDT", side: "BUY", type: "MARKET", qty: "0.001", clientOrderId: "current-lev11",
+    });
+
+    expect(res.ok).toBe(false);
+    expect(res.error).toContain("RISK_MAX_LEVERAGE");
+    expect(placeCalls(h)).toHaveLength(0);
+  });
+
+  test("orders without a requested or known leverage fail closed", async () => {
+    const h = setup();
+    liveState().symbolLeverage.delete("BTCUSDT");
+
+    const res = await h.svc.submitOrder({
+      symbol: "BTCUSDT", side: "BUY", type: "MARKET", qty: "0.001", clientOrderId: "unknown-lev",
+    });
+
+    expect(res.ok).toBe(false);
+    expect(res.error).toContain("current leverage is unknown");
+    expect(placeCalls(h)).toHaveLength(0);
+  });
+
+  test("reduce-only close is not blocked by an over-limit leverage value", async () => {
+    const h = setup({ risk: { maxLeverage: 2 } });
+    h.http.route("/fapi/v1/order", () => jsonRes(orderFixture({ clientOrderId: "red-lev", status: "NEW" })));
+
+    const res = await h.svc.submitOrder({
+      symbol: "BTCUSDT",
+      side: "SELL",
+      type: "MARKET",
+      qty: "0.001",
+      leverage: 20,
+      reduceOnly: true,
+      clientOrderId: "red-lev",
+    });
+
+    expect(res.ok).toBe(true);
+    expect(h.http.callsTo("/fapi/v1/leverage")).toHaveLength(0);
+    expect(placeCalls(h)).toHaveLength(1);
+  });
+
+  test("combined realized and unrealized loss rejects exactly at and just beyond the limit", () => {
+    const cfg = makeCfg({ risk: { ...makeCfg().risk, dailyLossPct: 10 } });
+    const base = {
+      balanceUsd: 1000,
+      grossExposureUsd: 0,
+      openOrderCount: 0,
+      openPositionCount: 0,
+      realizedTodayUsd: -25,
+      unrealizedPnlFresh: true,
+    };
+    const order = { type: "MARKET", qty: "0.001", effectivePrice: "50000", reduceOnly: false };
+
+    const belowLimit = checkRisk(cfg, { ...base, unrealizedPnlUsd: -74.99 }, order, "50000");
+    const atLimit = checkRisk(cfg, { ...base, unrealizedPnlUsd: -75 }, order, "50000");
+    const justOver = checkRisk(cfg, { ...base, unrealizedPnlUsd: -75.01 }, order, "50000");
+
+    expect(belowLimit.join(";")).not.toContain("daily realized and unrealized loss limit reached");
+    expect(atLimit.join(";")).toContain("daily realized and unrealized loss limit reached");
+    expect(justOver.join(";")).toContain("daily realized and unrealized loss limit reached");
+  });
+
+  test("realized-only daily loss threshold remains independently enforced", () => {
+    const cfg = makeCfg({ risk: { ...makeCfg().risk, dailyLossPct: 10 } });
+    const errors = checkRisk(
+      cfg,
+      {
+        balanceUsd: 1000,
+        grossExposureUsd: 0,
+        openOrderCount: 0,
+        openPositionCount: 0,
+        realizedTodayUsd: -100,
+        unrealizedPnlUsd: 50,
+        unrealizedPnlFresh: true,
+      },
+      { type: "MARKET", qty: "0.001", effectivePrice: "50000", reduceOnly: false },
+      "50000",
+    );
+
+    expect(errors.join(";")).toContain("daily realized loss limit reached");
+  });
+
+  test("stale or missing unrealized P&L rejects risk-increasing orders", () => {
+    const cfg = makeCfg();
+    const order = { type: "MARKET", qty: "0.001", effectivePrice: "50000", reduceOnly: false };
+    const base = {
+      balanceUsd: 1000,
+      grossExposureUsd: 0,
+      openOrderCount: 0,
+      openPositionCount: 0,
+      realizedTodayUsd: 0,
+    };
+
+    expect(checkRisk(cfg, {
+      ...base,
+      unrealizedPnlUsd: -1,
+      unrealizedPnlFresh: false,
+    }, order, "50000").join(";")).toContain("unrealized P&L is unavailable or stale");
+    expect(checkRisk(cfg, {
+      ...base,
+      unrealizedPnlFresh: true,
+    }, order, "50000").join(";")).toContain("unrealized P&L is unavailable or stale");
+  });
+
+  test.each([
+    ["reduce-only", { reduceOnly: true }],
+    ["close-position", { closePosition: true }],
+    ["emergency-close", { emergencyClose: true }],
+    ["close path", { isClose: true }],
+  ])("%s orders bypass all risk checks", (_name, exemption) => {
+    const cfg = makeCfg({ risk: { ...makeCfg().risk, maxLeverage: 1 } });
+    const errors = checkRisk(
+      cfg,
+      {
+        balanceUsd: 100,
+        grossExposureUsd: 1000,
+        openOrderCount: 100,
+        openPositionCount: 100,
+        realizedTodayUsd: -100,
+        unrealizedPnlUsd: null,
+        unrealizedPnlFresh: false,
+      },
+      {
+        type: "LIMIT",
+        qty: "100",
+        effectivePrice: "50000",
+        reduceOnly: false,
+        ...exemption,
+      },
+      "1",
+    );
+    expect(errors).toEqual([]);
   });
 
   test("open order cap rejects LIMIT orders when at limit", async () => {

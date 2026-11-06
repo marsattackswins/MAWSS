@@ -138,6 +138,7 @@ function standardFakes(http: FakeHttp, opts: { withPosition?: boolean } = {}): v
   http.route("/fapi/v1/allOpenOrders", () => jsonRes([]));
   http.route("/fapi/v1/listenKey", () => jsonRes({ listenKey: "LK-LOGTEST" }));
   http.route("/fapi/v1/leverageBracket", () => jsonRes([]));
+  http.route("/fapi/v1/leverage", () => jsonRes({ leverage: 1, maxNotionalValue: "1000000" }));
   http.route("/fapi/v1/userTrades", () => jsonRes([]));
 }
 
@@ -253,6 +254,7 @@ describe("POST /api/live/orders logs structured request lines", () => {
           side: "BUY",
           type: "LIMIT",
           qty: "0.001",
+          leverage: 1,
           price: "50000",
           clientOrderId: "cid-orders-ok",
         },
@@ -461,6 +463,7 @@ describe("request ID correlation on live mutations", () => {
         side: "BUY",
         type: "LIMIT",
         qty: "0.001",
+        leverage: 1,
         price: "50000",
         clientOrderId: "cid-rid-ok",
       },

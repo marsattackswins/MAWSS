@@ -30,6 +30,7 @@ function setup(
   // production refuse the DI seam outright); the service under test can then
   // be pointed at any env via its own cfg object.
   const base = freshEnv(makeCfg());
+  liveState().symbolLeverage.set("BTCUSDT", "1");
   const http = new FakeHttp();
   installFakes(http);
   const cfg = { ...base, ...cfgOverrides };
@@ -49,7 +50,7 @@ function setup(
     rest,
     getConstraints: (s) => (s === "BTCUSDT" ? constraints : null),
     getReferencePrice: depOverrides.getReferencePrice ?? (async () => ({ price: "50000", at: Date.now() })),
-    getRiskSnapshot: () => ({ balanceUsd: 1000, grossExposureUsd: 0, openOrderCount: 0, openPositionCount: 0, realizedTodayUsd: 0 }),
+    getRiskSnapshot: () => ({ balanceUsd: 1000, grossExposureUsd: 0, openOrderCount: 0, openPositionCount: 0, realizedTodayUsd: 0, unrealizedPnlUsd: 0, unrealizedPnlFresh: true }),
     freeze: (reason) => {
       freezes.push(reason);
       setRuntime(RUNTIME_KEYS.frozen, "true", Date.now(), profile);
@@ -89,7 +90,7 @@ describe("order submission (testnet lifecycle via fake exchange)", () => {
   });
 
   test("LIMIT order sends price and timeInForce=GTC", async () => {
-    const h = setup({ risk: { maxOrderNotionalUsd: 100, maxGrossExposureUsd: 1000, maxOpenOrders: 10, maxOpenPositions: 3, dailyLossPct: 5, priceCollarPct: 2 } });
+    const h = setup({ risk: { maxOrderNotionalUsd: 100, maxGrossExposureUsd: 1000, maxOpenOrders: 10, maxOpenPositions: 3, dailyLossPct: 5, priceCollarPct: 2, maxLeverage: 10 } });
     h.http.route("/fapi/v1/order", () => jsonRes(orderFixture({ clientOrderId: "lm1", type: "LIMIT", status: "NEW" })));
     const res = await h.svc.submitOrder({ symbol: "BTCUSDT", side: "SELL", type: "LIMIT", qty: "0.001", price: "50000.5", clientOrderId: "lm1" });
     expect(res.ok).toBe(true);
@@ -131,7 +132,7 @@ describe("order submission (testnet lifecycle via fake exchange)", () => {
     // 81100). The LOT_SIZE step for the harness symbol is 0.001, so the
     // pre-flight validator must never see the off-grid value.
     const h = setup({
-      risk: { maxOrderNotionalUsd: 1000, maxGrossExposureUsd: 5000, maxOpenOrders: 10, maxOpenPositions: 3, dailyLossPct: 5, priceCollarPct: 2 },
+      risk: { maxOrderNotionalUsd: 1000, maxGrossExposureUsd: 5000, maxOpenOrders: 10, maxOpenPositions: 3, dailyLossPct: 5, priceCollarPct: 2, maxLeverage: 10 },
     });
     h.http.route("/fapi/v1/order", () => jsonRes(orderFixture({ clientOrderId: "qt1", type: "MARKET", status: "NEW" })));
 
@@ -155,7 +156,7 @@ describe("order submission (testnet lifecycle via fake exchange)", () => {
   });
 
   test("UI-selected leverage is synced to the exchange before the order", async () => {
-    const h = setup();
+    const h = setup({ risk: { ...makeCfg().risk, maxLeverage: 20 } });
     h.http.route("/fapi/v1/leverage", () => jsonRes({ leverage: 20, maxNotionalValue: "1000000" }));
     h.http.route("/fapi/v1/order", () => jsonRes(orderFixture({ clientOrderId: "lv1", type: "MARKET", status: "NEW" })));
 
@@ -185,7 +186,7 @@ describe("order submission (testnet lifecycle via fake exchange)", () => {
   });
 
   test("out-of-bracket leverage (-4028) rejects the order without sending it", async () => {
-    const h = setup();
+    const h = setup({ risk: { ...makeCfg().risk, maxLeverage: 100 } });
     h.http.scriptApiError("/fapi/v1/leverage", -4028, "Leverage 100 is not valid for BTCUSDT", 400);
 
     const res = await h.svc.submitOrder({ symbol: "BTCUSDT", side: "BUY", type: "MARKET", qty: "0.001", leverage: 100, clientOrderId: "lv4" });

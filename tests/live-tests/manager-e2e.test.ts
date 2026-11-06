@@ -1,6 +1,7 @@
 import { BinanceLiveManager, resetLiveManagerForTests } from "@/lib/server/binance/manager";
 import { findByClientOrderId } from "@/lib/server/binance/intents";
-import { liveState } from "@/lib/server/binance/state";
+import { applyPositionSnapshot, liveState } from "@/lib/server/binance/state";
+import { MARK_STALE_AFTER_MS } from "@/lib/server/binance/mark-price-stream";
 import { getRuntime, RUNTIME_KEYS, setRuntime } from "@/lib/server/runtime/flags";
 import { getDb } from "@/lib/server/db/connection";
 import { sseBus } from "@/lib/server/binance/sse";
@@ -36,6 +37,7 @@ async function startManager(overrides: Record<string, () => unknown> = {}) {
   http.route("/fapi/v1/openOrders", () => jsonRes([]));
   http.route("/fapi/v1/listenKey", () => jsonRes({ listenKey: "LK-E2E" }));
   http.route("/fapi/v1/leverageBracket", () => jsonRes([]));
+  http.route("/fapi/v1/leverage", () => jsonRes({ leverage: 1, maxNotionalValue: "1000000" }));
   http.route("/fapi/v1/userTrades", () => jsonRes([]));
   for (const [pathPart, respond] of Object.entries(overrides)) {
     http.route(pathPart, () => jsonRes(respond()));
@@ -57,6 +59,42 @@ afterEach(() => {
 });
 
 describe("BinanceLiveManager end-to-end (fake testnet)", () => {
+  test("risk snapshot sums fresh mark-derived P&L and marks stale or missing sources unavailable", async () => {
+    await startManager();
+    const positionRow = {
+      symbol: "BTCUSDT",
+      positionAmt: "0.001",
+      entryPrice: "50000",
+      markPrice: "49000",
+      unRealizedProfit: "-1",
+      liquidationPrice: "0",
+      leverage: "5",
+      positionSide: "BOTH",
+    };
+
+    applyPositionSnapshot([positionRow], Date.now());
+    expect(manager.getRiskSnapshot()).toMatchObject({
+      unrealizedPnlUsd: -1,
+      unrealizedPnlFresh: true,
+    });
+
+    applyPositionSnapshot([positionRow], Date.now() - MARK_STALE_AFTER_MS - 1);
+    expect(manager.getRiskSnapshot()).toMatchObject({
+      unrealizedPnlUsd: null,
+      unrealizedPnlFresh: false,
+    });
+
+    applyPositionSnapshot([positionRow], Date.now());
+    liveState().positions.set("BTCUSDT", {
+      ...liveState().positions.get("BTCUSDT")!,
+      markPriceSource: "fill-fallback",
+    });
+    expect(manager.getRiskSnapshot()).toMatchObject({
+      unrealizedPnlUsd: null,
+      unrealizedPnlFresh: false,
+    });
+  });
+
   test("startup: clock, metadata, snapshot, stream, recon all reach ready", async () => {
     await startManager();
     expect(manager.status).toBe("ready");
@@ -101,6 +139,7 @@ describe("BinanceLiveManager end-to-end (fake testnet)", () => {
       type: "LIMIT",
       qty: "0.001",
       price: "50000",
+      leverage: 1,
       clientOrderId: "e2e-1",
     });
     expect(res.ok).toBe(true);
@@ -203,7 +242,7 @@ describe("BinanceLiveManager end-to-end (fake testnet)", () => {
     FakeWs.last().emitOpen();
     await flush();
     http.route("/fapi/v1/order", () => jsonRes(orderFixture({ clientOrderId: "dr2", status: "NEW" })));
-    const ok = await manager.orders.submitOrder({ symbol: "BTCUSDT", side: "BUY", type: "MARKET", qty: "0.001", clientOrderId: "dr2" });
+    const ok = await manager.orders.submitOrder({ symbol: "BTCUSDT", side: "BUY", type: "MARKET", qty: "0.001", leverage: 1, clientOrderId: "dr2" });
     expect(ok.ok).toBe(true);
   });
 

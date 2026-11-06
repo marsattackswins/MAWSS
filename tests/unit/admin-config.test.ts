@@ -52,6 +52,7 @@ jest.mock("@/lib/server/env/config", () => ({
       maxOpenPositions: 3,
       dailyLossPct: 50,
       priceCollarPct: 5,
+      maxLeverage: 10,
     },
     circuitBreaker: {
       restFailureThreshold: 5,

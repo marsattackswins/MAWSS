@@ -30,6 +30,7 @@ export const PRODUCTION_RISK_LIMITS = [
   ["MAWS_RISK_MAX_OPEN_POSITIONS", "maxOpenPositions"],
   ["MAWS_RISK_DAILY_LOSS_PCT", "dailyLossPct"],
   ["MAWS_RISK_PRICE_COLLAR_PCT", "priceCollarPct"],
+  ["MAWS_RISK_MAX_LEVERAGE", "maxLeverage"],
 ] as const satisfies readonly (readonly [string, keyof EnvConfig["risk"]])[];
 
 export function productionRiskConfigurationError(cfg: EnvConfig): string | null {
@@ -99,6 +100,7 @@ export interface EnvConfig {
     maxOpenPositions: number;
     dailyLossPct: number;
     priceCollarPct: number;
+    maxLeverage: number;
   };
   circuitBreaker: {
     // Binance REST API breaker
@@ -414,6 +416,7 @@ export function loadEnvConfig(source: NodeJS.ProcessEnv = process.env): EnvConfi
       maxOpenPositions: num(source.MAWS_RISK_MAX_OPEN_POSITIONS, 3),
       dailyLossPct: num(source.MAWS_RISK_DAILY_LOSS_PCT, 50),
       priceCollarPct: num(source.MAWS_RISK_PRICE_COLLAR_PCT, 5),
+      maxLeverage: num(source.MAWS_RISK_MAX_LEVERAGE, 10),
     },
     circuitBreaker: {
       // Binance REST API breaker (open after 5 failures in 60s, retry after 30s)

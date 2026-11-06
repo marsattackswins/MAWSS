@@ -129,7 +129,7 @@ node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"
 
 ### Risk Limit Variables
 
-All six variables below must be explicitly configured with positive finite
+All seven variables below must be explicitly configured with positive finite
 values when `MAWS_ENV=production` or when attaching the Production profile.
 Production startup or profile attachment fails with the names of any missing
 variables. Testnet and local modes continue to use the documented defaults
@@ -170,6 +170,26 @@ when these values are omitted.
 **Default**: `5`
 **Production**: Required explicitly; must be positive finite number
 **Purpose**: Reject orders with prices outside collar
+
+#### MAWS_RISK_MAX_LEVERAGE
+**Description**: Maximum leverage allowed for risk-increasing orders
+**Default**: `10`
+**Production**: Required explicitly; must be positive finite number
+**Purpose**: Reject orders or leverage changes above this cap. Reduce-only, close,
+and emergency-close paths do not change leverage and are exempt from risk checks.
+Risk-increasing orders must provide a leverage at or below this cap or have a
+known, cached per-symbol leverage that is within the cap; unknown leverage is
+rejected rather than assumed.
+
+The daily loss guard uses realized P&L from the durable fills log since UTC
+midnight plus the sum of open-position unrealized P&L from mark-derived
+positions. The manager treats unrealized P&L as fresh only when the account
+snapshot is within `MAWS_SNAPSHOT_MAX_AGE_MS` and every open position has
+exchange-mark-derived P&L updated within 10 seconds. Fill-time fallback,
+missing, non-finite, or stale data rejects risk-increasing orders; reduce-only,
+close, and emergency-close orders remain available. The existing realized-only
+daily-loss limit remains independently enforced in addition to the combined
+realized-plus-unrealized loss limit.
 
 ### Circuit Breaker Variables
 

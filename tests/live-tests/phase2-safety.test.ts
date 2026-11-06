@@ -18,6 +18,7 @@ import { BTCUSDT_INFO } from "./helpers";
 beforeEach(() => {
   freshEnv(makeCfg());
   resetLiveStateForTests();
+  liveState().symbolLeverage.set("BTCUSDT", "1");
   resetHealthSignalsForTests();
   const now = Date.now();
   setHealthSignal({
@@ -43,6 +44,8 @@ describe("Phase 2 pending exposure", () => {
         openOrderCount: 1,
         openPositionCount: 0,
         realizedTodayUsd: 0,
+        unrealizedPnlUsd: 0,
+        unrealizedPnlFresh: true,
         workingOrders: [{ qty: "0.001", effectivePrice: "50000" }],
         uncertainIntents: [{ qty: "0.001", effectivePrice: "50000" }],
       },
@@ -71,6 +74,8 @@ describe("Phase 2 pending exposure", () => {
         openOrderCount: liveState().openOrders.size,
         openPositionCount: 0,
         realizedTodayUsd: 0,
+        unrealizedPnlUsd: 0,
+        unrealizedPnlFresh: true,
         workingOrders: [...liveState().openOrders.values()].map((o) => ({ qty: o.origQty, effectivePrice: o.price })),
       }),
       freeze: () => undefined,
@@ -136,7 +141,7 @@ describe("Phase 2 emergency flatten", () => {
       rest,
       getConstraints: () => null,
       getReferencePrice: async () => null,
-      getRiskSnapshot: () => ({ balanceUsd: 0, grossExposureUsd: 0, openOrderCount: 0, openPositionCount: 0, realizedTodayUsd: 0 }),
+      getRiskSnapshot: () => ({ balanceUsd: 0, grossExposureUsd: 0, openOrderCount: 0, openPositionCount: 0, realizedTodayUsd: 0, unrealizedPnlUsd: 0, unrealizedPnlFresh: true }),
       freeze: () => undefined,
       emit: () => undefined,
     });
@@ -166,7 +171,7 @@ describe("Phase 2 emergency flatten", () => {
       rest,
       getConstraints: () => null,
       getReferencePrice: async () => null,
-      getRiskSnapshot: () => ({ balanceUsd: 0, grossExposureUsd: 0, openOrderCount: 0, openPositionCount: 0, realizedTodayUsd: 0 }),
+      getRiskSnapshot: () => ({ balanceUsd: 0, grossExposureUsd: 0, openOrderCount: 0, openPositionCount: 0, realizedTodayUsd: 0, unrealizedPnlUsd: 0, unrealizedPnlFresh: true }),
       freeze: () => undefined,
       emit: () => undefined,
     });
