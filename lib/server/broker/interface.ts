@@ -30,6 +30,7 @@ export interface IBroker {
   /** Explicit reduce-only close; allowed when normal submissions are halted. */
   closePosition(symbol: string): Promise<OrderResult>;
   emergencyClosePosition(symbol: string): Promise<OrderResult>;
+  reversePosition(input: ReversePositionRequest): Promise<ReversePositionResult>;
   emergencyFlatten(triggeredBy: string): Promise<EmergencyFlattenSummary>;
   protectPosition(params: ProtectPositionParams): Promise<ProtectPositionResult>;
   removeProtection(symbol: string): Promise<{ ok: boolean; error?: string }>;
@@ -100,6 +101,18 @@ export interface OrderResult {
   exchangeOrderId?: number | null;
   error?: string;
   duplicate?: boolean;
+}
+
+export interface ReversePositionRequest {
+  symbol: string;
+  newQty: string;
+  expectedPositionQty: string;
+  expectedPositionSide: "long" | "short";
+  clientOrderId: string;
+}
+
+export interface ReversePositionResult extends OrderResult {
+  resultingPosition?: { side: "long" | "short"; qty: string } | null;
 }
 
 export interface Order {

@@ -304,6 +304,7 @@ export const BTCUSDT_INFO = {
   filters: [
     { filterType: "PRICE_FILTER", minPrice: "0.1", maxPrice: "1000000", tickSize: "0.1" },
     { filterType: "LOT_SIZE", minQty: "0.001", maxQty: "100", stepSize: "0.001" },
+    { filterType: "MARKET_LOT_SIZE", minQty: "0.001", maxQty: "100", stepSize: "0.001" },
     { filterType: "MIN_NOTIONAL", notional: "5" },
     { filterType: "MAX_NUM_ORDERS", maxNumberOrders: 200 },
   ],

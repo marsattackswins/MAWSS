@@ -164,6 +164,27 @@ export class BinanceAdapter implements IBroker {
     }
   }
 
+  async reversePosition(input: {
+    symbol: string;
+    newQty: string;
+    expectedPositionQty: string;
+    expectedPositionSide: "long" | "short";
+    clientOrderId: string;
+  }) {
+    try {
+      return await this.manager.orders.reversePosition(input);
+    } catch (err) {
+      if (err instanceof CircuitBreakerOpenError) throw err;
+      if (err instanceof BinanceApiError) {
+        throw new BrokerOrderError("binance", err.code, err.exchangeMsg, err);
+      }
+      if (err instanceof TransportTimeoutError) {
+        throw new BrokerTimeoutError("binance", "reversePosition", err);
+      }
+      throw new BrokerError("Failed to reverse position", "binance", err);
+    }
+  }
+
   async emergencyFlatten(triggeredBy: string) {
     return this.manager.emergencyFlatten(triggeredBy);
   }

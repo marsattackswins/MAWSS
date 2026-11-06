@@ -20,7 +20,10 @@ export interface RiskSnapshot {
   /** Exposure from current exchange-derived positions only. */
   grossExposureUsd: number;
   openOrderCount: number;
+  /** Existing positions before the new order is added; normally the same as the after-count. */
   openPositionCount: number;
+  /** Used when evaluating a projected order whose post-order count differs from the base count. */
+  openPositionCountAfterOrder?: number;
   realizedTodayUsd: number;
   /** Sum of mark-derived unrealized P&L, or null when unavailable/stale. */
   unrealizedPnlUsd?: number | null;
@@ -114,7 +117,7 @@ export function checkRisk(
       errors.push(`EXECUTION_UNHEALTHY: daily realized and unrealized loss limit reached (${combinedPnl.toFixed(2)} USD)`);
     }
   }
-  if (snap.openPositionCount > 0) {
+  if ((snap.openPositionCountAfterOrder ?? snap.openPositionCount) > 0) {
     if (
       snap.marginDataFresh !== true ||
       !Number.isFinite(snap.marginRatio) ||

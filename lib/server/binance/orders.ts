@@ -2,7 +2,7 @@ import "server-only";
 
 import crypto from "node:crypto";
 
-import { abs, eq, gt, isNegative, isZero, lt, parseDec, roundDownToStep, toStr } from "./decimal";
+import { abs, add, eq, gt, isNegative, isZero, lt, parseDec, roundDownToStep, toStr } from "./decimal";
 import { applySymbolLeverage } from "./state";
 import { audit } from "../audit/log";
 import { requireEmergencyActionAllowed, requireSubmissionAllowed, SubmissionBlockedError } from "../gates/execution";
@@ -24,7 +24,7 @@ import {
 import { TransportTimeoutError } from "./transport";
 import { CircuitBreakerOpenError } from "../resilience/circuit-breaker";
 import type { SymbolConstraints } from "./filters";
-import { validateAgainstConstraints } from "./filters";
+import { validateAgainstConstraints, validateMarketQty } from "./filters";
 import { checkRisk, type RiskSnapshot } from "./risk";
 import { withRiskMutation } from "./mutation-queue";
 import {
@@ -36,6 +36,7 @@ import {
 } from "./intents";
 import { liveState, rememberOrder } from "./state";
 import type { BinanceOrder } from "./types";
+import type { PositionRiskRow } from "./types";
 import { trackOrderCanceled, trackOrderRejected, trackOrderSubmitted, trackOrderSubmissionDuration } from "../metrics/instrument";
 import { normalMutationBlock } from "../profile/admission";
 import { alert } from "../alerts/dispatch";
@@ -78,6 +79,38 @@ export interface SubmitOrderInput {
    */
   leverage?: number;
 }
+
+export interface ReversePositionInput {
+  symbol: string;
+  newQty: string;
+  expectedPositionQty: string;
+  expectedPositionSide: "long" | "short";
+  clientOrderId: string;
+}
+
+export interface ReversePositionResult extends OrderResult {
+  resultingPosition?: { side: "long" | "short"; qty: string } | null;
+}
+
+interface ReverseRiskEvaluation {
+  snapshot: RiskSnapshot;
+  qty: string;
+  effectivePrice: string;
+}
+
+interface ReverseMarketContext {
+  position: PositionRiskRow;
+  currentSide: "long" | "short";
+  currentQty: string;
+  newQty: string;
+  combinedQty: string;
+  markPrice: string;
+}
+
+type ReversePreparation<T> = { ok: true; value: T } | { ok: false; error: string };
+type ReverseSubmitAttempt =
+  | { submitted: true; orderResult: OrderResult }
+  | { submitted: false; result: ReversePositionResult };
 
 export interface ReferencePrice {
   price: string;
@@ -151,6 +184,19 @@ export interface OrderServiceDeps {
   /** Optional uncached mark-price fetch for protective-order validation. */
   getMarkPrice?(symbol: string): Promise<ReferencePrice | null>;
   getRiskSnapshot(): RiskSnapshot;
+  /**
+   * Must return an authoritative hypothetical post-flip risk snapshot.
+   * `grossExposureUsd` and `openPositionCount` represent existing exposure
+   * after removing the old position but before adding the new one;
+   * unrealized P&L, margin ratio, and liquidation distances represent the
+   * hypothetical resulting position. Missing means reverse is fail-closed.
+   */
+  projectReverseRisk?(input: {
+    position: PositionRiskRow;
+    newQty: string;
+    price: string;
+    current: RiskSnapshot;
+  }): Promise<RiskSnapshot | null> | RiskSnapshot | null;
   freeze(reason: string): void;
   unfreeze?: () => void;
   emit(event: string, data: unknown): void;
@@ -242,6 +288,332 @@ export class OrderService {
     return withRiskMutation(() => this.submitOrderSerialized(input));
   }
 
+  async reversePosition(input: ReversePositionInput): Promise<ReversePositionResult> {
+    return withRiskMutation(() =>
+      withProtectionIntentLock(
+        input.symbol,
+        () => this.reversePositionSerialized(input),
+        this.persistenceProfile,
+      ),
+    );
+  }
+
+  private async reversePositionSerialized(input: ReversePositionInput): Promise<ReversePositionResult> {
+    const reject = (error: string, extra: Partial<ReversePositionResult> = {}): ReversePositionResult => ({
+      ok: false,
+      clientOrderId: input.clientOrderId,
+      error,
+      ...extra,
+    });
+    if (this.findIntent(input.clientOrderId)) {
+      return reject(`Duplicate clientOrderId ${input.clientOrderId}`, { duplicate: true });
+    }
+    const requestError = this.reverseRequestError(input);
+    if (requestError) return reject(requestError);
+    try {
+      try {
+        requireSubmissionAllowed(this.deps.cfg);
+      } catch (error) {
+        if (error instanceof SubmissionBlockedError) return reject(error.message);
+        throw error;
+      }
+      const positionMode = await this.deps.rest.getPositionMode();
+      if (positionMode.dualSidePosition) return reject("Reverse is supported only in verified one-way position mode");
+
+      const market = await this.prepareReverseMarketContext(input);
+      if (!market.ok) return reject(market.error, { resultingPosition: market.resultingPosition });
+      const projection = await this.prepareReverseRisk(market.value);
+      if (!projection.ok) return reject(projection.error);
+      const submission = await this.submitReverseMarketOrder(input, market.value, projection.value);
+      if (!submission.submitted) return submission.result;
+      const reconciliation = await this.reconcileReversePosition(input, market.value, submission.orderResult);
+      if (!reconciliation.ok) return reconciliation.result;
+      return this.finishConfirmedReverse(input, market.value.currentSide, submission.orderResult, reconciliation.position);
+    } catch (error) {
+      if (error instanceof CircuitBreakerOpenError) {
+        return reject("Reverse could not be verified because the exchange circuit breaker is open; no order was submitted");
+      }
+      throw error;
+    }
+  }
+
+  private reverseRequestError(input: ReversePositionInput): string | null {
+    if (!input.clientOrderId || input.clientOrderId.length > 36 || !/^[a-zA-Z0-9_-]+$/.test(input.clientOrderId)) {
+      return "A valid clientOrderId (1-36 Binance-safe characters) is required";
+    }
+    if (this.uncertainIntents().some((intent) => intent.symbol === input.symbol)) {
+      return `Reverse for ${input.symbol} is blocked while an order outcome remains uncertain`;
+    }
+    if (!this.deps.projectReverseRisk) {
+      return "Reverse is disabled: authoritative hypothetical post-flip margin and liquidation risk data is unavailable; close the position normally";
+    }
+    return null;
+  }
+
+  private async prepareReverseMarketContext(
+    input: ReversePositionInput,
+  ): Promise<ReversePreparation<ReverseMarketContext> & { resultingPosition?: null }> {
+    const rows = await this.deps.rest.getPositionRisk(input.symbol);
+    const position = rows.find((row) => row.symbol === input.symbol && !isZero(parseDec(row.positionAmt)));
+    if (!position) {
+      return { ok: false, error: `No open position for ${input.symbol}`, resultingPosition: null };
+    }
+    const amount = parseDec(position.positionAmt);
+    const currentSide = isNegative(amount) ? "short" : "long";
+    const currentQty = toStr(abs(amount));
+    let expectedQty: string;
+    let newQty: string;
+    try {
+      expectedQty = toStr(abs(parseDec(input.expectedPositionQty)));
+      newQty = toStr(parseDec(input.newQty));
+    } catch {
+      return { ok: false, error: "Position and new quantity must be valid decimals" };
+    }
+    if (
+      currentSide !== input.expectedPositionSide ||
+      !eq(amount, parseDec(input.expectedPositionSide === "short" ? `-${expectedQty}` : expectedQty))
+    ) {
+      return { ok: false, error: `Position changed since it was displayed (now ${currentSide} ${currentQty}); refresh and retry` };
+    }
+    if (isNegative(parseDec(newQty)) || isZero(parseDec(newQty))) {
+      return { ok: false, error: "New position quantity must be greater than zero" };
+    }
+
+    const mark = await this.deps.rest.getMarkPrice(input.symbol);
+    const markAge = Date.now() - (mark.time ?? 0);
+    if (!Number.isFinite(Number(mark.markPrice)) || Number(mark.markPrice) <= 0 || markAge < 0 || markAge > 10_000) {
+      return { ok: false, error: "Fresh mark price unavailable; reverse rejected before submission" };
+    }
+    const constraints = this.deps.getConstraints(input.symbol);
+    if (!constraints) return { ok: false, error: `No exchange filter data for ${input.symbol}; metadata not ready` };
+    const combinedQty = toStr(add(abs(amount), parseDec(newQty)));
+    const filterErrors = [
+      ...validateMarketQty(constraints, combinedQty, mark.markPrice),
+      ...validateAgainstConstraints(constraints, { symbol: input.symbol, type: "MARKET", qty: combinedQty }),
+    ];
+    if (filterErrors.length > 0) return { ok: false, error: filterErrors.join("; ") };
+
+    const leverage = Number(position.leverage);
+    if (!Number.isFinite(leverage) || leverage < 1 || leverage > this.deps.cfg.risk.maxLeverage) {
+      return {
+        ok: false,
+        error: `RISK_MAX_LEVERAGE: current leverage is unknown or exceeds the configured maximum (${this.deps.cfg.risk.maxLeverage}x)`,
+      };
+    }
+    return {
+      ok: true,
+      value: { position, currentSide, currentQty, newQty, combinedQty, markPrice: mark.markPrice },
+    };
+  }
+
+  private async prepareReverseRisk(
+    market: ReverseMarketContext,
+  ): Promise<ReversePreparation<RiskSnapshot>> {
+    const projectReverseRisk = this.deps.projectReverseRisk;
+    if (!projectReverseRisk) {
+      return {
+        ok: false,
+        error: "Reverse is disabled: authoritative hypothetical post-flip margin and liquidation risk data is unavailable; close the position normally",
+      };
+    }
+    const projection = await projectReverseRisk({
+      position: market.position,
+      newQty: market.newQty,
+      price: market.markPrice,
+      current: this.deps.getRiskSnapshot(),
+    });
+    if (!projection) {
+      return {
+        ok: false,
+        error: "Reverse is disabled: authoritative hypothetical post-flip margin and liquidation risk data is unavailable; close the position normally",
+      };
+    }
+    if (
+      !Number.isFinite(projection.balanceUsd) ||
+      projection.balanceUsd <= 0 ||
+      !Number.isFinite(projection.grossExposureUsd) ||
+      projection.grossExposureUsd < 0 ||
+      !Number.isFinite(projection.openOrderCount) ||
+      !Number.isInteger(projection.openOrderCount) ||
+      projection.openOrderCount < 0 ||
+      !Number.isFinite(projection.openPositionCount) ||
+      !Number.isInteger(projection.openPositionCount) ||
+      projection.openPositionCount < 0 ||
+      !Number.isFinite(projection.openPositionCountAfterOrder) ||
+      projection.openPositionCountAfterOrder == null ||
+      !Number.isInteger(projection.openPositionCountAfterOrder) ||
+      projection.openPositionCountAfterOrder < 1 ||
+      !Number.isFinite(projection.realizedTodayUsd)
+    ) {
+      return { ok: false, error: "Reverse is disabled: hypothetical risk projection is incomplete; close the position normally" };
+    }
+    const errors = checkRisk(
+      this.deps.cfg,
+      projection,
+      { type: "MARKET", qty: market.newQty, effectivePrice: market.markPrice, reduceOnly: false },
+      market.markPrice,
+    );
+    if (errors.length > 0) return { ok: false, error: `${errors.join("; ")}. You can still close the position normally` };
+    return { ok: true, value: projection };
+  }
+
+  private async submitReverseMarketOrder(
+    input: ReversePositionInput,
+    market: ReverseMarketContext,
+    projection: RiskSnapshot,
+  ): Promise<ReverseSubmitAttempt> {
+    try {
+      const orderResult = await this.submitOrderSerialized({
+        symbol: input.symbol,
+        side: market.currentSide === "long" ? "SELL" : "BUY",
+        type: "MARKET",
+        qty: market.combinedQty,
+        clientOrderId: input.clientOrderId,
+      }, false, { snapshot: projection, qty: market.newQty, effectivePrice: market.markPrice }, true);
+      return { submitted: true, orderResult };
+    } catch (error) {
+      if (!(error instanceof CircuitBreakerOpenError)) throw error;
+      if (!this.findIntent(input.clientOrderId)) {
+        return {
+          submitted: false,
+          result: {
+            ok: false,
+            clientOrderId: input.clientOrderId,
+            error: "Reverse could not be submitted because the exchange circuit breaker is open",
+          },
+        };
+      }
+      this.markReverseUncertain(input.symbol, input.clientOrderId, "Circuit breaker opened during reverse submission; verify the exchange position before retrying");
+      return {
+        submitted: false,
+        result: {
+          ok: false,
+          clientOrderId: input.clientOrderId,
+          error: "Reverse outcome is uncertain because the exchange circuit breaker opened; submissions are frozen pending reconciliation",
+        },
+      };
+    }
+  }
+
+  private async reconcileReversePosition(
+    input: ReversePositionInput,
+    market: ReverseMarketContext,
+    orderResult: OrderResult,
+  ): Promise<
+    | { ok: true; position: { side: "long" | "short"; qty: string } }
+    | { ok: false; result: ReversePositionResult }
+  > {
+    let after: PositionRiskRow | undefined;
+    try {
+      after = (await this.deps.rest.getPositionRisk(input.symbol)).find((row) => row.symbol === input.symbol);
+    } catch (error) {
+      this.markReverseUncertain(input.symbol, input.clientOrderId, `Unable to verify resulting position: ${String(error)}`);
+      return {
+        ok: false,
+        result: {
+          ...orderResult,
+          ok: false,
+          error: "Reverse submitted but the resulting position could not be verified; submissions are frozen pending reconciliation",
+        },
+      };
+    }
+    const afterAmount = after ? parseDec(after.positionAmt) : parseDec("0");
+    const resultingPosition = !isZero(afterAmount)
+      ? { side: isNegative(afterAmount) ? "short" as const : "long" as const, qty: toStr(abs(afterAmount)) }
+      : null;
+    if (
+      orderResult.ok &&
+      resultingPosition &&
+      resultingPosition.side === (market.currentSide === "long" ? "short" : "long") &&
+      eq(parseDec(resultingPosition.qty), parseDec(market.newQty))
+    ) {
+      return { ok: true, position: resultingPosition };
+    }
+    const unchanged = resultingPosition?.side === market.currentSide &&
+      !!resultingPosition &&
+      eq(parseDec(resultingPosition.qty), parseDec(market.currentQty));
+    const uncertain = orderResult.failureKind === "transient_or_uncertain" || orderResult.ok || !unchanged;
+    if (uncertain) {
+      this.markReverseUncertain(input.symbol, input.clientOrderId, "Exchange result did not produce the requested exact reverse position");
+    }
+    audit("operator", "position.reverse.incomplete", {
+      symbol: input.symbol,
+      clientOrderId: input.clientOrderId,
+      requested: { side: market.currentSide === "long" ? "short" : "long", qty: market.newQty },
+      resultingPosition,
+      error: orderResult.error,
+    }, undefined, this.persistenceProfile);
+    if (uncertain) {
+      alert(`position_reverse_incomplete:${input.symbol}`, {
+        symbol: input.symbol,
+        clientOrderId: input.clientOrderId,
+        resultingPosition,
+        severity: "high",
+      });
+    }
+    return {
+      ok: false,
+      result: {
+        ...orderResult,
+        ok: false,
+        resultingPosition,
+        error: orderResult.error ?? "Reverse did not produce the requested position; actual position is shown",
+      },
+    };
+  }
+
+  private async finishConfirmedReverse(
+    input: ReversePositionInput,
+    oldSide: "long" | "short",
+    orderResult: OrderResult,
+    resultingPosition: { side: "long" | "short"; qty: string },
+  ): Promise<ReversePositionResult> {
+    const closeSide = oldSide === "long" ? "SELL" : "BUY";
+    let openOrders: BinanceOrder[];
+    try {
+      openOrders = await this.deps.rest.getOpenOrders(input.symbol);
+    } catch (error) {
+      this.resetProtectionForReversedPosition(input.symbol, resultingPosition.side);
+      const reason = `Reverse confirmed, but old protection could not be listed or canceled: ${String(error)}`;
+      this.markProtectionUnprotected(input.symbol, reason);
+      return { ...orderResult, ok: true, resultingPosition, error: reason };
+    }
+    const oldProtection = openOrders.filter((order) =>
+      order.side === closeSide &&
+      order.closePosition &&
+      (order.type === "TAKE_PROFIT_MARKET" || order.type === "STOP_MARKET"),
+    );
+    const cancelFailures: string[] = [];
+    for (const type of ["TAKE_PROFIT_MARKET", "STOP_MARKET"] as const) {
+      const matching = oldProtection.filter((order) => order.type === type);
+      if (matching.length === 0) continue;
+      try {
+        const error = await this.cancelProtectiveOrders(input.symbol, type, closeSide, matching);
+        if (error) cancelFailures.push(error);
+      } catch (error) {
+        cancelFailures.push(String(error));
+      }
+    }
+    this.resetProtectionForReversedPosition(input.symbol, resultingPosition.side);
+    const reason = cancelFailures.length > 0
+      ? `Reverse confirmed, but old protection cancellation was incomplete: ${cancelFailures.join("; ")}`
+      : "Reverse confirmed; the new position needs TP/SL protection";
+    this.markProtectionUnprotected(input.symbol, reason);
+    return { ...orderResult, ok: true, resultingPosition, error: reason };
+  }
+
+  private resetProtectionForReversedPosition(symbol: string, side: "long" | "short"): void {
+    deleteProtectionIntent(symbol, this.persistenceProfile);
+    saveProtectionIntent({ symbol, side, tpPrice: null, slPrice: null }, Date.now(), this.persistenceProfile);
+  }
+
+  private markReverseUncertain(symbol: string, clientOrderId: string, reason: string): void {
+    if (this.findIntent(clientOrderId)) this.updateIntent(clientOrderId, { status: "UNCERTAIN", lastState: uncertainState(clientOrderId, { reason }, this.persistenceProfile) });
+    this.deps.freeze(`reverse position outcome uncertain for ${symbol}`);
+    audit("operator", "position.reverse.uncertain", { symbol, clientOrderId, reason }, undefined, this.persistenceProfile);
+    alert(`position_reverse_uncertain:${symbol}`, { symbol, clientOrderId, reason, severity: "high" });
+  }
+
   /**
    * Returns a user-facing rejection when the optional leverage sync fails as
    * a definite business rejection; returns null when nothing needed syncing.
@@ -268,7 +640,12 @@ export class OrderService {
     return syncLeverageToExchange(this.deps.rest, input.symbol, leverage);
   }
 
-  private async submitOrderSerialized(input: SubmitOrderInput, protectionRecovery = false): Promise<OrderResult> {
+  private async submitOrderSerialized(
+    input: SubmitOrderInput,
+    protectionRecovery = false,
+    reverseRisk?: ReverseRiskEvaluation,
+    leverageAlreadyVerified = false,
+  ): Promise<OrderResult> {
     const { cfg } = this.deps;
     const clientOrderId = input.clientOrderId ?? newServerClientOrderId(input.kind === "algo" ? "alg" : "ord");
     const blocked = normalMutationBlock();
@@ -297,7 +674,7 @@ export class OrderService {
 
     alignQtyToStep(input, constraints);
 
-    const leverageError = await this.syncLeverage(input);
+    const leverageError = leverageAlreadyVerified ? null : await this.syncLeverage(input);
     if (leverageError) {
       audit("operator", "order.rejected.leverage", { symbol: input.symbol, clientOrderId, error: leverageError });
       return { ok: false, clientOrderId, error: leverageError };
@@ -327,8 +704,13 @@ export class OrderService {
     if (!input.closePosition && !input.emergencyClose && !input.reduceOnly && !input.isClose) {
       const riskErrors = checkRisk(
         cfg,
-        this.deps.getRiskSnapshot(),
-        { type: input.type, qty: input.qty ?? "0", effectivePrice, reduceOnly: !!input.reduceOnly },
+        reverseRisk?.snapshot ?? this.deps.getRiskSnapshot(),
+        {
+          type: input.type,
+          qty: reverseRisk?.qty ?? input.qty ?? "0",
+          effectivePrice: reverseRisk?.effectivePrice ?? effectivePrice,
+          reduceOnly: !!input.reduceOnly,
+        },
         reference!.price,
       );
       if (riskErrors.length > 0) {

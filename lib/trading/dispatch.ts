@@ -163,6 +163,34 @@ export async function dispatchReversePosition(input: {
   side: "long" | "short";
   qty: number;
 }): Promise<{ ok: boolean; error?: string }> {
+  if (isLiveBrokerConnected()) {
+    const halt = tradingHaltReason();
+    if (halt !== null) {
+      notifyError(`Trading halted: ${halt}`);
+      return { ok: false, error: "trading_halted" };
+    }
+    try {
+      const qty = String(Math.abs(input.qty));
+      const result = await liveApi.reversePosition({
+        symbol: input.symbol,
+        newQty: qty,
+        expectedPositionQty: qty,
+        expectedPositionSide: input.side,
+        clientOrderId: crypto.randomUUID(),
+      });
+      if (!result.ok) {
+        notifyError(result.error ?? "Reverse rejected");
+        return { ok: false, error: result.error ?? "Reverse rejected" };
+      }
+      if (result.error) notifyError(result.error);
+      return { ok: true, error: result.error };
+    } catch (err) {
+      const message = describe(err);
+      notifyError(message);
+      return { ok: false, error: message };
+    }
+  }
+
   const closed = await dispatchClosePosition(input.idOrSymbol);
   if (!closed.ok) return closed;
   return dispatchSubmitOrder({

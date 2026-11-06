@@ -152,9 +152,12 @@ function PositionPill({
   const runReverse = async () => {
     closeMenus();
     const origin = live ? position.symbol : position.id;
+    const reverseSide = position.side === "long" ? "short" : "long";
+    const reverseQty = Math.abs(position.qty);
+    const approximateNotional = reverseQty * position.entry;
     if (
       !window.confirm(
-        `Reverse the ${position.side} ${position.qty} ${position.symbol} position: close it and open the opposite side at market?`,
+        `Reverse ${position.symbol} into a ${reverseSide} position of ${reverseQty} (approximately $${approximateNotional.toFixed(2)} notional at entry)? This submits one market order and removes existing TP/SL after the flip is confirmed.`,
       )
     ) {
       return;

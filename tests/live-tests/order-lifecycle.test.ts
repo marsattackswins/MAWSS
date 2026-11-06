@@ -1,7 +1,8 @@
 import { BinanceRestClient } from "@/lib/server/binance/rest";
 import { RateLimiter } from "@/lib/server/binance/ratelimit";
-import { OrderService, type ReferencePrice } from "@/lib/server/binance/orders";
+import { OrderService, type OrderServiceDeps, type ReferencePrice } from "@/lib/server/binance/orders";
 import { extractConstraints } from "@/lib/server/binance/filters";
+import type { RiskSnapshot } from "@/lib/server/binance/risk";
 import { createIntent, findByClientOrderId, updateIntent } from "@/lib/server/binance/intents";
 import { applyAccountEvent, liveState } from "@/lib/server/binance/state";
 import { applyOpenOrdersSnapshot } from "@/lib/server/binance/state";
@@ -41,6 +42,8 @@ function setup(
   depOverrides: {
     getReferencePrice?: (symbol: string) => Promise<ReferencePrice | null>;
     getMarkPrice?: (symbol: string) => Promise<ReferencePrice | null>;
+    projectReverseRisk?: OrderServiceDeps["projectReverseRisk"];
+    getRiskSnapshot?: () => RiskSnapshot;
   } = {},
 ): Harness {
   resetAlertsForTests();
@@ -69,7 +72,8 @@ function setup(
     getConstraints: (s) => (s === "BTCUSDT" ? constraints : null),
     getReferencePrice: depOverrides.getReferencePrice ?? (async () => ({ price: "50000", at: Date.now() })),
     getMarkPrice: depOverrides.getMarkPrice,
-    getRiskSnapshot: () => ({ balanceUsd: 1000, grossExposureUsd: 0, openOrderCount: 0, openPositionCount: 0, realizedTodayUsd: 0, unrealizedPnlUsd: 0, unrealizedPnlFresh: true }),
+    getRiskSnapshot: depOverrides.getRiskSnapshot ?? (() => ({ balanceUsd: 1000, grossExposureUsd: 0, openOrderCount: 0, openPositionCount: 0, realizedTodayUsd: 0, unrealizedPnlUsd: 0, unrealizedPnlFresh: true })),
+    projectReverseRisk: depOverrides.projectReverseRisk,
     freeze: (reason) => {
       freezes.push(reason);
       setRuntime(RUNTIME_KEYS.frozen, "true", Date.now(), profile);
@@ -87,6 +91,77 @@ function setup(
 
 const placeCalls = (h: Harness) => h.http.callsTo("/fapi/v1/order").filter((c) => c.method === "POST");
 const queryOf = (c: { url: string }) => new URLSearchParams(c.url.split("?")[1]);
+
+function reverseRiskSnapshot(overrides: Partial<RiskSnapshot> = {}): RiskSnapshot {
+  return {
+    balanceUsd: 1000,
+    grossExposureUsd: 0,
+    openOrderCount: 0,
+    openPositionCount: 0,
+    openPositionCountAfterOrder: 1,
+    realizedTodayUsd: 0,
+    unrealizedPnlUsd: 0,
+    unrealizedPnlFresh: true,
+    marginRatio: 0.1,
+    marginDataFresh: true,
+    liquidationDistancesPct: [20],
+    ...overrides,
+  };
+}
+
+function installReverseExchange(
+  h: Harness,
+  options: {
+    initialQty?: string;
+    resultingQty?: string;
+    leverage?: string;
+    dualSidePosition?: boolean;
+    rejected?: boolean;
+    protectiveOrders?: Array<Record<string, unknown>>;
+  } = {},
+) {
+  let positionAmt = options.initialQty ?? "0.001";
+  const orders = [...(options.protectiveOrders ?? [])];
+  h.http.route("/fapi/v1/positionSide/dual", () => jsonRes({ dualSidePosition: !!options.dualSidePosition }));
+  h.http.route("/fapi/v2/positionRisk", () => jsonRes([{
+    symbol: "BTCUSDT",
+    positionAmt,
+    entryPrice: "50000",
+    markPrice: "50000",
+    unRealizedProfit: "0",
+    liquidationPrice: "35000",
+    leverage: options.leverage ?? "2",
+    positionSide: "BOTH",
+  }]));
+  h.http.route("/fapi/v1/premiumIndex", () => jsonRes({ symbol: "BTCUSDT", markPrice: "50000", time: Date.now() }));
+  h.http.route("/fapi/v1/openOrders", () => jsonRes(orders));
+  h.http.route("/fapi/v1/order", () => {
+    const request = h.http.calls[h.http.calls.length - 1];
+    const params = new URL(request.url).searchParams;
+    if (request.method === "DELETE") {
+      const index = orders.findIndex((order) => order.clientOrderId === params.get("origClientOrderId"));
+      if (index < 0) return jsonRes({ code: -2011, msg: "Unknown order sent." }, 400);
+      const [canceled] = orders.splice(index, 1);
+      return jsonRes({ ...canceled, status: "CANCELED" });
+    }
+    if (request.method === "GET") {
+      const order = orders.find((candidate) => candidate.clientOrderId === params.get("origClientOrderId"));
+      return order ? jsonRes(order) : jsonRes({ code: -2013, msg: "Order does not exist." }, 404);
+    }
+    if (options.rejected) return jsonRes({ code: -2021, msg: "Order would immediately trigger." }, 400);
+    positionAmt = options.resultingQty ?? "-0.001";
+    return jsonRes(orderFixture({
+      clientOrderId: params.get("newClientOrderId") ?? "reverse-order",
+      symbol: "BTCUSDT",
+      side: params.get("side") === "SELL" ? "SELL" : "BUY",
+      type: "MARKET",
+      status: "FILLED",
+      origQty: params.get("quantity") ?? "0",
+      executedQty: params.get("quantity") ?? "0",
+    }));
+  });
+  return { orders };
+}
 
 function mockProtectionExchange(h: Harness, initial: Array<Record<string, unknown>> = []) {
   const orders = [...initial];
@@ -1403,4 +1478,194 @@ describe("execution gates inside OrderService", () => {
     expect(res.error).toContain("shadow mode is read-only");
   });
 
+});
+
+describe("server-side reverse position", () => {
+  const project = () => reverseRiskSnapshot();
+  const input = (clientOrderId: string, overrides: Record<string, unknown> = {}) => ({
+    symbol: "BTCUSDT",
+    newQty: "0.001",
+    expectedPositionQty: "0.001",
+    expectedPositionSide: "long" as const,
+    clientOrderId,
+    ...overrides,
+  });
+
+  test("success submits one combined market order and confirms the requested position", async () => {
+    const h = setup({}, { projectReverseRisk: project });
+    installReverseExchange(h);
+
+    const result = await h.svc.reversePosition(input("reverse-success"));
+
+    expect(result).toMatchObject({ ok: true, resultingPosition: { side: "short", qty: "0.001" } });
+    expect(placeCalls(h)).toHaveLength(1);
+    expect(queryOf(placeCalls(h)[0]).get("quantity")).toBe("0.002");
+  });
+
+  test("partial fill reports actual position and freezes further submissions", async () => {
+    const h = setup({}, { projectReverseRisk: project });
+    installReverseExchange(h, { resultingQty: "-0.0005" });
+
+    const result = await h.svc.reversePosition(input("reverse-partial"));
+
+    expect(result).toMatchObject({ ok: false, resultingPosition: { side: "short", qty: "0.0005" } });
+    expect(h.freezes.some((reason) => reason.includes("reverse position outcome uncertain"))).toBe(true);
+    expect(placeCalls(h)).toHaveLength(1);
+  });
+
+  test("definite rejection preserves the position and old protection without retry", async () => {
+    const protective = orderFixture({
+      clientOrderId: "old-sl",
+      side: "SELL",
+      type: "STOP_MARKET",
+      closePosition: true,
+      stopPrice: "45000",
+    });
+    const h = setup({}, { projectReverseRisk: project });
+    installReverseExchange(h, { rejected: true, protectiveOrders: [protective] });
+
+    const result = await h.svc.reversePosition(input("reverse-rejected"));
+
+    expect(result).toMatchObject({ ok: false, resultingPosition: { side: "long", qty: "0.001" } });
+    expect(placeCalls(h)).toHaveLength(1);
+    expect(h.http.callsTo("/fapi/v1/order").filter((call) => call.method === "DELETE")).toHaveLength(0);
+  });
+
+  test("timeout reconciles without an automatic retry", async () => {
+    const h = setup({}, { projectReverseRisk: project });
+    installReverseExchange(h);
+    h.http.scriptTimeout("/fapi/v1/order");
+
+    const result = await h.svc.reversePosition(input("reverse-timeout"));
+
+    expect(result.ok).toBe(false);
+    expect(result.error).toContain("timed out");
+    expect(placeCalls(h)).toHaveLength(1);
+    expect(h.freezes.some((reason) => reason.includes("reverse position outcome uncertain"))).toBe(true);
+  });
+
+  test("stale UI position is rejected before submitting", async () => {
+    const h = setup({}, { projectReverseRisk: project });
+    installReverseExchange(h);
+
+    const result = await h.svc.reversePosition(input("reverse-stale", { expectedPositionQty: "0.002" }));
+
+    expect(result.error).toContain("Position changed since it was displayed");
+    expect(placeCalls(h)).toHaveLength(0);
+  });
+
+  test("same idempotency key cannot submit a second flip", async () => {
+    const h = setup({}, { projectReverseRisk: project });
+    installReverseExchange(h);
+
+    const [first, second] = await Promise.all([
+      h.svc.reversePosition(input("reverse-double-click")),
+      h.svc.reversePosition(input("reverse-double-click")),
+    ]);
+
+    expect(first.ok).toBe(true);
+    expect(second).toMatchObject({ ok: false, duplicate: true });
+    expect(placeCalls(h)).toHaveLength(1);
+  });
+
+  test("risk projection failure blocks the order", async () => {
+    const h = setup({}, { projectReverseRisk: () => reverseRiskSnapshot({ marginDataFresh: false }) });
+    installReverseExchange(h);
+
+    const result = await h.svc.reversePosition(input("reverse-risk-fail"));
+
+    expect(result.ok).toBe(false);
+    expect(result.error).toContain("margin or liquidation data is unavailable or stale");
+    expect(placeCalls(h)).toHaveLength(0);
+  });
+
+  test("hedge mode is rejected", async () => {
+    const h = setup({}, { projectReverseRisk: project });
+    installReverseExchange(h, { dualSidePosition: true });
+
+    const result = await h.svc.reversePosition(input("reverse-hedge"));
+
+    expect(result.error).toContain("one-way position mode");
+    expect(placeCalls(h)).toHaveLength(0);
+  });
+
+  test("current leverage above the configured cap is rejected", async () => {
+    const baseCfg = makeCfg();
+    const h = setup(
+      { risk: { ...baseCfg.risk, maxLeverage: 10 } },
+      { projectReverseRisk: project },
+    );
+    installReverseExchange(h, { leverage: "11" });
+
+    const result = await h.svc.reversePosition(input("reverse-leverage-cap"));
+
+    expect(result.error).toContain("RISK_MAX_LEVERAGE");
+    expect(placeCalls(h)).toHaveLength(0);
+  });
+
+  test("old protection is canceled only after the resulting position is confirmed", async () => {
+    const protective = orderFixture({
+      clientOrderId: "old-sl-confirmed",
+      side: "SELL",
+      type: "STOP_MARKET",
+      closePosition: true,
+      stopPrice: "45000",
+    });
+    const h = setup({}, { projectReverseRisk: project });
+    installReverseExchange(h, { protectiveOrders: [protective] });
+
+    const result = await h.svc.reversePosition(input("reverse-cleanup"));
+
+    const calls = h.http.callsTo("/fapi/v1/order");
+    const postIndex = calls.findIndex((call) => call.method === "POST");
+    const deleteIndex = calls.findIndex((call) => call.method === "DELETE");
+    expect(result).toMatchObject({ ok: true, resultingPosition: { side: "short", qty: "0.001" } });
+    expect(postIndex).toBeGreaterThanOrEqual(0);
+    expect(deleteIndex).toBeGreaterThan(postIndex);
+  });
+
+  test("combined market quantity violating exchange max is rejected before submission", async () => {
+    const h = setup({}, { projectReverseRisk: project });
+    installReverseExchange(h, { initialQty: "100" });
+
+    const result = await h.svc.reversePosition(input("reverse-combined-filter", {
+      expectedPositionQty: "100",
+      newQty: "1",
+    }));
+
+    expect(result.error).toContain("market qty above maxQty");
+    expect(placeCalls(h)).toHaveLength(0);
+  });
+
+  test("projected risk removes the old position before applying exposure caps", async () => {
+    const baseCfg = makeCfg();
+    const h = setup(
+      { risk: { ...baseCfg.risk, maxGrossExposureUsd: 75 } },
+      {
+        getRiskSnapshot: () => reverseRiskSnapshot({ grossExposureUsd: 50, openPositionCount: 1 }),
+        projectReverseRisk: ({ current }) => reverseRiskSnapshot({
+          ...current,
+          grossExposureUsd: current.grossExposureUsd - 50,
+          openPositionCount: current.openPositionCount - 1,
+          openPositionCountAfterOrder: 1,
+        }),
+      },
+    );
+    installReverseExchange(h);
+
+    const result = await h.svc.reversePosition(input("reverse-risk-projection"));
+
+    expect(result.ok).toBe(true);
+    expect(placeCalls(h)).toHaveLength(1);
+  });
+
+  test("reverse is fail-closed when no authoritative hypothetical risk projection exists", async () => {
+    const h = setup();
+    installReverseExchange(h);
+
+    const result = await h.svc.reversePosition(input("reverse-no-projection"));
+
+    expect(result.error).toContain("authoritative hypothetical post-flip margin and liquidation risk data is unavailable");
+    expect(placeCalls(h)).toHaveLength(0);
+  });
 });
