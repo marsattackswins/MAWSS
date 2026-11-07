@@ -327,24 +327,48 @@ export class Reconciler {
    */
   private async queryIntentExchangeState(intent: OrderIntent): Promise<IntentExchangeState | null> {
     if (intent.kind === "algo") {
+      let order;
       try {
-        const order = await this.deps.rest.getAlgoOrder({
+        order = await this.deps.rest.getAlgoOrder({
           clientAlgoId: intent.clientAlgoId ?? intent.clientOrderId,
         });
-        return {
-          status: order.algoStatus,
-          executedQty: order.actualQty,
-          exchangeOrderId: numericOrderId(order.actualOrderId),
-        };
       } catch (err) {
         // -2013: never recorded, or aged out of the algo-history window.
         if (err instanceof BinanceApiError && err.code === ERR_UNKNOWN_ORDER) return null;
         throw err;
       }
+      const actualOrderId = numericOrderId(order.actualOrderId);
+      if (order.algoStatus === "TRIGGERED" || order.algoStatus === "FINISHED") {
+        // TRIGGERED/FINISHED describe the conditional order, not the outcome.
+        // The actual order it created is the settlement of record.
+        const actual = actualOrderId != null
+          ? await this.deps.rest.getOrder(intent.symbol, actualOrderId)
+          : null;
+        if (!actual) {
+          return {
+            status: order.algoStatus,
+            statusKind: "algo",
+            exchangeOrderId: actualOrderId,
+            unresolvedActual: true,
+          };
+        }
+        return {
+          status: actual.status,
+          statusKind: "order",
+          executedQty: actual.executedQty,
+          exchangeOrderId: actualOrderId,
+        };
+      }
+      return {
+        status: order.algoStatus,
+        statusKind: "algo",
+        executedQty: order.actualQty,
+        exchangeOrderId: actualOrderId,
+      };
     }
     const order = await this.deps.rest.getOrder(intent.symbol, undefined, intent.clientOrderId);
     return order
-      ? { status: order.status, executedQty: order.executedQty, exchangeOrderId: order.orderId }
+      ? { status: order.status, statusKind: "order", executedQty: order.executedQty, exchangeOrderId: order.orderId }
       : null;
   }
 
@@ -360,6 +384,24 @@ export class Reconciler {
       seenClientIds.add(intent.clientOrderId);
       const state = await this.queryIntentExchangeState(intent);
       if (!this.isCurrent()) return { result: "error", seenClientIds };
+      if (state?.unresolvedActual) {
+        // Never infer FILLED from a conditional status. Link the actual order
+        // (when known) and let a later pass read its real outcome.
+        if (state.exchangeOrderId != null && state.exchangeOrderId !== intent.exchangeOrderId) {
+          updateIntent(intent.clientOrderId, {
+            exchangeOrderId: state.exchangeOrderId,
+            lastState: JSON.stringify({
+              status: state.status,
+              actualOrderId: state.exchangeOrderId,
+              outcome: "pending",
+              source: "reconciliation",
+              kind: intent.kind,
+            }),
+          }, Date.now(), this.persistenceProfile);
+        }
+        diffs.push(`intent ${intent.clientOrderId} triggered but actual order outcome is not yet available`);
+        continue;
+      }
       if (!state) {
         if (UNCERTAIN.has(intent.status)) {
           updateIntent(intent.clientOrderId, {
@@ -373,7 +415,7 @@ export class Reconciler {
         }
         continue;
       }
-      const mapped = mapExchangeStatus(state.status, intent.kind);
+      const mapped = mapExchangeStatus(state.status, state.statusKind);
       // TRIGGERED keeps the intent SUBMITTED but reveals the actual order id;
       // link it so fills can still be attributed before FINISHED arrives.
       const linkedOrderId =
@@ -395,7 +437,7 @@ export class Reconciler {
           diffs.push(`intent ${intent.clientOrderId} synced ${intent.status} -> ${mapped}`);
         }
       }
-      if (expectsOpenOrder(intent.kind, state.status) && !openOrders.has(intent.clientOrderId)) {
+      if (expectsOpenOrder(state.statusKind, state.status) && !openOrders.has(intent.clientOrderId)) {
         result = "drift";
         diffs.push(`exchange order ${intent.clientOrderId} is ${state.status} but missing from snapshot`);
       }
@@ -487,9 +529,13 @@ function setLastRecon(patch: { lastRunAt: number; lastResult: "ok" | "drift" | "
 interface IntentExchangeState {
   /** Raw exchange status: `status` for orders, `algoStatus` for algo orders. */
   status: string;
+  /** Which status vocabulary `status` belongs to. */
+  statusKind: "order" | "algo";
   executedQty?: string;
   /** Actual order id once an algo order triggered, otherwise the order id. */
   exchangeOrderId: number | null;
+  /** The trigger fired but the actual order could not be read yet. */
+  unresolvedActual?: boolean;
 }
 
 function mapExchangeStatus(status: string, kind: "order" | "algo"): IntentStatus {
@@ -501,13 +547,12 @@ function mapExchangeStatus(status: string, kind: "order" | "algo"): IntentStatus
         return "EXPIRED";
       case "REJECTED":
         return "REJECTED";
-      case "FINISHED":
-        return "FILLED";
       case "PARTIALLY_FILLED":
         return "PARTIALLY_FILLED";
       default:
         // NEW, TRIGGERED and any future status: the conditional order (or the
-        // actual order it created) still owns the outcome.
+        // actual order it created) still owns the outcome. FINISHED is resolved
+        // from the actual order before this mapping is used.
         return "SUBMITTED";
     }
   }

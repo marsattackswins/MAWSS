@@ -248,7 +248,7 @@ export class OrderService {
     for (const order of existing) {
       const intent = this.findIntent(order.clientAlgoId);
       const canceled = { ...order, algoStatus: "CANCELED" };
-      if (intent) this.syncIntentFromAlgoOrder(order.clientAlgoId, canceled);
+      if (intent) await this.syncIntentFromAlgoOrder(order.clientAlgoId, canceled);
       else rememberAlgoOrder(canceled);
       this.deps.emit("order-update", { clientOrderId: order.clientAlgoId, status: "CANCELED", kind: "algo" });
     }
@@ -786,7 +786,7 @@ export class OrderService {
     try {
       if (isAlgo) {
         const order = await this.deps.rest.placeAlgoOrder(buildAlgoOrderParams(input, clientOrderId));
-        this.syncIntentFromAlgoOrder(clientOrderId, order);
+        await this.syncIntentFromAlgoOrder(clientOrderId, order);
         trackOrderSubmissionDuration(Date.now() - submissionStartedAt);
         trackOrderSubmitted(clientOrderId, input.symbol, input.side, input.type);
         audit("operator", "order.submitted", {
@@ -951,9 +951,15 @@ export class OrderService {
             const order = await this.deps.rest.getAlgoOrder({
               clientAlgoId: intent.clientAlgoId ?? clientOrderId,
             });
-            this.syncIntentFromAlgoOrder(clientOrderId, order);
-            audit("operator", "order.resolved", { clientOrderId, status: order.algoStatus, attempt: i + 1, kind: "algo" });
-            this.deps.emit("order-update", { clientOrderId, status: order.algoStatus, resolved: true, kind: "algo" });
+            const resolved = await this.syncIntentFromAlgoOrder(clientOrderId, order);
+            audit("operator", "order.resolved", { clientOrderId, status: order.algoStatus, resolved, attempt: i + 1, kind: "algo" });
+            this.deps.emit("order-update", { clientOrderId, status: order.algoStatus, resolved: resolved != null, kind: "algo" });
+            if (resolved == null) {
+              // The trigger fired but its actual order is not readable yet: the
+              // intent stays UNCERTAIN and submissions stay frozen.
+              audit("operator", "order.resolve.actual_pending", { clientOrderId, algoStatus: order.algoStatus, kind: "algo" });
+              return;
+            }
             this.maybeUnfreeze();
             return;
           } catch (err) {
@@ -961,7 +967,11 @@ export class OrderService {
             const openOrders = await this.deps.rest.getOpenAlgoOrders(intent.symbol);
             const openOrder = openOrders.find((order) => order.clientAlgoId === (intent.clientAlgoId ?? clientOrderId));
             if (openOrder) {
-              this.syncIntentFromAlgoOrder(clientOrderId, openOrder);
+              const resolved = await this.syncIntentFromAlgoOrder(clientOrderId, openOrder);
+              if (resolved == null) {
+                audit("operator", "order.resolve.actual_pending", { clientOrderId, algoStatus: openOrder.algoStatus, kind: "algo" });
+                return;
+              }
               this.maybeUnfreeze();
               return;
             }
@@ -1073,22 +1083,49 @@ export class OrderService {
     liveState().openOrders.delete(clientAlgoId);
   }
 
-  private syncIntentFromAlgoOrder(clientOrderId: string, order: BinanceAlgoOrder): void {
+  /**
+   * Records an algo query result. TRIGGERED/FINISHED only say the conditional
+   * order fired; the outcome is the actual order it created. Returns null and
+   * leaves the intent status untouched when that outcome is not available yet.
+   */
+  private async syncIntentFromAlgoOrder(
+    clientOrderId: string,
+    order: BinanceAlgoOrder,
+  ): Promise<OrderIntent["status"] | null> {
     rememberAlgoOrder(order);
-    const status = normalizeAlgoStatus(order.algoStatus);
-    this.updateIntent(clientOrderId, {
-      status,
-      lastState: JSON.stringify({
-        kind: "algo",
-        algoId: order.algoId,
-        clientAlgoId: order.clientAlgoId,
-        status: order.algoStatus,
-        triggerPrice: order.triggerPrice,
-        actualOrderId: order.actualOrderId ?? null,
-        actualQty: order.actualQty ?? null,
-        updateTime: order.updateTime,
-      }),
-    });
+    const status = await this.resolveAlgoIntentStatus(order);
+    const state = {
+      kind: "algo",
+      algoId: order.algoId,
+      clientAlgoId: order.clientAlgoId,
+      status: order.algoStatus,
+      triggerPrice: order.triggerPrice,
+      actualOrderId: order.actualOrderId ?? null,
+      actualQty: order.actualQty ?? null,
+      updateTime: order.updateTime,
+    };
+    if (status == null) {
+      this.updateIntent(clientOrderId, { lastState: JSON.stringify({ ...state, outcome: "pending" }) });
+      return null;
+    }
+    this.updateIntent(clientOrderId, { status, lastState: JSON.stringify(state) });
+    return status;
+  }
+
+  private async resolveAlgoIntentStatus(order: BinanceAlgoOrder): Promise<OrderIntent["status"] | null> {
+    if (order.algoStatus !== "TRIGGERED" && order.algoStatus !== "FINISHED") {
+      return normalizeAlgoStatus(order.algoStatus);
+    }
+    const actualOrderId = numericExchangeOrderId(order.actualOrderId);
+    if (actualOrderId == null) return null;
+    let actual: BinanceOrder | null;
+    try {
+      actual = await this.deps.rest.getOrder(order.symbol, actualOrderId);
+    } catch {
+      // Outcome still unknown: leave it unresolved for reconciliation.
+      return null;
+    }
+    return actual ? normalizeAlgoStatus(actual.status) : null;
   }
 
   async cancelOrder(clientOrderId: string, symbol: string): Promise<OrderResult> {
@@ -1155,15 +1192,17 @@ export class OrderService {
               const algoOrder = await this.deps.rest.getAlgoOrder({
                 clientAlgoId: intent.clientAlgoId ?? clientOrderId,
               });
-              this.syncIntentFromAlgoOrder(clientOrderId, algoOrder);
+              const resolved = await this.syncIntentFromAlgoOrder(clientOrderId, algoOrder);
+              const status = resolved ?? "SUBMITTED";
               audit("operator", "order.cancel.race_resolved", {
                 symbol,
                 clientOrderId,
                 status: algoOrder.algoStatus,
+                resolved: resolved != null,
                 kind: "algo",
               });
-              this.deps.emit("order-update", { clientOrderId, status: algoOrder.algoStatus, kind: "algo" });
-              return { ok: true, clientOrderId, status: algoOrder.algoStatus, algoId: algoOrder.algoId };
+              this.deps.emit("order-update", { clientOrderId, status, kind: "algo" });
+              return { ok: true, clientOrderId, status, algoId: algoOrder.algoId };
             } catch (lookupError) {
               if (!(lookupError instanceof BinanceApiError) || lookupError.code !== ERR_UNKNOWN_ORDER) throw lookupError;
             }
@@ -1684,7 +1723,7 @@ export class OrderService {
             return `Algo ${type} is no longer listed as open but reports ${exchangeOrder.algoStatus}; cancellation is uncertain`;
           }
           if (intent) {
-            if (exchangeOrder) this.syncIntentFromAlgoOrder(order.clientOrderId, exchangeOrder);
+            if (exchangeOrder) await this.syncIntentFromAlgoOrder(order.clientOrderId, exchangeOrder);
             else this.updateIntent(order.clientOrderId, { status: "CANCELED" });
           }
           if (exchangeOrder) rememberAlgoOrder(exchangeOrder);
@@ -1736,7 +1775,7 @@ export class OrderService {
     if (exchangeOrder && !["CANCELED", "EXPIRED", "REJECTED"].includes(exchangeOrder.algoStatus)) {
       return { order: null, absent: false };
     }
-    if (exchangeOrder) this.syncIntentFromAlgoOrder(clientOrderId, exchangeOrder);
+    if (exchangeOrder) await this.syncIntentFromAlgoOrder(clientOrderId, exchangeOrder);
     else this.updateIntent(clientOrderId, {
       status: "REJECTED",
       lastState: JSON.stringify({ resolved: "protective_order_absent", exchangeStatus: null }),
@@ -2085,9 +2124,13 @@ function normalizeAlgoStatus(status: string): OrderIntent["status"] {
       return "REJECTED";
     case "EXPIRED":
       return "EXPIRED";
-    case "FINISHED":
+    case "FILLED":
       return "FILLED";
+    case "PARTIALLY_FILLED":
+      return "PARTIALLY_FILLED";
     default:
+      // NEW, TRIGGERED, FINISHED and unknown statuses are not outcomes.
+      // TRIGGERED/FINISHED are resolved from their actual order instead.
       return "SUBMITTED";
   }
 }

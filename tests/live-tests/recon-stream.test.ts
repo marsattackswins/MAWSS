@@ -135,7 +135,7 @@ describe("reconciliation: exchange truth settles everything", () => {
     expect(h.http.callsTo("/fapi/v1/algoOrder")).toHaveLength(1);
   });
 
-  test("a triggered algo intent links its actual order without drift", async () => {
+  test("a triggered algo intent links its working actual order without drift", async () => {
     const h = setupRecon();
     seedAlgoIntent("rc-algo-triggered");
     h.http.route("/fapi/v1/algoOrder", () => jsonRes(algoFixture({
@@ -144,7 +144,20 @@ describe("reconciliation: exchange truth settles everything", () => {
       actualOrderId: 555,
       actualQty: "0",
     })));
+    h.http.route("/fapi/v1/order", () => jsonRes(orderFixture({
+      orderId: 555,
+      clientOrderId: "actual-555",
+      side: "SELL",
+      type: "MARKET",
+      status: "NEW",
+      origQty: "0.001",
+    })));
     liveState().openOrders.clear();
+    liveState().openOrders.set("rc-algo-triggered", normalizeBinanceAlgoOrder(algoFixture({
+      clientAlgoId: "rc-algo-triggered",
+      algoStatus: "TRIGGERED",
+      actualOrderId: 555,
+    }) as never));
 
     const result = await h.recon.run("test");
 
@@ -156,7 +169,7 @@ describe("reconciliation: exchange truth settles everything", () => {
     });
   });
 
-  test("a finished algo intent settles as FILLED from its actual order", async () => {
+  test("a finished algo intent settles FILLED only from its actual order", async () => {
     const h = setupRecon();
     seedAlgoIntent("rc-algo-finished");
     h.http.route("/fapi/v1/algoOrder", () => jsonRes(algoFixture({
@@ -164,6 +177,16 @@ describe("reconciliation: exchange truth settles everything", () => {
       algoStatus: "FINISHED",
       actualOrderId: "987",
       actualQty: "0.001",
+    })));
+    h.http.route("/fapi/v1/order", () => jsonRes(orderFixture({
+      orderId: 987,
+      clientOrderId: "actual-987",
+      side: "SELL",
+      type: "MARKET",
+      status: "FILLED",
+      origQty: "0.001",
+      executedQty: "0.001",
+      avgPrice: "51000",
     })));
     liveState().openOrders.clear();
 
@@ -174,6 +197,58 @@ describe("reconciliation: exchange truth settles everything", () => {
     expect(findByClientOrderId("rc-algo-finished")).toMatchObject({
       status: "FILLED",
       exchangeOrderId: 987,
+    });
+  });
+
+  test.each(["CANCELED", "EXPIRED", "REJECTED"] as const)(
+    "a finished algo intent follows its actual order's %s outcome",
+    async (actualStatus) => {
+      const h = setupRecon();
+      seedAlgoIntent("rc-algo-actual");
+      h.http.route("/fapi/v1/algoOrder", () => jsonRes(algoFixture({
+        clientAlgoId: "rc-algo-actual",
+        algoStatus: "FINISHED",
+        actualOrderId: 321,
+      })));
+      h.http.route("/fapi/v1/order", () => jsonRes(orderFixture({
+        orderId: 321,
+        clientOrderId: "actual-321",
+        side: "SELL",
+        type: "MARKET",
+        status: actualStatus,
+        origQty: "0.001",
+      })));
+      liveState().openOrders.clear();
+
+      const result = await h.recon.run("test");
+
+      expect(result.result).toBe("ok");
+      // Never FILLED: the conditional status alone proves nothing.
+      expect(findByClientOrderId("rc-algo-actual")?.status).toBe(actualStatus);
+      expect(findByClientOrderId("rc-algo-actual")?.exchangeOrderId).toBe(321);
+    },
+  );
+
+  test("a finished algo intent without a readable actual order stays unresolved", async () => {
+    const h = setupRecon();
+    seedAlgoIntent("rc-algo-unknown");
+    h.http.route("/fapi/v1/algoOrder", () => jsonRes(algoFixture({
+      clientAlgoId: "rc-algo-unknown",
+      algoStatus: "FINISHED",
+      actualOrderId: 654,
+    })));
+    // The actual order is not visible yet (-2013 resolves to null).
+    h.http.scriptApiError("/fapi/v1/order", -2013, "Order does not exist", 404);
+    liveState().openOrders.clear();
+
+    const result = await h.recon.run("test");
+
+    expect(result.result).toBe("ok");
+    expect(h.freezes).toHaveLength(0);
+    expect(result.diffs.some((diff) => diff.includes("actual order outcome is not yet available"))).toBe(true);
+    expect(findByClientOrderId("rc-algo-unknown")).toMatchObject({
+      status: "SUBMITTED",
+      exchangeOrderId: 654,
     });
   });
 

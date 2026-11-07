@@ -1,5 +1,5 @@
 import { BinanceLiveManager, resetLiveManagerForTests } from "@/lib/server/binance/manager";
-import { findByClientOrderId } from "@/lib/server/binance/intents";
+import { createIntent, findByClientOrderId, updateIntent } from "@/lib/server/binance/intents";
 import { applyPositionSnapshot, liveState } from "@/lib/server/binance/state";
 import { MARK_STALE_AFTER_MS } from "@/lib/server/binance/mark-price-stream";
 import { getRuntime, RUNTIME_KEYS, setRuntime } from "@/lib/server/runtime/flags";
@@ -364,6 +364,40 @@ describe("BinanceLiveManager end-to-end (fake testnet)", () => {
     await waitForRiskSnapshot(() => liveState().openOrders.has("stream-sl-47"));
     expect(liveState().openOrders.has("stream-sl-46")).toBe(false);
     expect(http.callsTo("/fapi/v1/openAlgoOrders").length).toBeGreaterThanOrEqual(2);
+  });
+
+  test("ALGO_UPDATE FINISHED does not assume the actual order filled", async () => {
+    await startManager({});
+    createIntent({
+      clientOrderId: "stream-algo-finished",
+      clientAlgoId: "stream-algo-finished",
+      kind: "algo",
+      symbol: "BTCUSDT",
+      side: "SELL",
+      type: "TAKE_PROFIT_MARKET",
+      qty: "",
+    });
+    updateIntent("stream-algo-finished", { status: "SUBMITTED" });
+    const ws = FakeWs.instances.find((instance) => instance.url.includes("LK-E2E"))!;
+
+    ws.emitMessage({
+      e: "ALGO_UPDATE",
+      E: Date.now(),
+      T: Date.now(),
+      o: {
+        caid: "stream-algo-finished",
+        aid: 78,
+        at: "CONDITIONAL",
+        o: "TAKE_PROFIT_MARKET",
+        s: "BTCUSDT",
+        S: "SELL",
+        X: "FINISHED",
+        ai: 12345,
+      },
+    });
+
+    // FINISHED means the conditional order completed, not that it filled.
+    expect(findByClientOrderId("stream-algo-finished")?.status).toBe("SUBMITTED");
   });
 
   test("local env can construct a manager (for public data access)", () => {

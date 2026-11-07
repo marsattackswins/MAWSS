@@ -947,6 +947,8 @@ export class BinanceLiveManager {
       const symbol = payload.s;
       const status = payload.X ?? "UNKNOWN";
       if (clientAlgoId) {
+        // FINISHED/TRIGGERED only say the conditional order fired; the actual
+        // order's own status is read by reconciliation. Never infer FILLED.
         const intentStatus =
           status === "CANCELED"
             ? "CANCELED"
@@ -954,9 +956,7 @@ export class BinanceLiveManager {
               ? "REJECTED"
               : status === "EXPIRED"
                 ? "EXPIRED"
-                : status === "FINISHED"
-                  ? "FILLED"
-                  : "SUBMITTED";
+                : "SUBMITTED";
         const actualOrderId =
           payload.ai != null && payload.ai !== "" && Number.isFinite(Number(payload.ai))
             ? Number(payload.ai)
