@@ -260,6 +260,18 @@ export const MIGRATIONS: Migration[] = [
       `UPDATE protection_intents SET created_at = updated_at WHERE created_at = 0`,
     ],
   },
+  {
+    version: 11,
+    name: "M0011 canonical exchange order ids",
+    up: [
+      // JSON numbers bound through better-sqlite3 reach TEXT columns as "123.0",
+      // which never matches the integer ids the REST lookups send.
+      `UPDATE order_intents
+          SET exchange_order_id = CAST(CAST(exchange_order_id AS INTEGER) AS TEXT)
+        WHERE exchange_order_id GLOB '*[0-9].0'
+          AND CAST(CAST(exchange_order_id AS INTEGER) AS TEXT) || '.0' = exchange_order_id`,
+    ],
+  },
 ];
 
 const PROFILE_CHECK =
