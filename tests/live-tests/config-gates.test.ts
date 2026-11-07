@@ -1,4 +1,5 @@
 import { HOST_MAP, loadEnvConfig, type EnvConfig } from "@/lib/server/env/config";
+import { hashPassword } from "@/lib/server/auth/password";
 import { persistenceProfileFromConfig } from "@/lib/server/profile/context";
 import { executionDecision, requireEmergencyActionAllowed, requireSubmissionAllowed, SubmissionBlockedError } from "@/lib/server/gates/execution";
 import { RUNTIME_KEYS, setRuntime, getRuntime, allRuntime } from "@/lib/server/runtime/flags";
@@ -61,6 +62,38 @@ describe("environment configuration (fail closed)", () => {
       maxMarginRatio: 0.5,
       minLiquidationDistancePct: 5,
     });
+
+  });
+
+  test("configured monitoring tokens are long, distinct, and separate from operator password material", () => {
+    const base = { MAWS_ENV: "testnet", MAWS_OPERATOR_AUTH: AUTH, ...KEYS };
+    expect(() => loadEnvConfig(envSrc({ ...base, MAWS_HEALTH_TOKEN: "short" })))
+      .toThrow(/MAWS_HEALTH_TOKEN must be at least 32 characters/);
+    expect(() => loadEnvConfig(envSrc({ ...base, MAWS_EMERGENCY_TOKEN: "short" })))
+      .toThrow(/MAWS_EMERGENCY_TOKEN must be at least 32 characters/);
+    expect(() => loadEnvConfig(envSrc({
+      ...base,
+      MAWS_HEALTH_TOKEN: "h".repeat(32),
+      MAWS_EMERGENCY_TOKEN: "h".repeat(32),
+    }))).toThrow(/MAWS_HEALTH_TOKEN and MAWS_EMERGENCY_TOKEN must differ/);
+
+    const password = "operator-password-that-is-not-a-token";
+    const operatorAuth = hashPassword(password);
+    for (const tokenName of ["MAWS_HEALTH_TOKEN", "MAWS_EMERGENCY_TOKEN"] as const) {
+      expect(() => loadEnvConfig(envSrc({
+        ...base,
+        MAWS_OPERATOR_AUTH: operatorAuth,
+        [tokenName]: password,
+      }))).toThrow(new RegExp(`${tokenName} must differ from MAWS_OPERATOR_AUTH material`));
+    }
+
+    const valid = loadEnvConfig(envSrc({
+      ...base,
+      MAWS_HEALTH_TOKEN: "health-" + "h".repeat(32),
+      MAWS_EMERGENCY_TOKEN: "emergency-" + "e".repeat(32),
+    }));
+    expect(valid.healthToken).toBe("health-" + "h".repeat(32));
+    expect(valid.emergencyToken).toBe("emergency-" + "e".repeat(32));
   });
 
   test("Binance credentials are required for testnet/shadow/production", () => {

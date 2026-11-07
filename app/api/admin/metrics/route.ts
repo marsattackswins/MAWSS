@@ -3,7 +3,7 @@ import { metricsSnapshot } from "@/lib/server/metrics/collector";
 import { pnl24h } from "@/lib/server/metrics/pnl";
 import { serverConfig } from "@/lib/server/env/config";
 import { authenticate, isAuthFailure } from "@/lib/server/http/guards";
-import { compareSecretTokens } from "@/lib/server/auth/token";
+import { verifyRequestToken } from "@/lib/server/auth/token-attempts";
 
 export const dynamic = "force-dynamic";
 
@@ -11,26 +11,32 @@ export const dynamic = "force-dynamic";
  * GET /api/admin/metrics
  * Returns current metrics snapshot (JSON format).
  * In local mode: No authentication required.
- * In other modes: Requires operator authentication OR health token (via x-maws-health-token header).
+ * A health token receives only non-trading process metrics.
  */
 export async function GET(req: NextRequest) {
   const cfg = serverConfig();
 
-  // Local mode is unauthenticated, but metrics remain real (including zero
-  // values when no live event has occurred).
+  let healthTokenOnly = false;
   if (cfg.env !== "local") {
-    // Non-local mode: check authentication
-  const ctx = authenticate(req, cfg);
-  const headerToken = req.headers.get("x-maws-health-token");
-  const tokenValid = compareSecretTokens(headerToken, cfg.healthToken);
-
-    if (isAuthFailure(ctx) && !tokenValid) {
-      return ctx.response;
+    const ctx = authenticate(req, cfg);
+    const tokenAttempt = verifyRequestToken(req, cfg, "x-maws-health-token", cfg.healthToken);
+    if (isAuthFailure(ctx)) {
+      if (tokenAttempt.rateLimited) {
+        return NextResponse.json({ error: "Too many invalid token attempts" }, { status: 429 });
+      }
+      if (!tokenAttempt.authorized) return ctx.response;
+      healthTokenOnly = true;
     }
   }
 
   try {
     const snapshot = metricsSnapshot();
+    if (healthTokenOnly) {
+      return NextResponse.json({
+        timestamp: Date.now(),
+        uptime_seconds: Math.floor((Date.now() - snapshot.startTime) / 1000),
+      });
+    }
 
     // Unrealized P&L across open positions. Computed from
     // already-maintained in-memory state; no DB or network calls.

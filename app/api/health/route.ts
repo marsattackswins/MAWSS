@@ -1,16 +1,15 @@
-import crypto from "node:crypto";
-
 import { serverConfig } from "@/lib/server/env/config";
 import { buildHealthStatus } from "@/lib/server/health/status";
 import { authenticate, isAuthFailure, jsonError, jsonOk } from "@/lib/server/http/guards";
 import { metricsSnapshot } from "@/lib/server/metrics/collector";
+import { verifyRequestToken } from "@/lib/server/auth/token-attempts";
 import packageJson from "../../../package.json";
 
 export const dynamic = "force-dynamic";
 
 /**
- * Operational health for monitoring. Authorized via the operator session or a
- * shared MAWS_HEALTH_TOKEN header, so alerting can run outside the browser.
+ * Operational health for monitoring. The health token receives a sanitized
+ * status-only response; operator sessions retain the detailed response.
  */
 export async function GET(req: Request): Promise<Response> {
   let cfg;
@@ -20,19 +19,14 @@ export async function GET(req: Request): Promise<Response> {
     return jsonError(503, "config", "Server configuration invalid");
   }
 
-  // Local mode: allow anonymous access (development convenience)
+  let healthTokenAuthorized = false;
   if (cfg.env !== "local") {
-    const token = req.headers.get("x-maws-health-token");
-    let authorized = false;
-    if (cfg.healthToken && token) {
-      const a = Buffer.from(token);
-      const b = Buffer.from(cfg.healthToken);
-      authorized = a.length === b.length && crypto.timingSafeEqual(a, b);
-    }
-    if (!authorized) {
-      // Fall back to a valid operator session.
-      const sessionCheck = authenticate(req, cfg);
-      if (isAuthFailure(sessionCheck)) return sessionCheck.response;
+    const sessionCheck = authenticate(req, cfg);
+    const tokenAttempt = verifyRequestToken(req, cfg, "x-maws-health-token", cfg.healthToken);
+    if (isAuthFailure(sessionCheck)) {
+      if (tokenAttempt.rateLimited) return jsonError(429, "token_rate_limited", "Too many invalid token attempts");
+      if (!tokenAttempt.authorized) return sessionCheck.response;
+      healthTokenAuthorized = true;
     }
   }
 
@@ -52,6 +46,26 @@ export async function GET(req: Request): Promise<Response> {
   const health = buildHealthStatus(runtimeCfg);
   const metrics = metricsSnapshot();
   const uptimeSeconds = Math.floor((Date.now() - metrics.startTime) / 1000);
+
+  if (healthTokenAuthorized) {
+    return jsonOk({
+      env: health.env,
+      healthy: health.healthy,
+      version: packageJson.version,
+      startedAt: metrics.startTime,
+      brokerConnected: health.brokerConnected,
+      managerStatus: health.signals.brokerStatus,
+      managerReady: health.signals.managerRunning && health.signals.brokerStatus === "ready",
+      clockHealthy: health.clockHealthy,
+      streamHealthy: health.streamHealthy,
+      reconHealthy: health.reconHealthy,
+      protectionHealthy: health.protectionHealthy,
+      positionModeHealthy: health.positionModeHealthy,
+      circuitBreakersHealthy: health.circuitBreakersHealthy,
+      openCircuitCount: health.openCircuits.length,
+      uptimeSeconds,
+    });
+  }
 
   return jsonOk({
     env: health.env,

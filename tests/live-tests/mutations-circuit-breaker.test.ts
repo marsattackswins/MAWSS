@@ -19,6 +19,7 @@ import { describe, test, expect, beforeEach, afterEach } from "@jest/globals";
 import { POST as cancelPost } from "@/app/api/live/orders/cancel/route";
 import { POST as closePost } from "@/app/api/live/positions/close/route";
 import { POST as protectPost } from "@/app/api/live/protect/route";
+import { POST as flattenPost } from "@/app/api/live/emergency/flatten/route";
 import { createSession, getSession, sessionCookieName } from "@/lib/server/auth/session";
 import { secureCookieContext } from "@/lib/server/http/guards";
 import { getBinanceRestBreaker, initializeCircuitBreakers } from "@/lib/server/resilience/breakers";
@@ -27,6 +28,7 @@ import { CircuitBreakerOpenError } from "@/lib/server/resilience/circuit-breaker
 import { getBroker, resetBrokerForTests } from "@/lib/server/broker/factory";
 import { getMetrics, METRICS } from "@/lib/server/metrics/collector";
 import { createIntent } from "@/lib/server/binance/intents";
+import { getDb } from "@/lib/server/db/connection";
 
 import type { EnvConfig } from "@/lib/server/env/config";
 import {
@@ -60,8 +62,11 @@ const flush = async (): Promise<void> => {
  * snapshot). `positionRows` seeds the account snapshot: default is one open
  * BTCUSDT long; pass [] for an empty position book.
  */
-async function bootRealBroker(positionRows: unknown[] = [POSITION_RISK_ROW]): Promise<void> {
-  cfg = freshEnv(makeCfg({ env: "testnet", allowedOrigin: "https://localhost:3000" }));
+async function bootRealBroker(
+  positionRows: unknown[] = [POSITION_RISK_ROW],
+  configOverrides: Partial<EnvConfig> = {},
+): Promise<void> {
+  cfg = freshEnv(makeCfg({ env: "testnet", allowedOrigin: "https://localhost:3000", ...configOverrides }));
   setRuntime(RUNTIME_KEYS.executionEnabled, "true");
   http = new FakeHttp();
   installFakes(http);
@@ -128,6 +133,19 @@ async function postMutation(
       body: JSON.stringify(body),
     }),
   );
+}
+
+async function postFlatten(headers: Record<string, string>, body: Record<string, unknown> = {}): Promise<Response> {
+  return flattenPost(new Request("https://localhost:3000/api/live/emergency/flatten", {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+      "origin": "https://localhost:3000",
+      "host": "localhost:3000",
+      ...headers,
+    },
+    body: JSON.stringify(body),
+  }));
 }
 
 const expectCircuitOpenContract = async (res: Response): Promise<void> => {
@@ -346,6 +364,47 @@ describe("POST /api/live/protect with REST breaker open", () => {
 
     // No TP/SL conditional order POSTs ever left for the exchange.
     expect(http.callsTo("/fapi/v1/order")).toHaveLength(0);
+  });
+
+  describe("emergency flatten authorization methods", () => {
+    test("emergency token authorizes only flatten and is not recorded in logs or audit", async () => {
+      const token = "emergency-token-for-test-only-123456";
+      const healthToken = "health-token-for-test-only-123456789";
+      await bootRealBroker([], { emergencyToken: token, healthToken });
+
+      const rejected = await postFlatten({ "x-maws-health-token": healthToken });
+      expect(rejected.status).toBeGreaterThanOrEqual(400);
+
+      const response = await postFlatten({ "x-maws-emergency-token": token });
+      expect(response.status).toBe(200);
+      expect(http.calls.filter((call) => call.method === "POST" && http.pathOf(call).endsWith("/fapi/v1/order"))).toHaveLength(0);
+
+      const auditRows = getDb().prepare(
+        "SELECT detail FROM audit_log WHERE action = 'emergency.flatten.authorized' ORDER BY id DESC LIMIT 1",
+      ).all() as Array<{ detail: string }>;
+      expect(auditRows).toHaveLength(1);
+      expect(auditRows[0].detail).toContain('"authorizedBy":"emergency_token"');
+      expect(JSON.stringify(auditRows)).not.toContain(token);
+      expect(JSON.stringify(auditRows)).not.toContain(healthToken);
+      expect(captured.join("")).not.toContain(token);
+      expect(captured.join("")).not.toContain(healthToken);
+    });
+
+    test("operator session still authorizes flatten and audit records the session method", async () => {
+      await bootRealBroker([]);
+      const { sessionId } = createSession("flatten-session");
+      const session = getSession(sessionId);
+      const response = await postFlatten({
+        cookie: `${sessionCookieName(secureCookieContext(cfg))}=${sessionId}`,
+        "x-maws-csrf": session?.csrfToken ?? "",
+      });
+
+      expect(response.status).toBe(200);
+      const auditRows = getDb().prepare(
+        "SELECT detail FROM audit_log WHERE action = 'emergency.flatten.authorized' ORDER BY id DESC LIMIT 1",
+      ).all() as Array<{ detail: string }>;
+      expect(auditRows[0].detail).toContain('"authorizedBy":"session"');
+    });
   });
 
   test("no open position fails closed with a validation response (not 503/500)", async () => {

@@ -1,7 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { serverConfig, HOST_MAP, safeProfileMetadata } from "@/lib/server/env/config";
 import { authenticate, isAuthFailure } from "@/lib/server/http/guards";
-import { compareSecretTokens } from "@/lib/server/auth/token";
 
 export const dynamic = "force-dynamic";
 
@@ -149,10 +148,8 @@ export async function GET(req: NextRequest) {
 
   // Non-local mode: check authentication
   const ctx = authenticate(req, cfg);
-  const headerToken = req.headers.get("x-maws-health-token");
-  const tokenValid = compareSecretTokens(headerToken, cfg.healthToken);
 
-  if (isAuthFailure(ctx) && !tokenValid) {
+  if (isAuthFailure(ctx)) {
     return ctx.response;
   }
 

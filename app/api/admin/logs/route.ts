@@ -5,7 +5,6 @@ import {
 } from "@/lib/server/log/terminal-capture";
 import { serverConfig } from "@/lib/server/env/config";
 import { authenticate, isAuthFailure } from "@/lib/server/http/guards";
-import { compareSecretTokens } from "@/lib/server/auth/token";
 
 export const dynamic = "force-dynamic";
 
@@ -14,8 +13,7 @@ export const dynamic = "force-dynamic";
  * Returns the most recent server terminal output (stdout/stderr) captured
  * in memory by the running process. Shown on /admin under "Terminal logs".
  * In local mode: No authentication required.
- * In other modes: Requires operator authentication OR health token
- * (via x-maws-health-token header).
+ * In other modes: Requires operator authentication.
  */
 export async function GET(req: NextRequest) {
   // Defensive: instrumentation installs capture at startup, but if this
@@ -27,10 +25,8 @@ export async function GET(req: NextRequest) {
 
   if (cfg.env !== "local") {
     const ctx = authenticate(req, cfg);
-    const headerToken = req.headers.get("x-maws-health-token");
-    const tokenValid = compareSecretTokens(headerToken, cfg.healthToken);
 
-    if (isAuthFailure(ctx) && !tokenValid) {
+    if (isAuthFailure(ctx)) {
       return ctx.response;
     }
   }

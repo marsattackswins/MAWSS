@@ -94,11 +94,18 @@ node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"
 
 
 #### MAWS_HEALTH_TOKEN
-**Description**: Shared token for health endpoints
-**Format**: String
+**Description**: Read-only token for monitoring endpoints
+**Format**: At least 32 characters; must differ from the emergency token and operator password
 **Purpose**: External monitoring without session authentication
 
-**Usage**: Send via `x-maws-health-token` header (never in URLs)
+**Usage**: Send via `x-maws-health-token` header (never in URLs). It is accepted only by `/api/health`, `/api/health/broker`, `/api/admin/health`, and `/api/admin/metrics`; token-authorized responses contain health status or non-trading process metrics only. It cannot access trading/account details or authorize any mutation.
+
+#### MAWS_EMERGENCY_TOKEN
+**Description**: Optional alternative credential for emergency flatten only
+**Format**: At least 32 characters; must differ from the health token and operator password
+**Purpose**: Authorize `POST /api/live/emergency/flatten` when an operator session is unavailable
+
+**Usage**: Send via `x-maws-emergency-token`. It grants no access to health, account, position, order, admin, or other mutation endpoints. Failed token attempts are rate-limited per client IP. Never put either token in URLs or logs.
 
 #### MAWS_ALERT_WEBHOOK_URL
 **Description**: Out-of-band webhook alert URL
@@ -1105,11 +1112,12 @@ The admin dashboard is available at `http://localhost:3000/admin` and refreshes 
 
 - In `MAWS_ENV=local` (the default), `/api/health` and `/api/admin/health` allow anonymous access. Local startup is Chart Only; charting remains available without credentials.
 - When Binance profile credentials are configured, attaching Testnet or Production from Chart Only requires `MAWS_OPERATOR_AUTH` and an authenticated operator session. The profile chooser exposes only safe metadata.
-- Outside local mode, health and admin endpoints require either a valid operator session or the `x-maws-health-token` header when `MAWS_HEALTH_TOKEN` is configured. Keep the token out of URLs, query parameters, browser history, logs, and source control.
+- Outside local mode, `/api/health`, `/api/health/broker`, `/api/admin/health`, and `/api/admin/metrics` allow a valid operator session or the read-only `x-maws-health-token`. Admin configuration, logs, risk, performance, and `/api/status/trading-health` require an operator session. Health-token responses are sanitized and never include account, position, or order data.
+- `MAWS_HEALTH_TOKEN` no longer authorizes emergency flatten. To migrate, configure a distinct `MAWS_EMERGENCY_TOKEN` if token-based flatten is required; otherwise flatten requires an operator session. Both configured tokens must be at least 32 characters and differ from each other and the operator password.
 - To use a session, sign in at `/login` and then return to `/admin`.
 
 ```bash
-# Session-independent access for monitoring (non-local modes)
+# Session-independent, read-only monitoring access (non-local modes)
 curl -H "x-maws-health-token: <token>" \
   http://localhost:3000/api/health
 
@@ -1124,7 +1132,7 @@ A `401` response in a non-local environment means that neither authentication me
 | Symptom | Likely cause | Action |
 |---|---|---|
 | `Failed to fetch metrics` or a network error | The development server is stopped, the port is wrong, or the request failed before reaching the API | Run `npm run dev`, confirm the port in the terminal, then retry `/admin` |
-| `Not authenticated` or `401` | Missing/expired operator session or invalid health-token header | Log in at `/login`, or send `x-maws-health-token` to the endpoint; do not put the token in the URL |
+| `Not authenticated` or `401` | Missing/expired operator session, or a health token used outside its read-only monitoring endpoints | Log in at `/login`; use `x-maws-health-token` only on the documented monitoring endpoints and never put it in a URL |
 | `Local mode` or empty/zero live metrics | `MAWS_ENV=local` with no active profile, or no live manager/broker is configured | This is expected for Chart Only. Attach a configured Testnet or Production profile from the UI after authenticating; no restart is required for switching |
 | `500` from a health endpoint | Server-side configuration or health-check failure | Inspect the server terminal logs and validate environment configuration |
 | `Connection refused` | No process is listening on the configured port | Start MAWS with `npm run dev` and use the displayed URL |

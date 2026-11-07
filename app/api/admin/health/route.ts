@@ -4,13 +4,14 @@ import { metricsSnapshot } from "@/lib/server/metrics/collector";
 import { serverConfig } from "@/lib/server/env/config";
 
 import { authenticate, isAuthFailure } from "@/lib/server/http/guards";
-import { compareSecretTokens } from "@/lib/server/auth/token";
+import { verifyRequestToken } from "@/lib/server/auth/token-attempts";
 
 /**
  * GET /api/admin/health
  * Returns health status of all components.
  * In local mode: No authentication required.
- * In other modes: Requires operator authentication OR health token (via x-maws-health-token header).
+ * A health token receives component health only; operator sessions receive
+ * the full trading health response.
  */
 export async function GET(req: NextRequest) {
   const cfg = serverConfig();
@@ -20,11 +21,29 @@ export async function GET(req: NextRequest) {
   if (cfg.env !== "local") {
     // Non-local mode: check authentication
     const ctx = authenticate(req, cfg);
-    const headerToken = req.headers.get("x-maws-health-token");
-    const tokenValid = compareSecretTokens(headerToken, cfg.healthToken);
-
-    if (isAuthFailure(ctx) && !tokenValid) {
-      return ctx.response;
+    const tokenAttempt = verifyRequestToken(req, cfg, "x-maws-health-token", cfg.healthToken);
+    if (isAuthFailure(ctx)) {
+      if (tokenAttempt.rateLimited) {
+        return NextResponse.json({ error: "Too many invalid token attempts" }, { status: 429 });
+      }
+      if (!tokenAttempt.authorized) return ctx.response;
+      try {
+        const health = buildAdminHealthStatus(cfg);
+        return NextResponse.json({
+          overall: health.overall,
+          components: Object.fromEntries(
+            Object.entries(health.components).map(([name, component]) => [
+              name,
+              { status: component.status, lastCheck: component.lastCheck },
+            ]),
+          ),
+          uptime: health.uptime,
+          lastUpdated: health.lastUpdated,
+        });
+      } catch (error) {
+        console.error("Health check error:", error);
+        return NextResponse.json({ overall: "down" }, { status: 500 });
+      }
     }
   }
 

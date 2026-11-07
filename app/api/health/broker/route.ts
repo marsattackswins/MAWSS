@@ -1,7 +1,7 @@
 import { serverConfig } from "@/lib/server/env/config";
 import { pingBroker } from "@/lib/server/binance/broker-ping";
 import { authenticate, isAuthFailure, jsonError, jsonOk } from "@/lib/server/http/guards";
-import { compareSecretTokens } from "@/lib/server/auth/token";
+import { verifyRequestToken } from "@/lib/server/auth/token-attempts";
 
 export const dynamic = "force-dynamic";
 
@@ -28,15 +28,11 @@ export async function GET(req: Request): Promise<Response> {
 
   // Local mode: allow anonymous access (development convenience)
   if (cfg.env !== "local") {
-    const token = req.headers.get("x-maws-health-token");
-    let authorized = false;
-    if (cfg.healthToken && token) {
-      authorized = compareSecretTokens(token, cfg.healthToken);
-    }
-    if (!authorized) {
-      // Fall back to a valid operator session.
-      const sessionCheck = authenticate(req, cfg);
-      if (isAuthFailure(sessionCheck)) return sessionCheck.response;
+    const sessionCheck = authenticate(req, cfg);
+    const tokenAttempt = verifyRequestToken(req, cfg, "x-maws-health-token", cfg.healthToken);
+    if (isAuthFailure(sessionCheck)) {
+      if (tokenAttempt.rateLimited) return jsonError(429, "token_rate_limited", "Too many invalid token attempts");
+      if (!tokenAttempt.authorized) return sessionCheck.response;
     }
   }
 

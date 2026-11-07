@@ -7,6 +7,8 @@ import { createIntent, updateIntent } from "@/lib/server/binance/intents";
 import { getDb } from "@/lib/server/db/connection";
 import { setHealthSignal } from "@/lib/server/health/state";
 import { NextRequest } from "next/server";
+import { createSession, sessionCookieName } from "@/lib/server/auth/session";
+import { secureCookieContext } from "@/lib/server/http/guards";
 
 const stream: TradingStreamInput = {
   connected: true,
@@ -183,8 +185,17 @@ describe("GET /api/status/trading-health", () => {
     expect(response.status).toBe(401);
   });
 
-  test("accepts the configured health token and reads SQLite execution data", async () => {
+  test("health token cannot access failed-order or reconciliation data", async () => {
     freshEnv(makeCfg({ env: "testnet", healthToken: "status-health-token" }));
+    const response = await GET(new NextRequest("http://localhost:3000/api/status/trading-health", {
+      headers: { "x-maws-health-token": "status-health-token" },
+    }));
+    expect(response.status).toBe(401);
+  });
+
+  test("operator session reads SQLite execution data", async () => {
+    const cfg = makeCfg({ env: "testnet", allowedOrigin: "http://localhost:3000" });
+    freshEnv(cfg);
     const created = createIntent({
       clientOrderId: "rejected-1",
       kind: "order",
@@ -200,8 +211,13 @@ describe("GET /api/status/trading-health", () => {
        VALUES (?, ?, ?, ?, ?, ?)`,
     ).run("binance-testnet", Date.now(), Date.now() + 100, "test", "drift", JSON.stringify({ diffs: ["order mismatch"] }));
 
+    const { sessionId } = createSession("trading-health-session");
     const response = await GET(new NextRequest("http://localhost:3000/api/status/trading-health", {
-      headers: { "x-maws-health-token": "status-health-token" },
+      headers: {
+        host: "localhost:3000",
+        origin: "http://localhost:3000",
+        cookie: `${sessionCookieName(secureCookieContext(cfg))}=${sessionId}`,
+      },
     }));
     const body = await response.json();
 
@@ -218,7 +234,8 @@ describe("GET /api/status/trading-health", () => {
   });
 
   test("excludes reconciliation mismatches recorded before the current server run", async () => {
-    freshEnv(makeCfg({ env: "testnet", healthToken: "status-health-token" }));
+    const cfg = makeCfg({ env: "testnet", allowedOrigin: "http://localhost:3000" });
+    freshEnv(cfg);
     const db = getDb();
     const insert = db.prepare(
       `INSERT INTO reconciliation_runs (profile_id, started_at, finished_at, trigger, result, details)
@@ -229,8 +246,13 @@ describe("GET /api/status/trading-health", () => {
     // A drift from the current run.
     insert.run("binance-testnet", Date.now(), Date.now() + 100, "startup", "drift", JSON.stringify({ diffs: ["current"] }));
 
+    const { sessionId } = createSession("trading-health-session");
     const response = await GET(new NextRequest("http://localhost:3000/api/status/trading-health", {
-      headers: { "x-maws-health-token": "status-health-token" },
+      headers: {
+        host: "localhost:3000",
+        origin: "http://localhost:3000",
+        cookie: `${sessionCookieName(secureCookieContext(cfg))}=${sessionId}`,
+      },
     }));
     const body = await response.json();
 

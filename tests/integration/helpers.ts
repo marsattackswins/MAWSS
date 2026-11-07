@@ -94,6 +94,7 @@ export function loadTestnetConfig(): EnvConfig {
     trustProxy: false,
     backupKey: null,
     healthToken: null,
+    emergencyToken: null,
     reverseEnabled: false,
     binanceApiKey: apiKey,
     binanceApiSecret: apiSecret,

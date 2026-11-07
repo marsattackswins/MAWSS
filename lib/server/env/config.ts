@@ -1,5 +1,8 @@
 import "server-only";
 
+import { compareSecretTokens } from "../auth/token";
+import { verifyOperatorPassword } from "../auth/password";
+
 export type MawsEnv = "local" | "testnet" | "shadow" | "production";
 export type BrokerType = "binance";
 export type ProfileId = "binance-testnet" | "binance-production";
@@ -49,6 +52,30 @@ export function productionRiskConfigurationError(cfg: EnvConfig): string | null 
   return null;
 }
 
+function validateAuthTokens(cfg: EnvConfig): void {
+  const tokens = [
+    ["MAWS_HEALTH_TOKEN", cfg.healthToken],
+    ["MAWS_EMERGENCY_TOKEN", cfg.emergencyToken],
+  ] as const;
+  for (const [name, token] of tokens) {
+    if (token && token.length < 32) throw new Error(`${name} must be at least 32 characters`);
+  }
+  if (cfg.healthToken && cfg.emergencyToken && compareSecretTokens(cfg.healthToken, cfg.emergencyToken)) {
+    throw new Error("MAWS_HEALTH_TOKEN and MAWS_EMERGENCY_TOKEN must differ");
+  }
+  if (cfg.operatorAuth) {
+    const operatorMaterial = [cfg.operatorAuth, ...cfg.operatorAuth.split(":")];
+    for (const [name, token] of tokens) {
+      if (token && (
+        verifyOperatorPassword(token, cfg.operatorAuth) ||
+        operatorMaterial.some((material) => compareSecretTokens(token, material))
+      )) {
+        throw new Error(`${name} must differ from MAWS_OPERATOR_AUTH material`);
+      }
+    }
+  }
+}
+
 export type ProfileRegistry = Record<ProfileId, ServerProfileConfig>;
 
 export interface SafeProfileMetadata {
@@ -75,6 +102,7 @@ export interface EnvConfig {
   trustProxy: boolean;
   backupKey: Buffer | null;
   healthToken: string | null;
+  emergencyToken: string | null;
   reverseEnabled: boolean;
   binanceApiKey: string | null;
   binanceApiSecret: string | null;
@@ -403,6 +431,7 @@ export function loadEnvConfig(source: NodeJS.ProcessEnv = process.env): EnvConfi
     trustProxy: source.MAWS_TRUST_PROXY === "true",
     backupKey: hexKey(source.MAWS_BACKUP_KEY),
     healthToken: source.MAWS_HEALTH_TOKEN?.trim() || null,
+    emergencyToken: source.MAWS_EMERGENCY_TOKEN?.trim() || null,
     reverseEnabled: source.MAWS_ENABLE_REVERSE === "true",
     // Keep the legacy active fields so all existing broker code retains its
     // process-startup behavior while credentials migrate to profile variables.
@@ -448,6 +477,7 @@ export function loadEnvConfig(source: NodeJS.ProcessEnv = process.env): EnvConfi
     },
   };
 
+  validateAuthTokens(cfg);
   if (env !== "local") {
     if (!cfg.operatorAuth) {
       throw new Error(`MAWS_OPERATOR_AUTH is required when MAWS_ENV=${env}`);

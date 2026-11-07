@@ -106,9 +106,7 @@ describe("health token authentication", () => {
   });
 
   describe("security properties", () => {
-    test("timing-safe comparison uses Buffer and timingSafeEqual", () => {
-      // This test verifies the implementation uses the correct pattern
-      // by checking that it handles different-length strings safely
+    test("timing-safe comparison handles different-length inputs safely", () => {
       const short = "abc";
       const long = "abcdefgh";
       
