@@ -5,8 +5,15 @@ import { serverConfig } from "../env/config";
 import { redactJson } from "../audit/redact";
 import { setHealthSignal } from "../health/state";
 import { log } from "../log/logger";
-import { findActiveIntents, findByExchangeOrderId, intentsInUncertainStates, updateIntent } from "./intents";
-import type { BinanceRestClient } from "./rest";
+import {
+  findActiveIntents,
+  findByExchangeOrderId,
+  intentsInUncertainStates,
+  updateIntent,
+  type IntentStatus,
+  type OrderIntent,
+} from "./intents";
+import { BinanceApiError, ERR_UNKNOWN_ORDER, type BinanceRestClient } from "./rest";
 import { fillExists, liveState, persistFill, rememberFill, type LiveFill } from "./state";
 import { isTerminalStatus } from "./types";
 import { getReconciliationBreaker } from "../resilience/breakers";
@@ -313,6 +320,34 @@ export class Reconciler {
     }
   }
 
+  /**
+   * Algo intents live on a different endpoint than regular orders; querying
+   * /fapi/v1/order for them always reports "unknown order" and would turn
+   * every protection order into drift.
+   */
+  private async queryIntentExchangeState(intent: OrderIntent): Promise<IntentExchangeState | null> {
+    if (intent.kind === "algo") {
+      try {
+        const order = await this.deps.rest.getAlgoOrder({
+          clientAlgoId: intent.clientAlgoId ?? intent.clientOrderId,
+        });
+        return {
+          status: order.algoStatus,
+          executedQty: order.actualQty,
+          exchangeOrderId: numericOrderId(order.actualOrderId),
+        };
+      } catch (err) {
+        // -2013: never recorded, or aged out of the algo-history window.
+        if (err instanceof BinanceApiError && err.code === ERR_UNKNOWN_ORDER) return null;
+        throw err;
+      }
+    }
+    const order = await this.deps.rest.getOrder(intent.symbol, undefined, intent.clientOrderId);
+    return order
+      ? { status: order.status, executedQty: order.executedQty, exchangeOrderId: order.orderId }
+      : null;
+  }
+
   private async reconcileActiveIntents(
     openOrders: ReadonlyMap<string, unknown>,
     diffs: string[],
@@ -323,9 +358,9 @@ export class Reconciler {
     for (const intent of findActiveIntents(this.persistenceProfile)) {
       if (!this.isCurrent()) return { result: "error", seenClientIds };
       seenClientIds.add(intent.clientOrderId);
-      const order = await this.deps.rest.getOrder(intent.symbol, undefined, intent.clientOrderId);
+      const state = await this.queryIntentExchangeState(intent);
       if (!this.isCurrent()) return { result: "error", seenClientIds };
-      if (!order) {
+      if (!state) {
         if (UNCERTAIN.has(intent.status)) {
           updateIntent(intent.clientOrderId, {
             status: "REJECTED",
@@ -338,29 +373,31 @@ export class Reconciler {
         }
         continue;
       }
-      const mapped =
-        order.status === "FILLED"
-          ? "FILLED"
-          : order.status === "CANCELED"
-            ? "CANCELED"
-            : order.status === "EXPIRED"
-              ? "EXPIRED"
-              : order.status === "REJECTED"
-                ? "REJECTED"
-                : order.status === "PARTIALLY_FILLED"
-                  ? "PARTIALLY_FILLED"
-                  : "SUBMITTED";
-      if (mapped !== intent.status) {
+      const mapped = mapExchangeStatus(state.status, intent.kind);
+      // TRIGGERED keeps the intent SUBMITTED but reveals the actual order id;
+      // link it so fills can still be attributed before FINISHED arrives.
+      const linkedOrderId =
+        state.exchangeOrderId != null && state.exchangeOrderId !== intent.exchangeOrderId
+          ? state.exchangeOrderId
+          : null;
+      if (mapped !== intent.status || linkedOrderId != null) {
         updateIntent(intent.clientOrderId, {
-          status: mapped as never,
-          exchangeOrderId: order.orderId,
-          lastState: JSON.stringify({ status: order.status, executedQty: order.executedQty, source: "reconciliation" }),
+          status: mapped,
+          ...(linkedOrderId != null ? { exchangeOrderId: linkedOrderId } : {}),
+          lastState: JSON.stringify({
+            status: state.status,
+            ...(state.executedQty != null ? { executedQty: state.executedQty } : {}),
+            source: "reconciliation",
+            kind: intent.kind,
+          }),
         }, Date.now(), this.persistenceProfile);
-        diffs.push(`intent ${intent.clientOrderId} synced ${intent.status} -> ${mapped}`);
+        if (mapped !== intent.status) {
+          diffs.push(`intent ${intent.clientOrderId} synced ${intent.status} -> ${mapped}`);
+        }
       }
-      if (!isTerminalStatus(order.status) && !openOrders.has(intent.clientOrderId)) {
+      if (expectsOpenOrder(intent.kind, state.status) && !openOrders.has(intent.clientOrderId)) {
         result = "drift";
-        diffs.push(`exchange order ${intent.clientOrderId} is ${order.status} but missing from snapshot`);
+        diffs.push(`exchange order ${intent.clientOrderId} is ${state.status} but missing from snapshot`);
       }
     }
 
@@ -445,6 +482,64 @@ export class Reconciler {
 
 function setLastRecon(patch: { lastRunAt: number; lastResult: "ok" | "drift" | "error"; driftCount: number }): void {
   setHealthSignal({ recon: { lastRunAt: patch.lastRunAt, lastResult: patch.lastResult, driftCount: patch.driftCount } });
+}
+
+interface IntentExchangeState {
+  /** Raw exchange status: `status` for orders, `algoStatus` for algo orders. */
+  status: string;
+  executedQty?: string;
+  /** Actual order id once an algo order triggered, otherwise the order id. */
+  exchangeOrderId: number | null;
+}
+
+function mapExchangeStatus(status: string, kind: "order" | "algo"): IntentStatus {
+  if (kind === "algo") {
+    switch (status) {
+      case "CANCELED":
+        return "CANCELED";
+      case "EXPIRED":
+        return "EXPIRED";
+      case "REJECTED":
+        return "REJECTED";
+      case "FINISHED":
+        return "FILLED";
+      case "PARTIALLY_FILLED":
+        return "PARTIALLY_FILLED";
+      default:
+        // NEW, TRIGGERED and any future status: the conditional order (or the
+        // actual order it created) still owns the outcome.
+        return "SUBMITTED";
+    }
+  }
+  switch (status) {
+    case "FILLED":
+      return "FILLED";
+    case "CANCELED":
+      return "CANCELED";
+    case "EXPIRED":
+      return "EXPIRED";
+    case "REJECTED":
+      return "REJECTED";
+    case "PARTIALLY_FILLED":
+      return "PARTIALLY_FILLED";
+    default:
+      return "SUBMITTED";
+  }
+}
+
+/**
+ * Algo orders are only open while NEW/PARTIALLY_FILLED. TRIGGERED means the
+ * conditional order fired and left the open set; unknown future statuses are
+ * tolerated as non-open rather than freezing reconciliation.
+ */
+function expectsOpenOrder(kind: "order" | "algo", status: string): boolean {
+  if (kind === "algo") return status === "NEW" || status === "PARTIALLY_FILLED";
+  return !isTerminalStatus(status);
+}
+
+function numericOrderId(value: number | string | null | undefined): number | null {
+  if (value == null || value === "" || !Number.isFinite(Number(value))) return null;
+  return Number(value);
 }
 
 function samePrice(value: string | undefined, expected: string): boolean {

@@ -4,7 +4,7 @@ import { StreamOwnerLease } from "@/lib/server/binance/lease";
 import { BinanceRestClient } from "@/lib/server/binance/rest";
 import { RateLimiter } from "@/lib/server/binance/ratelimit";
 import { createIntent, findByClientOrderId, updateIntent } from "@/lib/server/binance/intents";
-import { liveState, normalizeBinanceOrder } from "@/lib/server/binance/state";
+import { liveState, normalizeBinanceAlgoOrder, normalizeBinanceOrder } from "@/lib/server/binance/state";
 import { realizedSinceUtcMidnight } from "@/lib/server/binance/risk";
 import type { BinanceOrder } from "@/lib/server/binance/types";
 import { getDb } from "@/lib/server/db/connection";
@@ -39,6 +39,26 @@ describe("reconciliation: exchange truth settles everything", () => {
     createIntent({ clientOrderId, kind: "order", symbol: "BTCUSDT", side: "BUY", type: "LIMIT", qty: "0.001" });
     updateIntent(clientOrderId, { status: status as never });
   };
+
+  const seedAlgoIntent = (clientOrderId: string, status = "SUBMITTED") => {
+    createIntent({ clientOrderId, clientAlgoId: clientOrderId, kind: "algo", symbol: "BTCUSDT", side: "SELL", type: "STOP_MARKET", qty: "" });
+    updateIntent(clientOrderId, { status: status as never });
+  };
+
+  const algoFixture = (overrides: Record<string, unknown> = {}) => ({
+    algoId: 41,
+    clientAlgoId: "rc-algo",
+    algoType: "CONDITIONAL",
+    orderType: "STOP_MARKET",
+    symbol: "BTCUSDT",
+    side: "SELL",
+    algoStatus: "NEW",
+    triggerPrice: "48000",
+    closePosition: true,
+    createTime: 1,
+    updateTime: 1,
+    ...overrides,
+  });
 
   test("matching intents and open orders reconcile clean and unfreeze", async () => {
     const h = setupRecon();
@@ -99,6 +119,62 @@ describe("reconciliation: exchange truth settles everything", () => {
     expect(result.result).toBe("drift");
     expect(h.freezes.length).toBe(1);
     expect(h.freezes[0]).toContain("reconciliation drift");
+  });
+
+  test("algo intents reconcile through the Algo Order API", async () => {
+    const h = setupRecon();
+    seedAlgoIntent("rc-algo");
+    h.http.route("/fapi/v1/algoOrder", () => jsonRes(algoFixture()));
+    liveState().openOrders.set("rc-algo", normalizeBinanceAlgoOrder(algoFixture() as never));
+
+    const result = await h.recon.run("test");
+
+    expect(result.result).toBe("ok");
+    expect(h.freezes).toHaveLength(0);
+    expect(h.http.callsTo("/fapi/v1/order")).toHaveLength(0);
+    expect(h.http.callsTo("/fapi/v1/algoOrder")).toHaveLength(1);
+  });
+
+  test("a triggered algo intent links its actual order without drift", async () => {
+    const h = setupRecon();
+    seedAlgoIntent("rc-algo-triggered");
+    h.http.route("/fapi/v1/algoOrder", () => jsonRes(algoFixture({
+      clientAlgoId: "rc-algo-triggered",
+      algoStatus: "TRIGGERED",
+      actualOrderId: 555,
+      actualQty: "0",
+    })));
+    liveState().openOrders.clear();
+
+    const result = await h.recon.run("test");
+
+    expect(result.result).toBe("ok");
+    expect(h.freezes).toHaveLength(0);
+    expect(findByClientOrderId("rc-algo-triggered")).toMatchObject({
+      status: "SUBMITTED",
+      exchangeOrderId: 555,
+    });
+  });
+
+  test("a finished algo intent settles as FILLED from its actual order", async () => {
+    const h = setupRecon();
+    seedAlgoIntent("rc-algo-finished");
+    h.http.route("/fapi/v1/algoOrder", () => jsonRes(algoFixture({
+      clientAlgoId: "rc-algo-finished",
+      algoStatus: "FINISHED",
+      actualOrderId: "987",
+      actualQty: "0.001",
+    })));
+    liveState().openOrders.clear();
+
+    const result = await h.recon.run("test");
+
+    expect(result.result).toBe("ok");
+    expect(result.diffs.some((diff) => diff.includes("synced SUBMITTED -> FILLED"))).toBe(true);
+    expect(findByClientOrderId("rc-algo-finished")).toMatchObject({
+      status: "FILLED",
+      exchangeOrderId: 987,
+    });
   });
 
   test("open order without an intent is drift and freezes", async () => {

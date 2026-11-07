@@ -1400,8 +1400,9 @@ describe("position close and native protection", () => {
     });
 
     await recon.run("startup-test");
-    await recon.run("startup-test");
+    const secondPass = await recon.run("startup-test");
 
+    expect(secondPass.result).toBe("ok");
     expect(exchange.orders).toHaveLength(1);
     expect(exchange.orders[0]).toMatchObject({
       orderType: "TAKE_PROFIT_MARKET",
