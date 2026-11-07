@@ -8,8 +8,8 @@
  *   - reverse dispatch never falls back to close-then-open; connected requests
  *     use only the dedicated reverse endpoint.
  *
- * The confirm dialog and the DOM overlay are exercised in the browser check;
- * the actions below are the exact functions those buttons call.
+ * The DOM overlay is exercised in the browser check; the actions below are
+ * the exact dispatch functions invoked by enabled controls.
  */
 
 import { describe, test, expect, beforeEach, afterEach, jest } from "@jest/globals";
