@@ -102,6 +102,58 @@ export interface BinanceOrder {
   time: number;
 }
 
+export type BinanceAlgoOrderType = "STOP_MARKET" | "TAKE_PROFIT_MARKET";
+
+export interface BinanceAlgoOrder {
+  algoId: number;
+  clientAlgoId: string;
+  algoType: string;
+  orderType: BinanceAlgoOrderType;
+  symbol: string;
+  side: "BUY" | "SELL";
+  positionSide?: string;
+  timeInForce?: string;
+  quantity?: string;
+  algoStatus: string;
+  triggerPrice: string;
+  price?: string;
+  workingType?: string;
+  closePosition?: boolean;
+  priceProtect?: boolean;
+  reduceOnly?: boolean;
+  createTime: number;
+  updateTime: number;
+  triggerTime?: number;
+  actualOrderId?: number | string | null;
+  actualPrice?: string;
+  actualType?: string;
+  actualQty?: string;
+}
+
+type AlgoOrderBase = {
+  algoType: "CONDITIONAL";
+  symbol: string;
+  side: "BUY" | "SELL";
+  type: BinanceAlgoOrderType;
+  triggerPrice: string;
+  positionSide?: string;
+  workingType?: "MARK_PRICE" | "CONTRACT_PRICE";
+  priceProtect?: boolean;
+  clientAlgoId?: string;
+  newOrderRespType?: "ACK" | "RESULT";
+};
+
+export type PlaceAlgoOrderParams = AlgoOrderBase &
+  (
+    | { closePosition: true; quantity?: never; reduceOnly?: never }
+    | { closePosition?: false; quantity: string; reduceOnly?: boolean }
+  );
+
+export interface AlgoOrderLookup {
+  algoId?: number;
+  clientAlgoId?: string;
+}
+
 export interface ListenKeyResponse {
   listenKey: string;
 }

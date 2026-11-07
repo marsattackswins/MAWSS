@@ -10,11 +10,14 @@ import { getBinanceRestBreaker } from "../resilience/breakers";
 import { CircuitBreakerOpenError } from "../resilience/circuit-breaker";
 import type {
   AccountResponse,
+  AlgoOrderLookup,
   BinanceOrder,
+  BinanceAlgoOrder,
   ExchangeInfo,
   LeverageBracketRow,
   ListenKeyResponse,
   MarkPriceResponse,
+  PlaceAlgoOrderParams,
   PositionRiskRow,
   PositionModeResponse,
   ServerTime,
@@ -197,6 +200,54 @@ export class BinanceRestClient {
     return this.signedRequest<BinanceOrder[]>("GET", "/fapi/v1/openOrders", symbol ? { symbol } : {});
   }
 
+  getOpenAlgoOrders(symbol: string): Promise<BinanceAlgoOrder[]> {
+    if (!symbol) throw new Error("A symbol is required to list open algo orders");
+    return this.signedRequest<BinanceAlgoOrder[]>("GET", "/fapi/v1/openAlgoOrders", { symbol });
+  }
+
+  getAlgoOrder(lookup: AlgoOrderLookup): Promise<BinanceAlgoOrder> {
+    return this.signedRequest<BinanceAlgoOrder>(
+      "GET",
+      "/fapi/v1/algoOrder",
+      this.algoLookupParams(lookup),
+    );
+  }
+
+  placeAlgoOrder(params: PlaceAlgoOrderParams): Promise<BinanceAlgoOrder> {
+    if (params.clientAlgoId && !/^[.A-Z:/a-z0-9_-]{1,36}$/.test(params.clientAlgoId)) {
+      throw new Error("clientAlgoId must contain 1-36 Binance-supported characters");
+    }
+    const query: Record<string, string | number> = {
+      algoType: params.algoType,
+      symbol: params.symbol,
+      side: params.side,
+      type: params.type,
+      triggerPrice: params.triggerPrice,
+    };
+    if (params.closePosition) query.closePosition = "true";
+    if (params.quantity != null) query.quantity = params.quantity;
+    if (params.reduceOnly != null) query.reduceOnly = String(params.reduceOnly);
+    if (params.positionSide) query.positionSide = params.positionSide;
+    if (params.workingType) query.workingType = params.workingType;
+    if (params.priceProtect != null) query.priceProtect = String(params.priceProtect);
+    if (params.clientAlgoId) query.clientAlgoId = params.clientAlgoId;
+    if (params.newOrderRespType) query.newOrderRespType = params.newOrderRespType;
+    return this.signedRequest<BinanceAlgoOrder>("POST", "/fapi/v1/algoOrder", query);
+  }
+
+  cancelAlgoOrder(lookup: AlgoOrderLookup): Promise<BinanceAlgoOrder> {
+    return this.signedRequest<BinanceAlgoOrder>(
+      "DELETE",
+      "/fapi/v1/algoOrder",
+      this.algoLookupParams(lookup),
+    );
+  }
+
+  cancelAllAlgoOrders(symbol: string): Promise<BinanceAlgoOrder[]> {
+    if (!symbol) throw new Error("A symbol is required to cancel open algo orders");
+    return this.signedRequest<BinanceAlgoOrder[]>("DELETE", "/fapi/v1/algoOpenOrders", { symbol });
+  }
+
   /**
    * Historical orders for one symbol, newest first. Read-only history used
    * for durable order backfill and hydration; results never drive execution.
@@ -310,6 +361,20 @@ export class BinanceRestClient {
   /** Emergency bulk cancellation, intentionally outside the normal breaker. */
   cancelAllOpenOrdersEmergency(symbol: string): Promise<BinanceOrder[]> {
     return this.signedRequest<BinanceOrder[]>("DELETE", "/fapi/v1/allOpenOrders", { symbol }, false, true);
+  }
+
+  private algoLookupParams(lookup: AlgoOrderLookup): Record<string, string | number> {
+    const hasAlgoId = lookup.algoId != null;
+    const hasClientAlgoId = !!lookup.clientAlgoId;
+    if (hasAlgoId === hasClientAlgoId) {
+      throw new Error("Provide exactly one of algoId or clientAlgoId");
+    }
+    if (lookup.clientAlgoId && !/^[.A-Z:/a-z0-9_-]{1,36}$/.test(lookup.clientAlgoId)) {
+      throw new Error("clientAlgoId must contain 1-36 Binance-supported characters");
+    }
+    return hasAlgoId
+      ? { algoId: lookup.algoId! }
+      : { clientAlgoId: lookup.clientAlgoId! };
   }
 
   // ---------------- user data stream ----------------
