@@ -5,6 +5,7 @@ import { compareSecretTokens } from "./token";
 import type { EnvConfig } from "../env/config";
 
 type AttemptWindow = { failures: number[] };
+type TokenType = "health" | "emergency";
 
 const WINDOW_MS = 60_000;
 const MAX_FAILURES = 5;
@@ -19,6 +20,7 @@ export function verifyRequestToken(
   cfg: EnvConfig,
   headerName: string,
   expected: string | null,
+  tokenType: TokenType,
 ): TokenAttemptResult {
   const guardReq: GuardRequest = {
     method: req.method,
@@ -29,6 +31,7 @@ export function verifyRequestToken(
     req.headers.get(headerName),
     expected,
     clientIp(guardReq, cfg),
+    tokenType,
   );
 }
 
@@ -36,10 +39,11 @@ export function verifyRateLimitedToken(
   presented: string | null,
   expected: string | null,
   ip: string,
+  tokenType: TokenType,
   now = Date.now(),
 ): TokenAttemptResult {
   if (!presented) return { authorized: false, rateLimited: false };
-  const attemptKey = ip;
+  const attemptKey = `${tokenType}:${ip}`;
   const cutoff = now - WINDOW_MS;
   const window = windows.get(attemptKey);
   const failures = (window?.failures ?? []).filter((at) => at > cutoff);

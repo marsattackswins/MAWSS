@@ -21,7 +21,7 @@ export async function GET(req: NextRequest) {
   if (cfg.env !== "local") {
     // Non-local mode: check authentication
     const ctx = authenticate(req, cfg);
-    const tokenAttempt = verifyRequestToken(req, cfg, "x-maws-health-token", cfg.healthToken);
+    const tokenAttempt = verifyRequestToken(req, cfg, "x-maws-health-token", cfg.healthToken, "health");
     if (isAuthFailure(ctx)) {
       if (tokenAttempt.rateLimited) {
         return NextResponse.json({ error: "Too many invalid token attempts" }, { status: 429 });

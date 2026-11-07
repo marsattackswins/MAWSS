@@ -29,6 +29,7 @@ import { POST as logoutPost } from "@/app/api/auth/logout/route";
 import { POST as revokeAllPost } from "@/app/api/auth/revoke-all/route";
 import { POST as loginPost } from "@/app/api/auth/login/route";
 import { verifyRateLimitedToken, resetTokenAttemptsForTests } from "@/lib/server/auth/token-attempts";
+import { getDb } from "@/lib/server/db/connection";
 import { freshEnv, FakeHttp, installFakes, jsonRes, makeCfg } from "./helpers";
 
 const HEALTH_TOKEN = "health-token-" + "h".repeat(32);
@@ -90,13 +91,22 @@ describe("split health and emergency token authorization", () => {
     installFakes(http);
   });
 
-  test("invalid token attempts are rate-limited per client IP across credentials", () => {
+  test("invalid token attempts are rate-limited per token type and client IP", () => {
     for (let i = 0; i < 5; i++) {
-      expect(verifyRateLimitedToken("bad", HEALTH_TOKEN, "192.0.2.1", 1000 + i).rateLimited).toBe(false);
+      expect(verifyRateLimitedToken("bad", HEALTH_TOKEN, "192.0.2.1", "health", 1000 + i).rateLimited).toBe(false);
     }
-    expect(verifyRateLimitedToken("bad", HEALTH_TOKEN, "192.0.2.1", 1006).rateLimited).toBe(true);
-    expect(verifyRateLimitedToken("bad", EMERGENCY_TOKEN, "192.0.2.1", 1006).rateLimited).toBe(true);
-    expect(verifyRateLimitedToken("bad", HEALTH_TOKEN, "192.0.2.2", 1006).rateLimited).toBe(false);
+    expect(verifyRateLimitedToken("bad", HEALTH_TOKEN, "192.0.2.1", "health", 1006).rateLimited).toBe(true);
+    expect(verifyRateLimitedToken("bad", EMERGENCY_TOKEN, "192.0.2.1", "emergency", 1006).rateLimited).toBe(false);
+    expect(verifyRateLimitedToken("bad", HEALTH_TOKEN, "192.0.2.2", "health", 1006).rateLimited).toBe(false);
+  });
+
+  test("failed health-token attempts do not rate-limit the emergency token", () => {
+    for (let i = 0; i < 5; i++) {
+      verifyRateLimitedToken("bad", HEALTH_TOKEN, "192.0.2.3", "health", 2000 + i);
+    }
+    expect(
+      verifyRateLimitedToken(EMERGENCY_TOKEN, EMERGENCY_TOKEN, "192.0.2.3", "emergency", 2006),
+    ).toEqual({ authorized: true, rateLimited: false });
   });
 
   test.each(mutations)("%s rejects the read-only health token", async (_name, handler, path) => {
@@ -168,5 +178,39 @@ describe("split health and emergency token authorization", () => {
       "x-maws-health-token": HEALTH_TOKEN,
     }));
     expect(response.status).toBeGreaterThanOrEqual(400);
+  });
+
+  async function expectFlattenNotAuthorizedWithoutEmergencyToken(
+    headers: Record<string, string>,
+  ): Promise<void> {
+    const http = new FakeHttp();
+    http.route("/fapi/v1/ping", () => jsonRes({}));
+    freshEnv(makeCfg({
+      env: "testnet",
+      allowedOrigin: "http://localhost:3000",
+      healthToken: HEALTH_TOKEN,
+      emergencyToken: null,
+    }));
+    installFakes(http);
+
+    const response = await flattenPost(request("/api/live/emergency/flatten", "POST", headers));
+    expect(response.status).toBe(401);
+    const authorizedRows = getDb().prepare(
+      "SELECT id FROM audit_log WHERE action = 'emergency.flatten.authorized'",
+    ).all();
+    expect(authorizedRows).toHaveLength(0);
+    expect(http.calls.filter((call) => call.method === "POST")).toHaveLength(0);
+  }
+
+  test("with MAWS_EMERGENCY_TOKEN unset, no header never reaches the authorized flatten branch", async () => {
+    await expectFlattenNotAuthorizedWithoutEmergencyToken({});
+  });
+
+  test("with MAWS_EMERGENCY_TOKEN unset, an empty header never reaches the authorized flatten branch", async () => {
+    await expectFlattenNotAuthorizedWithoutEmergencyToken({ "x-maws-emergency-token": "" });
+  });
+
+  test("with MAWS_EMERGENCY_TOKEN unset, an arbitrary header never reaches the authorized flatten branch", async () => {
+    await expectFlattenNotAuthorizedWithoutEmergencyToken({ "x-maws-emergency-token": "arbitrary" });
   });
 });

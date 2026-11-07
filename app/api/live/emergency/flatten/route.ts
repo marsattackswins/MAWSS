@@ -25,7 +25,7 @@ export async function POST(req: Request): Promise<Response> {
     if (error instanceof ProfileCoordinatorError) return jsonError(profileErrorStatus(error.code), error.code, "Profile runtime changed; retry the request");
     throw error;
   }
-  const tokenAttempt = verifyRequestToken(req, cfg, "x-maws-emergency-token", cfg.emergencyToken);
+  const tokenAttempt = verifyRequestToken(req, cfg, "x-maws-emergency-token", cfg.emergencyToken, "emergency");
   const emergencyTokenAuthorized = tokenAttempt.authorized;
   if (isAuthFailure(auth)) {
     if (tokenAttempt.rateLimited) return jsonError(429, "token_rate_limited", "Too many invalid token attempts");

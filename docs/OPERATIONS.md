@@ -82,6 +82,14 @@ Binance credentials; use the separate profile-specific variables instead.
 **Default**: `false`
 **Purpose**: Enable when reverse proxy strips forwarding headers
 
+Set `MAWS_TRUST_PROXY=true` when MAWS is behind the provided nginx reverse
+proxy. That configuration overwrites `X-Forwarded-For` with `$remote_addr`
+before forwarding requests to MAWS. Without trusted proxy configuration,
+MAWS uses the shared IP key `direct`; consequently, failed logins from one
+client can consume the same five-attempt login limit used by every client for
+up to 15 minutes. Do not enable proxy trust unless the proxy is the sole
+ingress and overwrites inbound forwarding headers.
+
 #### MAWS_BACKUP_KEY
 **Description**: AES-256 key for encrypted backups
 **Format**: 64 hex characters (32 bytes)
