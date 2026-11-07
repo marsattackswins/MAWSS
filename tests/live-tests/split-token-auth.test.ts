@@ -90,11 +90,12 @@ describe("split health and emergency token authorization", () => {
     installFakes(http);
   });
 
-  test("invalid token attempts are rate-limited per client IP and purpose", () => {
+  test("invalid token attempts are rate-limited per client IP across credentials", () => {
     for (let i = 0; i < 5; i++) {
       expect(verifyRateLimitedToken("bad", HEALTH_TOKEN, "192.0.2.1", 1000 + i).rateLimited).toBe(false);
     }
     expect(verifyRateLimitedToken("bad", HEALTH_TOKEN, "192.0.2.1", 1006).rateLimited).toBe(true);
+    expect(verifyRateLimitedToken("bad", EMERGENCY_TOKEN, "192.0.2.1", 1006).rateLimited).toBe(true);
     expect(verifyRateLimitedToken("bad", HEALTH_TOKEN, "192.0.2.2", 1006).rateLimited).toBe(false);
   });
 
