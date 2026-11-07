@@ -2061,6 +2061,10 @@ function buildAlgoOrderParams(input: SubmitOrderInput, clientAlgoId: string): Pl
     side: input.side,
     type: input.type as "STOP_MARKET" | "TAKE_PROFIT_MARKET",
     triggerPrice: input.stopPrice,
+    // Trigger levels are validated against the mark price (protectionPriceError
+    // / getFreshProtectionMark), so the exchange must evaluate the same series;
+    // the CONTRACT_PRICE default can fire early when last and mark diverge.
+    workingType: "MARK_PRICE" as const,
     clientAlgoId,
   };
   if (input.closePosition) return { ...base, closePosition: true };

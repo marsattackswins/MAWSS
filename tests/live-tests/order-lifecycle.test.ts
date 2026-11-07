@@ -654,6 +654,7 @@ describe("position close and native protection", () => {
       const params = queryOf(algoPlaceCalls(h)[0]);
       expect(params.get("clientAlgoId")).toBe(clientOrderId);
       expect(params.get("triggerPrice")).toBe(type === "STOP_MARKET" ? "49000" : "51000");
+      expect(params.get("workingType")).toBe("MARK_PRICE");
     },
   );
 
@@ -820,6 +821,9 @@ describe("position close and native protection", () => {
     expect(tp?.get("triggerPrice")).toBe("45000.5");
     expect(sl?.get("triggerPrice")).toBe("52000.5");
     expect(tp?.get("side")).toBe("BUY"); // short position closes via BUY
+    // Triggers are validated against mark, so they must execute on mark too.
+    expect(tp?.get("workingType")).toBe("MARK_PRICE");
+    expect(sl?.get("workingType")).toBe("MARK_PRICE");
     // closePosition=true orders never carry a quantity.
     expect(tp?.get("quantity")).toBeNull();
   });
