@@ -255,6 +255,7 @@ export function installFakes(http: FakeHttp): { http: FakeHttp; ws: { connect(ur
   // route with a one-shot script when exercising hedge-mode handling.
   http.route("/fapi/v1/positionSide/dual", () => jsonRes({ dualSidePosition: false }));
   installBrokerClients({ http, ws });
+  http.route("/fapi/v1/openAlgoOrders", () => jsonRes([]));
   return { http, ws };
 }
 

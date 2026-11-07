@@ -39,6 +39,7 @@ export interface PositionDto {
 
 export interface OrderDto {
   id: string;
+  kind?: "order" | "algo";
   symbol: string;
   side: "buy" | "sell";
   type: "limit" | "stop";
@@ -154,6 +155,7 @@ export function ordersDto(): OrderDto[] {
     if (!isLimit && !isStop) continue;
     out.push({
       id: o.clientOrderId,
+      kind: o.kind,
       symbol: o.symbol,
       side: o.side === "BUY" ? "buy" : "sell",
       type: isLimit ? "limit" : "stop",

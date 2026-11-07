@@ -15,7 +15,7 @@ import { log } from "../log/logger";
 import { syncClock, type ClockState } from "./clock";
 import { MetadataCache } from "./metadata";
 import { StreamOwnerLease } from "./lease";
-import { findByClientOrderId, intentsInUncertainStates, updateIntent } from "./intents";
+import { findActiveIntents, findByClientOrderId, intentsInUncertainStates, updateIntent } from "./intents";
 import { OrderService, newServerClientOrderId, type ReferencePrice } from "./orders";
 import { RateLimiter } from "./ratelimit";
 import { BinanceRestClient, BinanceApiError } from "./rest";
@@ -31,8 +31,10 @@ import { publishLive } from "./sse";
 import {
   applyAccountEvent,
   applyAccountSnapshot,
+  applyAlgoOrderEvent,
   applyMarkPrice,
   applyOpenOrdersSnapshot,
+  applySymbolOpenOrdersSnapshot,
   applyOrderEvent,
   fillExecutionKey,
   fillExists,
@@ -49,9 +51,10 @@ import {
   refreshPositionMarkAfterAccountUpdate,
 } from "./state";
 import { backfillHistoricalOrders, historySymbols, hydrateHistoricalOrders } from "./order-history";
+import { getProtectionIntent, listProtectionIntents, setProtectionStatus } from "./protection";
 import { StreamLeaseUnavailableError, UserDataStream } from "./stream";
 import { MARK_STALE_AFTER_MS, MarkPriceStream } from "./mark-price-stream";
-import type { AccountUpdateEvent, OrderTradeUpdateEvent, UserStreamEvent } from "./types";
+import type { AccountUpdateEvent, AlgoUpdateEvent, BinanceAlgoOrder, OrderTradeUpdateEvent, UserStreamEvent } from "./types";
 import { getDb } from "../db/connection";
 import { trackFillReceived, trackFreezeTriggered, trackOrderFilled, trackSystemStart, trackSystemStop, trackUnfreezeCleared, updateTradingGauges } from "../metrics/instrument";
 
@@ -89,6 +92,7 @@ export class BinanceLiveManager {
   private accountUpdateSnapshotPromise: Promise<void> | null = null;
   private accountUpdateSnapshotPending = false;
   private accountUpdateSnapshotRevision = 0;
+  private algoOrderRefreshTimers = new Map<string, ReturnType<typeof setTimeout>>();
   private lifecycleGeneration = 0;
   /**
    * Periodic proactive clock resync. Without it the clock signal goes stale
@@ -195,6 +199,8 @@ export class BinanceLiveManager {
       clearTimeout(this.accountUpdateSnapshotRetryTimer);
       this.accountUpdateSnapshotRetryTimer = null;
     }
+    for (const timer of this.algoOrderRefreshTimers.values()) clearTimeout(timer);
+    this.algoOrderRefreshTimers.clear();
     this.markPriceStream.stop();
   }
 
@@ -600,13 +606,52 @@ export class BinanceLiveManager {
       this.rest.getPositionRisk(),
       this.rest.getOpenOrders(),
     ]);
+    const symbols = new Set(openOrders.map((order) => order.symbol));
+    for (const position of positions) {
+      if (Number(position.positionAmt) !== 0) symbols.add(position.symbol);
+    }
+    for (const intent of findActiveIntents(this.persistenceProfile)) {
+      if (intent.kind === "algo") symbols.add(intent.symbol);
+    }
+    for (const intent of listProtectionIntents(this.persistenceProfile)) symbols.add(intent.symbol);
+    const algoOrders: BinanceAlgoOrder[] = [];
+    for (const symbol of symbols) {
+      algoOrders.push(...(await this.rest.getOpenAlgoOrders(symbol)));
+    }
     if (!this.isGenerationCurrent(generation)) return;
     applyAccountSnapshot(account);
     applyPositionSnapshot(positions);
-    applyOpenOrdersSnapshot(openOrders);
+    applyOpenOrdersSnapshot(openOrders, algoOrders);
     updateTradingGauges();
     setHealthSignal({ snapshot: { fetchedAt: Date.now() } });
     publishLive("snapshot", { at: Date.now() });
+  }
+
+  private scheduleAlgoOrderRefresh(symbol: string): void {
+    if (!symbol) return;
+    const existing = this.algoOrderRefreshTimers.get(symbol);
+    if (existing) clearTimeout(existing);
+    const generation = this.lifecycleGeneration;
+    const timer = setTimeout(() => {
+      this.algoOrderRefreshTimers.delete(symbol);
+      void this.refreshAlgoOrdersForSymbol(symbol, generation).catch((err: unknown) => {
+        if (this.isGenerationCurrent(generation)) {
+          log.warn("post-ALGO_UPDATE order refresh failed", { symbol, error: String(err) });
+        }
+      });
+    }, ACCOUNT_UPDATE_SNAPSHOT_DEBOUNCE_MS);
+    this.algoOrderRefreshTimers.set(symbol, timer);
+  }
+
+  private async refreshAlgoOrdersForSymbol(symbol: string, generation: number): Promise<void> {
+    const [openOrders, algoOrders] = await Promise.all([
+      this.rest.getOpenOrders(symbol),
+      this.rest.getOpenAlgoOrders(symbol),
+    ]);
+    if (!this.isGenerationCurrent(generation)) return;
+    applySymbolOpenOrdersSnapshot(symbol, openOrders, algoOrders);
+    updateTradingGauges();
+    publishLive("snapshot", { at: Date.now(), symbol });
   }
 
   private scheduleAccountUpdateSnapshot(): void {
@@ -698,9 +743,24 @@ export class BinanceLiveManager {
         Date.now(),
         typeof ev.E === "number" ? ev.E : null,
         ev.e,
-        ev.e === "ORDER_TRADE_UPDATE" ? (ev as OrderTradeUpdateEvent).o.i : null,
-        ev.e === "ORDER_TRADE_UPDATE" ? (ev as OrderTradeUpdateEvent).o.c : null,
-        ev.e === "ORDER_TRADE_UPDATE" ? (ev as OrderTradeUpdateEvent).o.s : null,
+        ev.e === "ORDER_TRADE_UPDATE"
+          ? (ev as OrderTradeUpdateEvent).o.i
+          : ev.e === "ALGO_UPDATE" &&
+              (ev as AlgoUpdateEvent).o.ai != null &&
+              (ev as AlgoUpdateEvent).o.ai !== "" &&
+              Number.isFinite(Number((ev as AlgoUpdateEvent).o.ai))
+            ? Number((ev as AlgoUpdateEvent).o.ai)
+            : null,
+        ev.e === "ORDER_TRADE_UPDATE"
+          ? (ev as OrderTradeUpdateEvent).o.c
+          : ev.e === "ALGO_UPDATE"
+            ? (ev as AlgoUpdateEvent).o.caid ?? null
+            : null,
+        ev.e === "ORDER_TRADE_UPDATE"
+          ? (ev as OrderTradeUpdateEvent).o.s
+          : ev.e === "ALGO_UPDATE"
+            ? (ev as AlgoUpdateEvent).o.s ?? null
+            : null,
         redactJson(ev),
       );
     const eventId = eventRow.lastInsertRowid;
@@ -788,6 +848,9 @@ export class BinanceLiveManager {
           fills: persistedFills,
         });
         if (persistedFills.length > 0) publishLive("fills", persistedFills);
+      } else if (ev.e === "ALGO_UPDATE") {
+        this.processAlgoUpdate(ev as AlgoUpdateEvent);
+        db.prepare(`UPDATE order_events SET processed = 1 WHERE id = ? AND profile_id = ?`).run(eventId, this.persistenceProfile.id);
       } else {
         if (ev.e === "ACCOUNT_UPDATE") {
           const accountEv = ev as AccountUpdateEvent;
@@ -875,6 +938,81 @@ export class BinanceLiveManager {
     if (mapped === "FILLED" || mapped === "CANCELED" || mapped === "EXPIRED" || mapped === "REJECTED") {
       this.unfreezeIfClear();
     }
+  }
+
+  private processAlgoUpdate(ev: AlgoUpdateEvent): void {
+      const order = applyAlgoOrderEvent(ev);
+      const payload = ev.o;
+      const clientAlgoId = payload.caid;
+      const symbol = payload.s;
+      const status = payload.X ?? "UNKNOWN";
+      if (clientAlgoId) {
+        const intentStatus =
+          status === "CANCELED"
+            ? "CANCELED"
+            : status === "REJECTED" || status === "REJECT"
+              ? "REJECTED"
+              : status === "EXPIRED"
+                ? "EXPIRED"
+                : status === "FINISHED"
+                  ? "FILLED"
+                  : "SUBMITTED";
+        const actualOrderId =
+          payload.ai != null && payload.ai !== "" && Number.isFinite(Number(payload.ai))
+            ? Number(payload.ai)
+            : undefined;
+        if (findByClientOrderId(clientAlgoId, this.persistenceProfile)) {
+          updateIntent(clientAlgoId, {
+            status: intentStatus,
+            ...(actualOrderId != null ? { exchangeOrderId: actualOrderId } : {}),
+            lastState: JSON.stringify({
+              status,
+              algoId: payload.aid ?? null,
+              actualOrderId: payload.ai ?? null,
+              reason: payload.rm ?? null,
+              source: "ALGO_UPDATE",
+            }),
+          }, Date.now(), this.persistenceProfile);
+        }
+      }
+
+      if (
+        symbol &&
+        payload.rm &&
+        (status === "CANCELED" || status === "REJECTED" || status === "REJECT") &&
+        Number(liveState().positions.get(symbol)?.qty ?? "0") !== 0 &&
+        getProtectionIntent(symbol, this.persistenceProfile)
+      ) {
+        const reason = `Binance removed protective algo order: ${payload.rm}`;
+        setProtectionStatus(symbol, "UNPROTECTED", reason, this.persistenceProfile);
+        audit("operator", "position.protection.algo_rejected", {
+          symbol,
+          clientAlgoId: clientAlgoId ?? null,
+          status,
+          reason: payload.rm,
+          severity: "high",
+        }, undefined, this.persistenceProfile);
+        alert(`position_protection_algo_rejected:${symbol}`, {
+          symbol,
+          clientAlgoId: clientAlgoId ?? null,
+          status,
+          reason: payload.rm,
+          severity: "high",
+        });
+        publishLive("account-update", { at: Date.now(), protection: symbol, status: "UNPROTECTED" });
+      }
+
+      if (order) {
+        publishLive("order-update", {
+          clientOrderId: order.clientOrderId,
+          status: order.status,
+          symbol: order.symbol,
+          kind: "algo",
+          algoId: order.algoId,
+          exchangeOrderId: order.exchangeOrderId,
+        });
+      }
+    if (symbol) this.scheduleAlgoOrderRefresh(symbol);
   }
 
   /** Mark submissions frozen until the named condition clears. */

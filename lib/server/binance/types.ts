@@ -130,6 +130,29 @@ export interface BinanceAlgoOrder {
   actualQty?: string;
 }
 
+export interface AlgoUpdateEvent {
+  e: "ALGO_UPDATE";
+  E?: number;
+  T?: number;
+  o: {
+    caid?: string;
+    aid?: number;
+    at?: string;
+    o?: string;
+    s?: string;
+    S?: "BUY" | "SELL";
+    ps?: string;
+    f?: string;
+    q?: string;
+    X?: string;
+    ai?: number | string;
+    rm?: string;
+    tp?: string;
+    cp?: boolean;
+    [key: string]: unknown;
+  };
+}
+
 type AlgoOrderBase = {
   algoType: "CONDITIONAL";
   symbol: string;
@@ -215,7 +238,7 @@ export interface AccountUpdateEvent {
   };
 }
 
-export type UserStreamEvent = OrderTradeUpdateEvent | AccountUpdateEvent | { e: string; E?: number };
+export type UserStreamEvent = OrderTradeUpdateEvent | AccountUpdateEvent | AlgoUpdateEvent | { e: string; E?: number };
 
 export const TERMINAL_ORDER_STATUSES = new Set([
   "FILLED",

@@ -7,7 +7,15 @@ import {
   type PersistenceProfile,
 } from "../profile/context";
 import { add, div, eq, isNegative, isZero, mul, parseDec, toStr, type Dec } from "./decimal";
-import type { AccountResponse, AccountUpdateEvent, BinanceOrder, OrderTradeUpdateEvent, PositionRiskRow } from "./types";
+import type {
+  AccountResponse,
+  AccountUpdateEvent,
+  AlgoUpdateEvent,
+  BinanceAlgoOrder,
+  BinanceOrder,
+  OrderTradeUpdateEvent,
+  PositionRiskRow,
+} from "./types";
 import { deleteProtectionIntent } from "./protection";
 
 export interface LiveAccount {
@@ -53,6 +61,8 @@ export interface LivePosition {
 export interface LiveOrder {
   clientOrderId: string;
   exchangeOrderId: number | null;
+  algoId?: number | null;
+  kind: "order" | "algo";
   symbol: string;
   side: "BUY" | "SELL";
   type: string;
@@ -261,14 +271,40 @@ export function applySymbolLeverage(symbol: string, leverage: string): boolean {
   return false;
 }
 
-export function applyOpenOrdersSnapshot(rows: BinanceOrder[], now = Date.now()): void {
+export function applyOpenOrdersSnapshot(
+  rows: BinanceOrder[],
+  algoRows: BinanceAlgoOrder[] = [],
+  now = Date.now(),
+): void {
   state.openOrders.clear();
+  applyOrderRows(rows, algoRows);
+  state.snapshotAt = now;
+}
+
+export function applySymbolOpenOrdersSnapshot(
+  symbol: string,
+  rows: BinanceOrder[],
+  algoRows: BinanceAlgoOrder[],
+  now = Date.now(),
+): void {
+  for (const [clientOrderId, order] of state.openOrders) {
+    if (order.symbol === symbol) state.openOrders.delete(clientOrderId);
+  }
+  applyOrderRows(rows.filter((order) => order.symbol === symbol), algoRows);
+  state.snapshotAt = now;
+}
+
+function applyOrderRows(rows: BinanceOrder[], algoRows: BinanceAlgoOrder[]): void {
   for (const o of rows) {
     const live = normalizeBinanceOrder(o);
     if (WORKING_STATUSES.has(live.status)) state.openOrders.set(live.clientOrderId, live);
     state.orders.set(live.clientOrderId, live);
   }
-  state.snapshotAt = now;
+  for (const o of algoRows) {
+    const live = normalizeBinanceAlgoOrder(o);
+    if (WORKING_STATUSES.has(live.status)) state.openOrders.set(live.clientOrderId, live);
+    state.orders.set(live.clientOrderId, live);
+  }
 }
 
 export function rememberOrder(o: BinanceOrder): void {
@@ -305,6 +341,7 @@ export function rememberHistoricalOrder(o: {
   state.orders.set(o.clientOrderId, {
     clientOrderId: o.clientOrderId,
     exchangeOrderId: o.exchangeOrderId,
+    kind: "order",
     symbol: o.symbol,
     side: o.side,
     type: o.type,
@@ -326,6 +363,7 @@ export function normalizeBinanceOrder(o: BinanceOrder): LiveOrder {
   return {
     clientOrderId: o.clientOrderId,
     exchangeOrderId: o.orderId,
+    kind: "order",
     symbol: o.symbol,
     side: o.side,
     type: o.type,
@@ -338,6 +376,32 @@ export function normalizeBinanceOrder(o: BinanceOrder): LiveOrder {
     reduceOnly: !!o.reduceOnly,
     closePosition: !!o.closePosition,
     time: o.time,
+    updateTime: o.updateTime,
+  };
+}
+
+export function normalizeBinanceAlgoOrder(o: BinanceAlgoOrder): LiveOrder {
+  const actualOrderId =
+    o.actualOrderId != null && o.actualOrderId !== "" && Number.isFinite(Number(o.actualOrderId))
+      ? Number(o.actualOrderId)
+      : null;
+  return {
+    clientOrderId: o.clientAlgoId,
+    exchangeOrderId: actualOrderId,
+    algoId: o.algoId,
+    kind: "algo",
+    symbol: o.symbol,
+    side: o.side,
+    type: o.orderType,
+    status: o.algoStatus,
+    price: o.price ?? "0",
+    stopPrice: o.triggerPrice,
+    origQty: o.quantity ?? "0",
+    executedQty: o.actualQty ?? "0",
+    avgPrice: o.actualPrice ?? "0",
+    reduceOnly: !!o.reduceOnly,
+    closePosition: !!o.closePosition,
+    time: o.createTime,
     updateTime: o.updateTime,
   };
 }
@@ -430,6 +494,47 @@ export function applyOrderEvent(ev: OrderTradeUpdateEvent, skipTradeIds: Readonl
   return extractFill(o, skipTradeIds);
 }
 
+export function applyAlgoOrderEvent(ev: AlgoUpdateEvent): LiveOrder | null {
+  const o = ev.o;
+  if (!o.caid || !o.s || !o.S || !o.X) return null;
+  const previous = state.orders.get(o.caid);
+  const rawActualOrderId = o.ai;
+  const actualOrderId =
+    rawActualOrderId != null && rawActualOrderId !== "" && Number.isFinite(Number(rawActualOrderId))
+      ? Number(rawActualOrderId)
+      : previous?.exchangeOrderId ?? null;
+  const order: LiveOrder = {
+    clientOrderId: o.caid,
+    exchangeOrderId: actualOrderId,
+    algoId: typeof o.aid === "number" ? o.aid : previous?.algoId ?? null,
+    kind: "algo",
+    symbol: o.s,
+    side: o.S,
+    type: o.o ?? previous?.type ?? "",
+    status: o.X,
+    price: typeof o.p === "string" ? o.p : previous?.price ?? "0",
+    stopPrice:
+      typeof o.triggerPrice === "string"
+        ? o.triggerPrice
+        : typeof o.tp === "string"
+          ? o.tp
+          : previous?.stopPrice ?? "0",
+    origQty: typeof o.q === "string" ? o.q : previous?.origQty ?? "0",
+    executedQty: typeof o.actualQty === "string" ? o.actualQty : previous?.executedQty ?? "0",
+    avgPrice: typeof o.actualPrice === "string" ? o.actualPrice : previous?.avgPrice ?? "0",
+    reduceOnly: typeof o.R === "boolean" ? o.R : previous?.reduceOnly ?? false,
+    closePosition: typeof o.cp === "boolean" ? o.cp : previous?.closePosition ?? false,
+    time: previous?.time ?? ev.T ?? ev.E ?? Date.now(),
+    updateTime: ev.T ?? ev.E ?? Date.now(),
+  };
+  state.orders.set(order.clientOrderId, order);
+  if (order.status !== "NEW" && order.status !== "PARTIALLY_FILLED") {
+    state.openOrders.delete(order.clientOrderId);
+  }
+  state.lastEventTime = Math.max(state.lastEventTime ?? 0, ev.E ?? order.updateTime);
+  return order;
+}
+
 function buildOrderFromEvent(o: OrderTradeUpdateEvent["o"], prev?: LiveOrder): LiveOrder {
   const cumQty = num(o.z);
   let avgPrice = prev?.avgPrice && prev.avgPrice !== "0" ? prev.avgPrice : "0";
@@ -443,6 +548,7 @@ function buildOrderFromEvent(o: OrderTradeUpdateEvent["o"], prev?: LiveOrder): L
   return {
     clientOrderId: o.c,
     exchangeOrderId: o.i,
+    kind: "order",
     symbol: o.s,
     side: o.S,
     type: o.o,

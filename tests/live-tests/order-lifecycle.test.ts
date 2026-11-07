@@ -821,7 +821,7 @@ describe("position close and native protection", () => {
       unrealizedProfit: "1", leverage: "1", liquidationPrice: "0", notional: "50", updatedAt: Date.now(),
     });
     liveState().openOrders.set("old-tp-fail", {
-      clientOrderId: "old-tp-fail", exchangeOrderId: 78, symbol: "BTCUSDT", side: "SELL",
+      clientOrderId: "old-tp-fail", exchangeOrderId: 78, kind: "algo", symbol: "BTCUSDT", side: "SELL",
       type: "TAKE_PROFIT_MARKET", status: "NEW", price: "0", stopPrice: "51000", origQty: "0",
       executedQty: "0", avgPrice: "0", reduceOnly: false, closePosition: true, time: 1, updateTime: 1,
     });
@@ -862,6 +862,7 @@ describe("position close and native protection", () => {
     liveState().openOrders.set("old-tp", {
       clientOrderId: "old-tp",
       exchangeOrderId: 77,
+      kind: "algo",
       symbol: "BTCUSDT",
       side: "SELL",
       type: "TAKE_PROFIT_MARKET",

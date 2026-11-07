@@ -118,6 +118,7 @@ export interface ReversePositionResult extends OrderResult {
 export interface Order {
   clientOrderId: string;
   exchangeOrderId: number | null;
+  kind?: "order" | "algo";
   symbol: string;
   side: "buy" | "sell";
   type: string;

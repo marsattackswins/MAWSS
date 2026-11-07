@@ -449,6 +449,7 @@ export class BinanceAdapter implements IBroker {
     return {
       clientOrderId: order.clientOrderId,
       exchangeOrderId: order.exchangeOrderId,
+      kind: order.kind,
       symbol: order.symbol,
       side: order.side === "BUY" ? "buy" : "sell",
       type: order.type.toLowerCase(),

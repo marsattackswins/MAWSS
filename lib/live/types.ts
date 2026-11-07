@@ -85,6 +85,7 @@ export interface PositionDto {
 
 export interface OrderDto {
   id: string;
+  kind?: "order" | "algo";
   symbol: string;
   side: "buy" | "sell";
   type: "limit" | "stop";

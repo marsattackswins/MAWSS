@@ -8,6 +8,7 @@ import { sseBus } from "@/lib/server/binance/sse";
 import { FakeHttp, FakeWs, freshEnv, installFakes, jsonRes, makeCfg, accountFixture, BTCUSDT_INFO, orderEvent, orderFixture } from "./helpers";
 import { healthSignals } from "@/lib/server/health/state";
 import { getMetrics, METRICS } from "@/lib/server/metrics/collector";
+import { getProtectionIntent, saveProtectionIntent } from "@/lib/server/binance/protection";
 
 /**
  * End-to-end broker lifecycle against an in-memory testnet: startup, clock
@@ -248,6 +249,7 @@ describe("BinanceLiveManager end-to-end (fake testnet)", () => {
       marginRatio: null,
       liquidationDistancesPct: [],
     });
+
     expect(manager.metadata.symbolCount()).toBeGreaterThanOrEqual(1);
     expect(manager.metadata.getConstraints("BTCUSDT")).not.toBeNull();
     expect(liveState().account?.totalWalletBalance).toBe("1000");
@@ -257,6 +259,111 @@ describe("BinanceLiveManager end-to-end (fake testnet)", () => {
     // startup reconciliation recorded
     const runs = getDb().prepare(`SELECT trigger, result FROM reconciliation_runs`).all() as Array<{ trigger: string; result: string }>;
     expect(runs.some((r) => r.trigger === "startup")).toBe(true);
+  });
+
+  test("startup snapshots algo orders for open position symbols", async () => {
+    const position = {
+      symbol: "BTCUSDT",
+      positionAmt: "0.001",
+      entryPrice: "50000",
+      markPrice: "50000",
+      unRealizedProfit: "0",
+      liquidationPrice: "0",
+      leverage: "1",
+      positionSide: "BOTH",
+    };
+    const algo = {
+      algoId: 45,
+      clientAlgoId: "startup-sl-45",
+      algoType: "CONDITIONAL",
+      orderType: "STOP_MARKET",
+      symbol: "BTCUSDT",
+      side: "SELL",
+      positionSide: "BOTH",
+      algoStatus: "NEW",
+      triggerPrice: "49000",
+      quantity: "",
+      closePosition: true,
+      createTime: Date.now(),
+      updateTime: Date.now(),
+      actualOrderId: "",
+    };
+    await startManager({
+      "/fapi/v2/positionRisk": () => [position],
+      "/fapi/v1/openAlgoOrders": () => [algo],
+    });
+
+    expect(http.callsTo("/fapi/v1/openAlgoOrders").length).toBeGreaterThanOrEqual(1);
+    expect(new URL(http.callsTo("/fapi/v1/openAlgoOrders")[0].url).searchParams.get("symbol")).toBe("BTCUSDT");
+    expect(liveState().openOrders.get("startup-sl-45")).toMatchObject({
+      kind: "algo",
+      algoId: 45,
+      closePosition: true,
+      stopPrice: "49000",
+    });
+  });
+
+  test("ALGO_UPDATE refreshes exchange truth and marks failed open protection unprotected", async () => {
+    const position = {
+      symbol: "BTCUSDT",
+      positionAmt: "0.001",
+      entryPrice: "50000",
+      markPrice: "50000",
+      unRealizedProfit: "0",
+      liquidationPrice: "0",
+      leverage: "1",
+      positionSide: "BOTH",
+    };
+    let algoOrders: unknown[] = [];
+    await startManager({
+      "/fapi/v2/positionRisk": () => [position],
+      "/fapi/v1/openAlgoOrders": () => algoOrders,
+    });
+    saveProtectionIntent({
+      symbol: "BTCUSDT",
+      side: "long",
+      tpPrice: null,
+      slPrice: "49000",
+    });
+    const ws = FakeWs.instances.find((instance) => instance.url.includes("LK-E2E"))!;
+    ws.emitMessage({
+      e: "ALGO_UPDATE",
+      E: Date.now(),
+      T: Date.now(),
+      o: {
+        caid: "stream-sl-46",
+        aid: 46,
+        at: "CONDITIONAL",
+        o: "STOP_MARKET",
+        s: "BTCUSDT",
+        S: "SELL",
+        ps: "BOTH",
+        X: "CANCELED",
+        ai: "",
+        rm: "position side mismatch",
+      },
+    });
+    expect(getProtectionIntent("BTCUSDT")?.protectionStatus).toBe("UNPROTECTED");
+
+    algoOrders = [{
+      algoId: 47,
+      clientAlgoId: "stream-sl-47",
+      algoType: "CONDITIONAL",
+      orderType: "STOP_MARKET",
+      symbol: "BTCUSDT",
+      side: "SELL",
+      positionSide: "BOTH",
+      algoStatus: "NEW",
+      triggerPrice: "48800",
+      quantity: "",
+      closePosition: true,
+      createTime: Date.now(),
+      updateTime: Date.now(),
+      actualOrderId: "",
+    }];
+    await waitForRiskSnapshot(() => liveState().openOrders.has("stream-sl-47"));
+    expect(liveState().openOrders.has("stream-sl-46")).toBe(false);
+    expect(http.callsTo("/fapi/v1/openAlgoOrders").length).toBeGreaterThanOrEqual(2);
   });
 
   test("local env can construct a manager (for public data access)", () => {
