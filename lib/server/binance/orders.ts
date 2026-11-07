@@ -37,7 +37,7 @@ import {
   type OrderIntent,
 } from "./intents";
 import { liveState, rememberAlgoOrder, rememberOrder } from "./state";
-import type { BinanceAlgoOrder, BinanceOrder, PlaceAlgoOrderParams, PositionRiskRow } from "./types";
+import type { AlgoCancelAck, BinanceAlgoOrder, BinanceOrder, PlaceAlgoOrderParams, PositionRiskRow } from "./types";
 import { trackOrderCanceled, trackOrderRejected, trackOrderSubmitted, trackOrderSubmissionDuration } from "../metrics/instrument";
 import { normalMutationBlock } from "../profile/admission";
 import { alert } from "../alerts/dispatch";
@@ -1042,6 +1042,34 @@ export class OrderService {
     });
   }
 
+  /**
+   * DELETE /fapi/v1/algoOrder answers with an acknowledgement only. The order
+   * is gone by definition, so record terminal state locally instead of reading
+   * fields (algoStatus/triggerPrice) that the response does not contain.
+   */
+  private syncAlgoCancel(ack: AlgoCancelAck): void {
+    const clientAlgoId = ack.clientAlgoId;
+    if (!clientAlgoId) return;
+    if (this.findIntent(clientAlgoId)) {
+      this.updateIntent(clientAlgoId, {
+        status: "CANCELED",
+        lastState: JSON.stringify({
+          kind: "algo",
+          algoId: ack.algoId ?? null,
+          clientAlgoId,
+          canceled: true,
+          code: ack.code ?? null,
+          msg: ack.msg ?? null,
+        }),
+      });
+    }
+    const current = liveState().orders.get(clientAlgoId);
+    if (current) {
+      liveState().orders.set(clientAlgoId, { ...current, status: "CANCELED", updateTime: Date.now() });
+    }
+    liveState().openOrders.delete(clientAlgoId);
+  }
+
   private syncIntentFromAlgoOrder(clientOrderId: string, order: BinanceAlgoOrder): void {
     rememberAlgoOrder(order);
     const status = normalizeAlgoStatus(order.algoStatus);
@@ -1078,14 +1106,14 @@ export class OrderService {
     audit("operator", "order.cancelling", { symbol, clientOrderId });
     try {
       if (intent.kind === "algo") {
-        const order = await this.deps.rest.cancelAlgoOrder({
+        const ack = await this.deps.rest.cancelAlgoOrder({
           clientAlgoId: intent.clientAlgoId ?? clientOrderId,
         });
-        this.syncIntentFromAlgoOrder(clientOrderId, order);
+        this.syncAlgoCancel(ack);
         trackOrderCanceled(clientOrderId, symbol);
-        audit("operator", "order.cancelled", { symbol, clientOrderId, status: order.algoStatus, kind: "algo" });
-        this.deps.emit("order-update", { clientOrderId, status: order.algoStatus, kind: "algo" });
-        return { ok: true, clientOrderId, status: order.algoStatus, algoId: order.algoId };
+        audit("operator", "order.cancelled", { symbol, clientOrderId, status: "CANCELED", kind: "algo", algoId: ack.algoId });
+        this.deps.emit("order-update", { clientOrderId, status: "CANCELED", kind: "algo" });
+        return { ok: true, clientOrderId, status: "CANCELED", algoId: ack.algoId };
       }
       const order = await this.deps.rest.cancelOrder(symbol, undefined, clientOrderId);
       this.syncIntentFromOrder(clientOrderId, order);
@@ -1608,11 +1636,10 @@ export class OrderService {
       if (intent) this.updateIntent(order.clientOrderId, { status: "CANCEL_REQUESTED" });
       try {
         if (order.kind === "algo") {
-          const canceled = await this.deps.rest.cancelAlgoOrder({
+          const ack = await this.deps.rest.cancelAlgoOrder({
             clientAlgoId: order.clientAlgoId ?? order.clientOrderId,
           });
-          if (intent) this.syncIntentFromAlgoOrder(order.clientOrderId, canceled);
-          else rememberAlgoOrder(canceled);
+          this.syncAlgoCancel(ack);
         } else {
           const canceled = await this.deps.rest.cancelOrder(symbol, undefined, order.clientOrderId);
           if (intent) this.syncIntentFromOrder(order.clientOrderId, canceled);

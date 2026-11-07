@@ -29,9 +29,17 @@ describe("Binance Algo Order REST methods", () => {
     const cfg = freshEnv(makeCfg());
     http = new FakeHttp();
     installFakes(http);
-    http.route("/fapi/v1/algoOrder", () => jsonRes(algoResponse));
+    http.route("/fapi/v1/algoOrder", () => {
+      const method = http.calls[http.calls.length - 1]?.method;
+      // DELETE returns an acknowledgement, not the canceled order's state.
+      return method === "DELETE"
+        ? jsonRes({ algoId: 321, clientAlgoId: "maws-sl-321", code: "200", msg: "success" })
+        : jsonRes(algoResponse);
+    });
     http.route("/fapi/v1/openAlgoOrders", () => jsonRes([algoResponse]));
-    http.route("/fapi/v1/algoOpenOrders", () => jsonRes([algoResponse]));
+    http.route("/fapi/v1/algoOpenOrders", () => jsonRes([
+      { algoId: 321, clientAlgoId: "maws-sl-321", code: "200", msg: "success" },
+    ]));
     http.route("/fapi/v1/openOrders", () => jsonRes([]));
     rest = new BinanceRestClient(cfg, new RateLimiter(cfg.rateInternalPerMin), async () => undefined);
   });
@@ -56,8 +64,10 @@ describe("Binance Algo Order REST methods", () => {
     expect(placed.algoId).toBe(321);
     expect(listed).toHaveLength(1);
     expect(queried.clientAlgoId).toBe("maws-sl-321");
-    expect(canceled.algoStatus).toBe("NEW");
+    expect(canceled).toMatchObject({ algoId: 321, clientAlgoId: "maws-sl-321", code: "200", msg: "success" });
+    expect(canceled).not.toHaveProperty("algoStatus");
     expect(canceledAll).toHaveLength(1);
+    expect(canceledAll[0]).not.toHaveProperty("algoStatus");
 
     const calls = http.calls;
     expect(calls.map((call) => [call.method, new URL(call.url).pathname])).toEqual([

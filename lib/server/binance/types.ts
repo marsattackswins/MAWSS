@@ -180,6 +180,18 @@ export interface AlgoOrderLookup {
   clientAlgoId?: string;
 }
 
+/**
+ * Cancellation acknowledgement from DELETE /fapi/v1/algoOrder (and
+ * /algoOpenOrders). Unlike the query responses this carries no order state,
+ * so callers must not treat it as an updated BinanceAlgoOrder.
+ */
+export interface AlgoCancelAck {
+  algoId: number;
+  clientAlgoId: string;
+  code?: string | number;
+  msg?: string;
+}
+
 export interface ListenKeyResponse {
   listenKey: string;
 }

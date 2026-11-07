@@ -10,6 +10,7 @@ import { getBinanceRestBreaker } from "../resilience/breakers";
 import { CircuitBreakerOpenError } from "../resilience/circuit-breaker";
 import type {
   AccountResponse,
+  AlgoCancelAck,
   AlgoOrderLookup,
   BinanceOrder,
   BinanceAlgoOrder,
@@ -277,23 +278,24 @@ export class BinanceRestClient {
     return this.signedRequest<BinanceAlgoOrder>("POST", "/fapi/v1/algoOrder", query);
   }
 
-  cancelAlgoOrder(lookup: AlgoOrderLookup): Promise<BinanceAlgoOrder> {
-    return this.signedRequest<BinanceAlgoOrder>(
+  /** Returns a cancellation acknowledgement, not the canceled order's state. */
+  cancelAlgoOrder(lookup: AlgoOrderLookup): Promise<AlgoCancelAck> {
+    return this.signedRequest<AlgoCancelAck>(
       "DELETE",
       "/fapi/v1/algoOrder",
       this.algoLookupParams(lookup),
     );
   }
 
-  cancelAllAlgoOrders(symbol: string): Promise<BinanceAlgoOrder[]> {
+  cancelAllAlgoOrders(symbol: string): Promise<AlgoCancelAck[]> {
     if (!symbol) throw new Error("A symbol is required to cancel open algo orders");
-    return this.signedRequest<BinanceAlgoOrder[]>("DELETE", "/fapi/v1/algoOpenOrders", { symbol });
+    return this.signedRequest<AlgoCancelAck[]>("DELETE", "/fapi/v1/algoOpenOrders", { symbol });
   }
 
   /** Emergency path: cancel every conditional order without the normal breaker. */
-  cancelAllAlgoOrdersEmergency(symbol: string): Promise<BinanceAlgoOrder[]> {
+  cancelAllAlgoOrdersEmergency(symbol: string): Promise<AlgoCancelAck[]> {
     if (!symbol) throw new Error("A symbol is required to cancel open algo orders");
-    return this.signedRequest<BinanceAlgoOrder[]>("DELETE", "/fapi/v1/algoOpenOrders", { symbol }, false, true);
+    return this.signedRequest<AlgoCancelAck[]>("DELETE", "/fapi/v1/algoOpenOrders", { symbol }, false, true);
   }
 
   /**

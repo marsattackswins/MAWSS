@@ -204,9 +204,8 @@ function mockProtectionExchange(h: Harness, initial: Array<Record<string, unknow
       const index = algoOrders.findIndex((order) => order.clientAlgoId === query.get("clientAlgoId"));
       if (index < 0) return jsonRes({ code: -2011, msg: "Unknown algo order sent." }, 400);
       const [canceled] = algoOrders.splice(index, 1);
-      canceled.algoStatus = "CANCELED";
-      canceled.updateTime = Date.now();
-      return jsonRes(canceled);
+      // Binance answers DELETE with an acknowledgement, not the canceled order.
+      return jsonRes({ algoId: canceled.algoId, clientAlgoId: canceled.clientAlgoId, code: "200", msg: "success" });
     }
     if (request.method === "GET") {
       const found = algoHistory.find((order) => order.clientAlgoId === query.get("clientAlgoId"));
@@ -609,6 +608,27 @@ describe("cancel flows and races", () => {
     const res = await h.svc.cancelOrder("ghost", "BTCUSDT");
     expect(res.ok).toBe(false);
     expect(h.http.calls).toHaveLength(0);
+  });
+
+  test("algo cancel records terminal state from the DELETE acknowledgement", async () => {
+    const h = setup();
+    const exchange = mockProtectionExchange(h);
+    liveState().positions.set("BTCUSDT", {
+      symbol: "BTCUSDT", side: "long", qty: "0.001", entryPrice: "49000", markPrice: "50000",
+      unrealizedProfit: "1", leverage: "1", liquidationPrice: "0", notional: "50", updatedAt: Date.now(),
+    });
+    const placed = await h.svc.protectPosition({ symbol: "BTCUSDT", slPrice: "48000" });
+    expect(placed.sl?.ok).toBe(true);
+    const clientOrderId = placed.sl!.clientOrderId;
+    expect(liveState().openOrders.has(clientOrderId)).toBe(true);
+
+    const res = await h.svc.cancelOrder(clientOrderId, "BTCUSDT");
+
+    expect(res).toMatchObject({ ok: true, status: "CANCELED" });
+    expect(findByClientOrderId(clientOrderId)?.status).toBe("CANCELED");
+    expect(liveState().openOrders.has(clientOrderId)).toBe(false);
+    expect(liveState().orders.get(clientOrderId)?.status).toBe("CANCELED");
+    expect(exchange.orders).toHaveLength(0);
   });
 });
 
