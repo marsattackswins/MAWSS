@@ -366,28 +366,32 @@ describe("POST /api/live/positions/close logs structured request lines", () => {
 describe("POST /api/live/protect logs structured request lines", () => {
   test("logs ok with symbol after placing a take-profit", async () => {
     const http = new FakeHttp();
-    const exchangeOrders: Array<Record<string, unknown>> = [];
-    http.route("/fapi/v1/order", () => {
+    const algoOrders: Array<Record<string, unknown>> = [];
+    await bootBroker(http, { withPosition: true });
+    http.route("/fapi/v1/openOrders", () => jsonRes([]));
+    http.route("/fapi/v1/openAlgoOrders", () => jsonRes(algoOrders));
+    http.route("/fapi/v1/algoOrder", () => {
       const request = http.calls[http.calls.length - 1];
       const query = new URL(request.url).searchParams;
       if (request.method === "POST") {
-        const order = orderFixture({
-          clientOrderId: query.get("newClientOrderId") ?? "generated",
+        const order = {
+          algoId: algoOrders.length + 1,
+          clientAlgoId: query.get("clientAlgoId") ?? "generated",
+          algoType: "CONDITIONAL",
+          orderType: query.get("type") ?? "TAKE_PROFIT_MARKET",
           symbol: query.get("symbol") ?? "BTCUSDT",
-          side: "SELL",
-          type: query.get("type") ?? "TAKE_PROFIT_MARKET",
-          stopPrice: query.get("stopPrice") ?? "0",
+          side: query.get("side") ?? "SELL",
+          algoStatus: "NEW",
+          triggerPrice: query.get("triggerPrice") ?? "0",
           closePosition: query.get("closePosition") === "true",
-          status: "NEW",
-        });
-        exchangeOrders.push(order);
+          createTime: Date.now(),
+          updateTime: Date.now(),
+        };
+        algoOrders.push(order);
         return jsonRes(order);
       }
-      if (request.method === "GET") return jsonRes({ code: -2013, msg: "Order does not exist." }, 404);
-      return jsonRes({ code: -2011, msg: "Unknown order sent." }, 400);
+      return jsonRes({ code: -2013, msg: "Algo order does not exist." }, 404);
     });
-    await bootBroker(http, { withPosition: true });
-    http.route("/fapi/v1/openOrders", () => jsonRes(exchangeOrders));
     const { sessionId, csrfToken } = newSession();
     const res = await POST_protect(
       liveRequest({
