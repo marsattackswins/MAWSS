@@ -832,6 +832,9 @@ export class OrderService {
         status: "REJECTED",
         lastState: JSON.stringify({ code: err.code, httpStatus: err.httpStatus, retryAfterMs: err.retryAfterMs }),
       });
+      // Requests are paused, so no protective order can be verified or
+      // restored until the ban ends: treat the symbol as unprotected.
+      this.markIpBanUnprotected(symbol, message);
       audit("operator", "order.rejected.ip_ban", { symbol, clientOrderId, httpStatus: err.httpStatus, retryAfterMs: err.retryAfterMs, severity: "high" });
       alert("binance_ip_ban", { symbol, clientOrderId, httpStatus: err.httpStatus, retryAfterMs: err.retryAfterMs, severity: "high" });
       this.deps.emit("order-update", { clientOrderId, status: "REJECTED", error: message, severity: "high" });
@@ -1122,6 +1125,18 @@ export class OrderService {
       this.deps.emit("order-update", { clientOrderId, status: order.status });
       return { ok: true, clientOrderId, status: order.status, exchangeOrderId: order.orderId };
     } catch (err) {
+      if (err instanceof BinanceApiError && err.httpStatus === 418) {
+        const message = "Binance returned HTTP 418 and may have IP-banned this client; all Binance requests are paused until the ban expires";
+        this.deps.freeze(message);
+        this.updateIntent(clientOrderId, {
+          status: "SUBMITTED",
+          lastState: JSON.stringify({ code: err.code, httpStatus: err.httpStatus, retryAfterMs: err.retryAfterMs, cancelBlocked: true }),
+        });
+        this.markIpBanUnprotected(symbol, message);
+        audit("operator", "order.cancel.ip_ban", { symbol, clientOrderId, httpStatus: err.httpStatus, retryAfterMs: err.retryAfterMs, severity: "high" });
+        alert("binance_ip_ban", { symbol, clientOrderId, httpStatus: err.httpStatus, retryAfterMs: err.retryAfterMs, severity: "high" });
+        return { ok: false, clientOrderId, error: message, errorCode: err.code };
+      }
       if (classifyBinanceError(err) === "unknown_outcome") {
         this.updateIntent(clientOrderId, {
           status: "CANCEL_UNKNOWN",
@@ -1904,6 +1919,16 @@ export class OrderService {
       exchangeOrderId: order.kind === "algo" ? null : order.orderId,
       ...(order.algoId != null ? { algoId: order.algoId } : {}),
     };
+  }
+
+  /**
+   * An IP ban stops every Binance request, including the protection checks, so
+   * the affected position can no longer be called protected.
+   */
+  private markIpBanUnprotected(symbol: string, reason: string): void {
+    if (!liveState().positions.has(symbol)) return;
+    setProtectionStatus(symbol, "UNPROTECTED", reason, this.persistenceProfile);
+    this.deps.emit("account-update", { at: Date.now(), protection: symbol, status: "UNPROTECTED" });
   }
 
   private markProtectionUnprotected(symbol: string, reason: string): void {

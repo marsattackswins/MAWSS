@@ -1127,6 +1127,30 @@ describe("position close and native protection", () => {
     expect(h.freezes.join(" ")).toContain("HTTP 418");
   });
 
+  test("418 during a protective cancel freezes and marks protection UNPROTECTED", async () => {
+    const h = setup();
+    mockProtectionExchange(h);
+    liveState().positions.set("BTCUSDT", {
+      symbol: "BTCUSDT", side: "long", qty: "0.001", entryPrice: "49000", markPrice: "50000",
+      unrealizedProfit: "1", leverage: "1", liquidationPrice: "0", notional: "50", updatedAt: Date.now(),
+    });
+    const placed = await h.svc.protectPosition({ symbol: "BTCUSDT", slPrice: "48000" });
+    expect(placed.sl?.ok).toBe(true);
+    h.http.scriptApiError("/fapi/v1/algoOrder", -1003, "IP banned", 418);
+
+    const res = await h.svc.cancelOrder(placed.sl!.clientOrderId, "BTCUSDT");
+
+    expect(res.ok).toBe(false);
+    expect(res.error).toContain("HTTP 418");
+    expect(findByClientOrderId(placed.sl!.clientOrderId)?.status).toBe("SUBMITTED");
+    expect(getProtectionIntent("BTCUSDT")?.protectionStatus).toBe("UNPROTECTED");
+    expect(h.freezes.join(" ")).toContain("HTTP 418");
+    expect(h.emitted.some((entry) =>
+      entry.event === "account-update" &&
+      (entry.data as { status?: string }).status === "UNPROTECTED",
+    )).toBe(true);
+  });
+
   test("transient placement failure retries once without canceling a restored order", async () => {
     const h = setup();
     const exchange = mockProtectionExchange(h, [
