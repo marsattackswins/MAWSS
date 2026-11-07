@@ -18,8 +18,10 @@ import {
   BinanceRestClient,
   classifyBinanceError,
   ERR_INVALID_API_KEY,
+  ERR_ALGO_ORDER_REQUIRED,
   ERR_REDUCE_ONLY_REJECT,
   ERR_UNKNOWN_CANCEL,
+  ERR_UNKNOWN_ORDER,
 } from "./rest";
 import { TransportTimeoutError } from "./transport";
 import { CircuitBreakerOpenError } from "../resilience/circuit-breaker";
@@ -34,9 +36,8 @@ import {
   updateIntent as updateIntentRecord,
   type OrderIntent,
 } from "./intents";
-import { liveState, rememberOrder } from "./state";
-import type { BinanceOrder } from "./types";
-import type { PositionRiskRow } from "./types";
+import { liveState, rememberAlgoOrder, rememberOrder } from "./state";
+import type { BinanceAlgoOrder, BinanceOrder, PlaceAlgoOrderParams, PositionRiskRow } from "./types";
 import { trackOrderCanceled, trackOrderRejected, trackOrderSubmitted, trackOrderSubmissionDuration } from "../metrics/instrument";
 import { normalMutationBlock } from "../profile/admission";
 import { alert } from "../alerts/dispatch";
@@ -167,6 +168,7 @@ export interface OrderResult {
   clientOrderId: string;
   status?: string;
   exchangeOrderId?: number | null;
+  algoId?: number;
   error?: string;
   /** Binance rejection code when the exchange refused the order (e.g. -2022). */
   errorCode?: number;
@@ -219,6 +221,40 @@ export class OrderService {
 
   private sleep(ms: number): Promise<void> {
     return (this.deps.sleep ?? defaultSleep)(ms);
+  }
+
+  private async getOpenOrdersIncludingAlgos(symbol: string): Promise<BinanceOrder[]> {
+    const [orders, algoOrders] = await Promise.all([
+      this.deps.rest.getOpenOrders(symbol),
+      this.deps.rest.getOpenAlgoOrders(symbol),
+    ]);
+    return [...orders, ...algoOrders.map(algoOrderAsBinanceOrder)];
+  }
+
+  private async cancelAlgoOrdersForClose(symbol: string, emergency: boolean): Promise<string | null> {
+    const list = emergency
+      ? this.deps.rest.getOpenAlgoOrdersEmergency.bind(this.deps.rest)
+      : this.deps.rest.getOpenAlgoOrders.bind(this.deps.rest);
+    const cancelAll = emergency
+      ? this.deps.rest.cancelAllAlgoOrdersEmergency.bind(this.deps.rest)
+      : this.deps.rest.cancelAllAlgoOrders.bind(this.deps.rest);
+    const existing = await list(symbol);
+    if (existing.length === 0) return null;
+    await cancelAll(symbol);
+    const remaining = await list(symbol);
+    if (remaining.length > 0) {
+      return `Conditional orders remain open for ${symbol}: ${remaining.map((order) => order.clientAlgoId).join(", ")}`;
+    }
+    for (const order of existing) {
+      const intent = this.findIntent(order.clientAlgoId);
+      const canceled = { ...order, algoStatus: "CANCELED" };
+      if (intent) this.syncIntentFromAlgoOrder(order.clientAlgoId, canceled);
+      else rememberAlgoOrder(canceled);
+      this.deps.emit("order-update", { clientOrderId: order.clientAlgoId, status: "CANCELED", kind: "algo" });
+    }
+    deleteProtectionIntent(symbol, this.persistenceProfile);
+    this.deps.emit("order-update", { symbol, status: "CANCELED", kind: "algo", source: emergency ? "emergency_close" : "close" });
+    return null;
   }
 
   private async getFreshProtectionMark(symbol: string): Promise<ReferencePrice> {
@@ -573,7 +609,7 @@ export class OrderService {
     const closeSide = oldSide === "long" ? "SELL" : "BUY";
     let openOrders: BinanceOrder[];
     try {
-      openOrders = await this.deps.rest.getOpenOrders(input.symbol);
+      openOrders = await this.getOpenOrdersIncludingAlgos(input.symbol);
     } catch (error) {
       this.resetProtectionForReversedPosition(input.symbol, resultingPosition.side);
       const reason = `Reverse confirmed, but old protection could not be listed or canceled: ${String(error)}`;
@@ -721,10 +757,11 @@ export class OrderService {
       }
     }
 
+    const isAlgo = isConditionalOrder(input);
     const { intent, duplicate } = createIntentRecord({
       clientOrderId,
-      clientAlgoId: input.kind === "algo" ? clientOrderId : undefined,
-      kind: input.kind ?? "order",
+      clientAlgoId: isAlgo ? clientOrderId : undefined,
+      kind: isAlgo ? "algo" : "order",
       symbol: input.symbol,
       side: input.side,
       type: input.type,
@@ -747,6 +784,29 @@ export class OrderService {
     const submissionStartedAt = Date.now();
 
     try {
+      if (isAlgo) {
+        const order = await this.deps.rest.placeAlgoOrder(buildAlgoOrderParams(input, clientOrderId));
+        this.syncIntentFromAlgoOrder(clientOrderId, order);
+        trackOrderSubmissionDuration(Date.now() - submissionStartedAt);
+        trackOrderSubmitted(clientOrderId, input.symbol, input.side, input.type);
+        audit("operator", "order.submitted", {
+          symbol: input.symbol,
+          clientOrderId,
+          clientAlgoId: order.clientAlgoId,
+          algoId: order.algoId,
+          status: order.algoStatus,
+          kind: "algo",
+        });
+        this.deps.emit("order-update", { clientOrderId, status: order.algoStatus, kind: "algo" });
+        return {
+          ok: true,
+          clientOrderId,
+          status: order.algoStatus,
+          exchangeOrderId: numericExchangeOrderId(order.actualOrderId),
+          algoId: order.algoId,
+        };
+      }
+
       const params = buildOrderParams(input, clientOrderId);
       const order = input.emergencyClose
         ? await this.deps.rest.placeOrderEmergency(params)
@@ -765,6 +825,24 @@ export class OrderService {
   }
 
   private async handleSubmissionFailure(clientOrderId: string, symbol: string, err: unknown): Promise<OrderResult> {
+    if (err instanceof BinanceApiError && err.httpStatus === 418) {
+      const message = "Binance returned HTTP 418 and may have IP-banned this client; all Binance requests are paused until the ban expires";
+      this.deps.freeze(message);
+      this.updateIntent(clientOrderId, {
+        status: "REJECTED",
+        lastState: JSON.stringify({ code: err.code, httpStatus: err.httpStatus, retryAfterMs: err.retryAfterMs }),
+      });
+      audit("operator", "order.rejected.ip_ban", { symbol, clientOrderId, httpStatus: err.httpStatus, retryAfterMs: err.retryAfterMs, severity: "high" });
+      alert("binance_ip_ban", { symbol, clientOrderId, httpStatus: err.httpStatus, retryAfterMs: err.retryAfterMs, severity: "high" });
+      this.deps.emit("order-update", { clientOrderId, status: "REJECTED", error: message, severity: "high" });
+      return {
+        ok: false,
+        clientOrderId,
+        error: message,
+        errorCode: err.code,
+        failureKind: "transient_or_uncertain",
+      };
+    }
     if (classifyBinanceError(err) === "unknown_outcome") {
       this.updateIntent(clientOrderId, {
         status: "UNCERTAIN",
@@ -781,6 +859,31 @@ export class OrderService {
       };
     }
     if (err instanceof BinanceApiError) {
+      if (err.code === ERR_ALGO_ORDER_REQUIRED) {
+        const message = "Binance rejected a conditional order with -4120; conditional orders must use the Algo Order API. Verify the configured endpoint and API permissions.";
+        this.updateIntent(clientOrderId, { status: "REJECTED", lastState: JSON.stringify({ code: err.code, msg: err.exchangeMsg }) });
+        trackOrderRejected(clientOrderId, symbol, message);
+        audit("operator", "order.rejected.algo_api_configuration", {
+          symbol,
+          clientOrderId,
+          code: err.code,
+          severity: "high",
+        });
+        alert("binance_conditional_algo_api_rejected", {
+          symbol,
+          clientOrderId,
+          code: err.code,
+          severity: "high",
+        });
+        this.deps.emit("order-update", { clientOrderId, status: "REJECTED", error: message, severity: "high" });
+        return {
+          ok: false,
+          clientOrderId,
+          error: message,
+          errorCode: err.code,
+          failureKind: "definite_rejection",
+        };
+      }
       if (err.code === ERR_INVALID_API_KEY) {
         // Fail closed: a rejected key usually means wrong environment scope.
         this.deps.freeze("Binance rejected the API key (-2015); check environment/key scope");
@@ -840,6 +943,34 @@ export class OrderService {
     if (!intent) return;
     for (let i = 0; i < attempts; i++) {
       try {
+        if (intent.kind === "algo") {
+          try {
+            const order = await this.deps.rest.getAlgoOrder({
+              clientAlgoId: intent.clientAlgoId ?? clientOrderId,
+            });
+            this.syncIntentFromAlgoOrder(clientOrderId, order);
+            audit("operator", "order.resolved", { clientOrderId, status: order.algoStatus, attempt: i + 1, kind: "algo" });
+            this.deps.emit("order-update", { clientOrderId, status: order.algoStatus, resolved: true, kind: "algo" });
+            this.maybeUnfreeze();
+            return;
+          } catch (err) {
+            if (!(err instanceof BinanceApiError) || err.code !== ERR_UNKNOWN_ORDER) throw err;
+            const openOrders = await this.deps.rest.getOpenAlgoOrders(intent.symbol);
+            const openOrder = openOrders.find((order) => order.clientAlgoId === (intent.clientAlgoId ?? clientOrderId));
+            if (openOrder) {
+              this.syncIntentFromAlgoOrder(clientOrderId, openOrder);
+              this.maybeUnfreeze();
+              return;
+            }
+            if (i === attempts - 1) {
+              this.updateIntent(clientOrderId, { status: "REJECTED", lastState: JSON.stringify({ resolved: "algo_not_found_on_exchange" }) });
+              this.maybeUnfreeze();
+              return;
+            }
+            await this.sleep(400 * (i + 1));
+            continue;
+          }
+        }
         const order = await this.deps.rest.getOrder(intent.symbol, undefined, clientOrderId);
         if (order) {
           this.syncIntentFromOrder(clientOrderId, order);
@@ -911,6 +1042,24 @@ export class OrderService {
     });
   }
 
+  private syncIntentFromAlgoOrder(clientOrderId: string, order: BinanceAlgoOrder): void {
+    rememberAlgoOrder(order);
+    const status = normalizeAlgoStatus(order.algoStatus);
+    this.updateIntent(clientOrderId, {
+      status,
+      lastState: JSON.stringify({
+        kind: "algo",
+        algoId: order.algoId,
+        clientAlgoId: order.clientAlgoId,
+        status: order.algoStatus,
+        triggerPrice: order.triggerPrice,
+        actualOrderId: order.actualOrderId ?? null,
+        actualQty: order.actualQty ?? null,
+        updateTime: order.updateTime,
+      }),
+    });
+  }
+
   async cancelOrder(clientOrderId: string, symbol: string): Promise<OrderResult> {
     return withRiskMutation(() => this.cancelOrderSerialized(clientOrderId, symbol));
   }
@@ -928,6 +1077,16 @@ export class OrderService {
     this.updateIntent(clientOrderId, { status: "CANCEL_REQUESTED" });
     audit("operator", "order.cancelling", { symbol, clientOrderId });
     try {
+      if (intent.kind === "algo") {
+        const order = await this.deps.rest.cancelAlgoOrder({
+          clientAlgoId: intent.clientAlgoId ?? clientOrderId,
+        });
+        this.syncIntentFromAlgoOrder(clientOrderId, order);
+        trackOrderCanceled(clientOrderId, symbol);
+        audit("operator", "order.cancelled", { symbol, clientOrderId, status: order.algoStatus, kind: "algo" });
+        this.deps.emit("order-update", { clientOrderId, status: order.algoStatus, kind: "algo" });
+        return { ok: true, clientOrderId, status: order.algoStatus, algoId: order.algoId };
+      }
       const order = await this.deps.rest.cancelOrder(symbol, undefined, clientOrderId);
       this.syncIntentFromOrder(clientOrderId, order);
       trackOrderCanceled(clientOrderId, symbol);
@@ -948,6 +1107,31 @@ export class OrderService {
       if (err instanceof BinanceApiError && err.code === ERR_UNKNOWN_CANCEL) {
         // The order vanished before our cancel: determine what actually happened.
         try {
+          if (intent.kind === "algo") {
+            try {
+              const algoOrder = await this.deps.rest.getAlgoOrder({
+                clientAlgoId: intent.clientAlgoId ?? clientOrderId,
+              });
+              this.syncIntentFromAlgoOrder(clientOrderId, algoOrder);
+              audit("operator", "order.cancel.race_resolved", {
+                symbol,
+                clientOrderId,
+                status: algoOrder.algoStatus,
+                kind: "algo",
+              });
+              this.deps.emit("order-update", { clientOrderId, status: algoOrder.algoStatus, kind: "algo" });
+              return { ok: true, clientOrderId, status: algoOrder.algoStatus, algoId: algoOrder.algoId };
+            } catch (lookupError) {
+              if (!(lookupError instanceof BinanceApiError) || lookupError.code !== ERR_UNKNOWN_ORDER) throw lookupError;
+            }
+            const openAlgoOrders = await this.deps.rest.getOpenAlgoOrders(symbol);
+            if (openAlgoOrders.some((order) => order.clientAlgoId === (intent.clientAlgoId ?? clientOrderId))) {
+              this.updateIntent(clientOrderId, { status: "SUBMITTED" });
+              return { ok: false, clientOrderId, error: "Algo order is still open; cancellation was not confirmed" };
+            }
+            this.updateIntent(clientOrderId, { status: "RESOLVED", lastState: JSON.stringify({ note: "unknown_algo_cancel_not_found" }) });
+            return { ok: true, clientOrderId, status: "RESOLVED" };
+          }
           const order = await this.deps.rest.getOrder(symbol, undefined, clientOrderId);
           if (order) {
             this.syncIntentFromOrder(clientOrderId, order);
@@ -992,6 +1176,11 @@ export class OrderService {
         // cause Binance to reject this close with -2022. Cancel them before the
         // reduce-only market order so closing also cannot leave stale exits behind.
         await this.deps.rest.cancelAllOpenOrdersEmergency(symbol);
+        const algoCancelError = await this.cancelAlgoOrdersForClose(symbol, true);
+        if (algoCancelError) {
+          this.markProtectionUnprotected(symbol, algoCancelError);
+          return { ok: false, clientOrderId: "", error: algoCancelError };
+        }
       } catch (err) {
         if (err instanceof CircuitBreakerOpenError) throw err;
         const message = err instanceof BinanceApiError ? err.exchangeMsg : String(err);
@@ -1047,6 +1236,19 @@ export class OrderService {
     const row = rows.find((candidate) => candidate.symbol === symbol && !isZero(parseDec(candidate.positionAmt)));
     if (!row) return { ok: false, clientOrderId: "", error: `No open position for ${symbol}` };
 
+    try {
+      requireSubmissionAllowed(this.deps.cfg);
+      const algoCancelError = await this.cancelAlgoOrdersForClose(symbol, false);
+      if (algoCancelError) {
+        this.markProtectionUnprotected(symbol, algoCancelError);
+        return { ok: false, clientOrderId: "", error: algoCancelError };
+      }
+    } catch (err) {
+      if (err instanceof SubmissionBlockedError) return { ok: false, clientOrderId: "", error: err.message };
+      if (err instanceof CircuitBreakerOpenError) throw err;
+      return { ok: false, clientOrderId: "", error: `Unable to cancel conditional orders for ${symbol}: ${String(err)}` };
+    }
+
     const amount = parseDec(row.positionAmt);
     const short = isNegative(amount);
     const qty = short ? toStr({ units: -amount.units, scale: amount.scale }) : toStr(amount);
@@ -1065,7 +1267,7 @@ export class OrderService {
         }),
       async () => {
         const [orders, rows] = await Promise.all([
-          this.deps.rest.getOpenOrders(symbol),
+          this.getOpenOrdersIncludingAlgos(symbol),
           this.deps.rest.getPositionRisk(symbol),
         ]);
         const row = rows.find((candidate) => candidate.symbol === symbol);
@@ -1121,7 +1323,7 @@ export class OrderService {
   }
 
   private async removeProtectionSerialized(symbol: string): Promise<{ ok: boolean; error?: string }> {
-    const openOrders = await this.deps.rest.getOpenOrders(symbol);
+    const openOrders = await this.getOpenOrdersIncludingAlgos(symbol);
     const canceled: string[] = [];
     const failures: string[] = [];
     let breakerError: CircuitBreakerOpenError | undefined;
@@ -1145,7 +1347,7 @@ export class OrderService {
     }
     let remaining: BinanceOrder[];
     try {
-      remaining = await this.deps.rest.getOpenOrders(symbol);
+      remaining = await this.getOpenOrdersIncludingAlgos(symbol);
     } catch (err) {
       if (err instanceof CircuitBreakerOpenError) breakerError = err;
       failures.push(`Could not verify remaining protection: ${String(err)}`);
@@ -1271,7 +1473,7 @@ export class OrderService {
 
     let openOrders: BinanceOrder[];
     try {
-      openOrders = await this.deps.rest.getOpenOrders(input.symbol);
+      openOrders = await this.getOpenOrdersIncludingAlgos(input.symbol);
     } catch (err) {
       const error = `Could not verify existing protective orders: ${String(err)}`;
       this.markProtectionUnprotected(input.symbol, error);
@@ -1317,7 +1519,7 @@ export class OrderService {
 
       let finalOrders: BinanceOrder[];
       try {
-        finalOrders = await this.deps.rest.getOpenOrders(input.symbol);
+        finalOrders = await this.getOpenOrdersIncludingAlgos(input.symbol);
       } catch (err) {
         if (err instanceof CircuitBreakerOpenError) throw err;
         const error = `Could not verify final protective orders: ${String(err)}`;
@@ -1405,16 +1607,59 @@ export class OrderService {
       const intent = this.findIntent(order.clientOrderId);
       if (intent) this.updateIntent(order.clientOrderId, { status: "CANCEL_REQUESTED" });
       try {
-        const canceled = await this.deps.rest.cancelOrder(symbol, undefined, order.clientOrderId);
-        if (intent) this.syncIntentFromOrder(order.clientOrderId, canceled);
+        if (order.kind === "algo") {
+          const canceled = await this.deps.rest.cancelAlgoOrder({
+            clientAlgoId: order.clientAlgoId ?? order.clientOrderId,
+          });
+          if (intent) this.syncIntentFromAlgoOrder(order.clientOrderId, canceled);
+          else rememberAlgoOrder(canceled);
+        } else {
+          const canceled = await this.deps.rest.cancelOrder(symbol, undefined, order.clientOrderId);
+          if (intent) this.syncIntentFromOrder(order.clientOrderId, canceled);
+          else rememberOrder(canceled);
+        }
         liveState().openOrders.delete(order.clientOrderId);
         audit("operator", "order.protection.cancelled", { symbol, clientOrderId: order.clientOrderId, type }, undefined, this.persistenceProfile);
       } catch (err) {
         if (err instanceof CircuitBreakerOpenError) throw err;
+        if (order.kind === "algo") {
+          let exchangeOrder: BinanceAlgoOrder | null = null;
+          try {
+            exchangeOrder = await this.deps.rest.getAlgoOrder({
+              clientAlgoId: order.clientAlgoId ?? order.clientOrderId,
+            });
+          } catch (queryError) {
+            if (queryError instanceof CircuitBreakerOpenError) throw queryError;
+            if (!(queryError instanceof BinanceApiError) || queryError.code !== ERR_UNKNOWN_ORDER) {
+              return `Could not reconcile Algo ${type} cancellation: ${String(queryError)}`;
+            }
+          }
+          const currentAlgoOrders = await this.deps.rest.getOpenAlgoOrders(symbol);
+          if (currentAlgoOrders.some((candidate) => candidate.clientAlgoId === (order.clientAlgoId ?? order.clientOrderId))) {
+            return `Could not confirm cancellation of existing ${type}: ${String(err)}`;
+          }
+          if (exchangeOrder && !["CANCELED", "EXPIRED", "REJECTED"].includes(exchangeOrder.algoStatus)) {
+            return `Algo ${type} is no longer listed as open but reports ${exchangeOrder.algoStatus}; cancellation is uncertain`;
+          }
+          if (intent) {
+            if (exchangeOrder) this.syncIntentFromAlgoOrder(order.clientOrderId, exchangeOrder);
+            else this.updateIntent(order.clientOrderId, { status: "CANCELED" });
+          }
+          if (exchangeOrder) rememberAlgoOrder(exchangeOrder);
+          else {
+            const current = liveState().orders.get(order.clientOrderId);
+            if (current) {
+              const canceled = { ...current, status: "CANCELED", updateTime: Date.now() };
+              liveState().orders.set(order.clientOrderId, canceled);
+              liveState().openOrders.delete(order.clientOrderId);
+            }
+          }
+          continue;
+        }
         let remaining: BinanceOrder[];
         try {
           await this.sleep(250);
-          remaining = await this.deps.rest.getOpenOrders(symbol);
+          remaining = await this.getOpenOrdersIncludingAlgos(symbol);
         } catch (reconcileError) {
           if (reconcileError instanceof CircuitBreakerOpenError) throw reconcileError;
           return `Could not reconcile cancel outcome: ${String(reconcileError)}`;
@@ -1437,19 +1682,28 @@ export class OrderService {
     clientOrderId: string,
   ): Promise<{ order: BinanceOrder | null; absent: boolean }> {
     await this.sleep(250);
-    const orders = await this.deps.rest.getOpenOrders(symbol);
+    const orders = await this.getOpenOrdersIncludingAlgos(symbol);
     const openOrder = this.findProtectiveOrder(orders, type, side, price);
     if (openOrder) return { order: openOrder, absent: false };
-    const exchangeOrder = await this.deps.rest.getOrder(symbol, undefined, clientOrderId);
-    if (exchangeOrder && !["CANCELED", "EXPIRED", "REJECTED", "FILLED"].includes(exchangeOrder.status)) {
+    let exchangeOrder: BinanceAlgoOrder | null = null;
+    try {
+      exchangeOrder = await this.deps.rest.getAlgoOrder({ clientAlgoId: clientOrderId });
+    } catch (err) {
+      if (!(err instanceof BinanceApiError) || err.code !== ERR_UNKNOWN_ORDER) throw err;
+    }
+    if (exchangeOrder && !["CANCELED", "EXPIRED", "REJECTED"].includes(exchangeOrder.algoStatus)) {
       return { order: null, absent: false };
     }
-    this.updateIntent(clientOrderId, {
-      status: exchangeOrder?.status === "FILLED" ? "FILLED" : "REJECTED",
-      lastState: JSON.stringify({ resolved: "protective_order_absent", exchangeStatus: exchangeOrder?.status ?? null }),
+    if (exchangeOrder) this.syncIntentFromAlgoOrder(clientOrderId, exchangeOrder);
+    else this.updateIntent(clientOrderId, {
+      status: "REJECTED",
+      lastState: JSON.stringify({ resolved: "protective_order_absent", exchangeStatus: null }),
     });
     this.maybeUnfreeze();
-    return { order: null, absent: true };
+    return {
+      order: null,
+      absent: !exchangeOrder || ["CANCELED", "EXPIRED", "REJECTED"].includes(exchangeOrder.algoStatus),
+    };
   }
 
   private async replaceProtectionOrder(
@@ -1465,7 +1719,7 @@ export class OrderService {
       error,
       ...extra,
     });
-    const current = await this.deps.rest.getOpenOrders(symbol);
+    const current = await this.getOpenOrdersIncludingAlgos(symbol);
     const alreadyPresent = this.findProtectiveOrder(current, type, side, price);
     if (alreadyPresent) return this.protectiveOrderResult(alreadyPresent);
 
@@ -1620,7 +1874,8 @@ export class OrderService {
       ok: true,
       clientOrderId: order.clientOrderId,
       status: order.status,
-      exchangeOrderId: order.orderId,
+      exchangeOrderId: order.kind === "algo" ? null : order.orderId,
+      ...(order.algoId != null ? { algoId: order.algoId } : {}),
     };
   }
 
@@ -1739,6 +1994,74 @@ function buildOrderParams(input: SubmitOrderInput, clientOrderId: string) {
     reduceOnly: input.reduceOnly || undefined,
     timeInForce: input.type === "LIMIT" ? "GTC" : undefined,
     clientOrderId,
+  };
+}
+
+function isConditionalOrder(input: SubmitOrderInput): boolean {
+  return input.kind === "algo" || input.type === "STOP_MARKET" || input.type === "TAKE_PROFIT_MARKET";
+}
+
+function buildAlgoOrderParams(input: SubmitOrderInput, clientAlgoId: string): PlaceAlgoOrderParams {
+  if (!input.stopPrice) throw new Error(`${input.type} requires a trigger price`);
+  const base = {
+    algoType: "CONDITIONAL" as const,
+    symbol: input.symbol,
+    side: input.side,
+    type: input.type as "STOP_MARKET" | "TAKE_PROFIT_MARKET",
+    triggerPrice: input.stopPrice,
+    clientAlgoId,
+  };
+  if (input.closePosition) return { ...base, closePosition: true };
+  if (!input.qty) throw new Error(`${input.type} requires a quantity`);
+  return {
+    ...base,
+    closePosition: false,
+    quantity: input.qty,
+    ...(input.reduceOnly ? { reduceOnly: true } : {}),
+  };
+}
+
+function normalizeAlgoStatus(status: string): OrderIntent["status"] {
+  switch (status) {
+    case "CANCELED":
+      return "CANCELED";
+    case "REJECTED":
+      return "REJECTED";
+    case "EXPIRED":
+      return "EXPIRED";
+    case "FINISHED":
+      return "FILLED";
+    default:
+      return "SUBMITTED";
+  }
+}
+
+function numericExchangeOrderId(value: number | string | null | undefined): number | null {
+  if (value == null || value === "" || !Number.isFinite(Number(value))) return null;
+  return Number(value);
+}
+
+function algoOrderAsBinanceOrder(order: BinanceAlgoOrder): BinanceOrder {
+  return {
+    orderId: numericExchangeOrderId(order.actualOrderId) ?? order.algoId,
+    clientOrderId: order.clientAlgoId,
+    clientAlgoId: order.clientAlgoId,
+    algoId: order.algoId,
+    kind: "algo",
+    symbol: order.symbol,
+    side: order.side,
+    type: order.orderType,
+    status: order.algoStatus,
+    price: order.price ?? "0",
+    stopPrice: order.triggerPrice,
+    origQty: order.quantity ?? "0",
+    executedQty: order.actualQty ?? "0",
+    cumQuote: "0",
+    avgPrice: order.actualPrice ?? "0",
+    reduceOnly: !!order.reduceOnly,
+    closePosition: !!order.closePosition,
+    time: order.createTime,
+    updateTime: order.updateTime,
   };
 }
 

@@ -185,15 +185,8 @@ export async function cleanupTestnetState(manager: BinanceLiveManager): Promise<
       if (Number(pos.qty) === 0) continue;
 
       log(`Closing position ${pos.symbol} ${pos.side} ${pos.qty}...`);
-      const closeSide = pos.side === "long" ? "SELL" : "BUY";
       try {
-        await manager.orders.submitOrder({
-          symbol: pos.symbol,
-          side: closeSide,
-          type: "MARKET",
-          qty: pos.qty,
-          clientOrderId: manager.newClientOrderId("cleanup"),
-        });
+        await manager.orders.closePosition(pos.symbol);
       } catch (err) {
         log(`Failed to close ${pos.symbol}:`, err);
       }

@@ -86,6 +86,9 @@ export interface PositionRiskRow {
 export interface BinanceOrder {
   orderId: number;
   clientOrderId: string;
+  clientAlgoId?: string;
+  algoId?: number;
+  kind?: "order" | "algo";
   symbol: string;
   side: "BUY" | "SELL";
   type: string;

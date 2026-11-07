@@ -244,6 +244,31 @@ positions, both margin-health checks pass without requiring those values.
 Reduce-only, close-position, `isClose`, and emergency-close orders remain
 exempt so they can reduce risk.
 
+### Binance Conditional Algo Orders
+
+`STOP_MARKET` and `TAKE_PROFIT_MARKET` orders use Binance's USDⓈ-M Algo Order
+API (`POST/DELETE /fapi/v1/algoOrder`, `GET /fapi/v1/openAlgoOrders`, and
+`DELETE /fapi/v1/algoOpenOrders`). They are not submitted or discovered through
+the standard `/fapi/v1/order` and `/fapi/v1/openOrders` endpoints. The server
+maps `triggerPrice` and `clientAlgoId` into its normalized live-order state;
+`ALGO_UPDATE` events are followed by REST refreshes before protection decisions.
+
+Close-position TP/SL algo orders do not add gross exposure and bypass the
+risk-increasing-order checks, so they cannot block their own placement. They do
+count toward the open-order count used to gate later risk-increasing orders.
+Standalone quantity-based conditional orders are risk-checked and count toward
+that cap.
+
+HTTP 429 responses are returned to the operation only after one bounded wait
+using `Retry-After` (maximum 30 seconds); the order service then follows its
+normal definite-rejection/rollback path without a blind retry. HTTP 418 pauses
+all Binance REST requests until the supplied `Retry-After` period expires. If a
+418 response has no usable `Retry-After`, the pause remains latched; confirm the
+exchange ban has expired before restarting MAWS. The service marks affected
+protection UNPROTECTED and emits a high-severity alert rather than retrying.
+Binance error `-4120` is surfaced as a high-severity Algo API configuration
+error.
+
 ### Circuit Breaker Variables
 
 #### Binance REST API Breaker

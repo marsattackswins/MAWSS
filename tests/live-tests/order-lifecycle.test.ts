@@ -22,6 +22,7 @@ import { TransportTimeoutError } from "@/lib/server/binance/transport";
 import { RUNTIME_KEYS, setRuntime } from "@/lib/server/runtime/flags";
 import type { EnvConfig } from "@/lib/server/env/config";
 import { persistenceProfileFromConfig } from "@/lib/server/profile/context";
+import { getDb } from "@/lib/server/db/connection";
 import { BTCUSDT_INFO, FakeHttp, freshEnv, installFakes, jsonRes, makeCfg, orderFixture } from "./helpers";
 
 const flush = async () => {
@@ -94,6 +95,7 @@ function setup(
 }
 
 const placeCalls = (h: Harness) => h.http.callsTo("/fapi/v1/order").filter((c) => c.method === "POST");
+const algoPlaceCalls = (h: Harness) => h.http.callsTo("/fapi/v1/algoOrder").filter((c) => c.method === "POST");
 const queryOf = (c: { url: string }) => new URLSearchParams(c.url.split("?")[1]);
 
 function reverseRiskSnapshot(overrides: Partial<RiskSnapshot> = {}): RiskSnapshot {
@@ -168,29 +170,57 @@ function installReverseExchange(
 }
 
 function mockProtectionExchange(h: Harness, initial: Array<Record<string, unknown>> = []) {
-  const orders = [...initial];
+  const orders: Array<Record<string, unknown>> = [];
+  const algoOrders = initial.map((order, index) => ({
+    algoId: index + 1,
+    clientAlgoId: String(order.clientOrderId ?? `initial-algo-${index + 1}`),
+    algoType: "CONDITIONAL",
+    orderType: String(order.type ?? "STOP_MARKET"),
+    symbol: String(order.symbol ?? "BTCUSDT"),
+    side: String(order.side ?? "SELL"),
+    algoStatus: String(order.status ?? "NEW"),
+    triggerPrice: String(order.stopPrice ?? "0"),
+    closePosition: Boolean(order.closePosition),
+    quantity: String(order.origQty ?? "0"),
+    actualQty: String(order.executedQty ?? "0"),
+    actualPrice: String(order.avgPrice ?? "0"),
+    createTime: Number(order.time ?? Date.now()),
+    updateTime: Number(order.updateTime ?? Date.now()),
+  }));
+  const algoHistory = [...algoOrders];
+  let nextAlgoId = algoOrders.length + 1;
   let postFailures = 0;
   const failedPrices = new Map<string, number>();
   const postErrors: Error[] = [];
+  const postResponses: Array<{ status: number; code: number; msg: string; headers?: Record<string, string> }> = [];
   let onPostFailure: (() => void) | undefined;
   h.http.route("/fapi/v1/openOrders", () => jsonRes(orders));
-  h.http.route("/fapi/v1/order", () => {
+  h.http.route("/fapi/v1/openAlgoOrders", () => jsonRes(algoOrders));
+  h.http.route("/fapi/v1/algoOrder", () => {
     const request = h.http.calls[h.http.calls.length - 1];
     const url = new URL(request.url);
     const query = url.searchParams;
     if (request.method === "DELETE") {
-      const index = orders.findIndex((order) => order.clientOrderId === query.get("origClientOrderId"));
-      if (index < 0) return jsonRes({ code: -2011, msg: "Unknown order sent." }, 400);
-      const [canceled] = orders.splice(index, 1);
-      return jsonRes({ ...canceled, status: "CANCELED" });
+      const index = algoOrders.findIndex((order) => order.clientAlgoId === query.get("clientAlgoId"));
+      if (index < 0) return jsonRes({ code: -2011, msg: "Unknown algo order sent." }, 400);
+      const [canceled] = algoOrders.splice(index, 1);
+      canceled.algoStatus = "CANCELED";
+      canceled.updateTime = Date.now();
+      return jsonRes(canceled);
     }
     if (request.method === "GET") {
-      const found = orders.find((order) => order.clientOrderId === query.get("origClientOrderId"));
-      return found ? jsonRes(found) : jsonRes({ code: -2013, msg: "Order does not exist." }, 404);
+      const found = algoHistory.find((order) => order.clientAlgoId === query.get("clientAlgoId"));
+      return found ? jsonRes(found) : jsonRes({ code: -2013, msg: "Algo order does not exist." }, 404);
     }
     if (request.method === "POST") {
       if (postErrors.length > 0) throw postErrors.shift()!;
-      const stopPrice = query.get("stopPrice") ?? "";
+      const scriptedResponse = postResponses.shift();
+      if (scriptedResponse) {
+        const response = jsonRes({ code: scriptedResponse.code, msg: scriptedResponse.msg }, scriptedResponse.status);
+        response.headers = scriptedResponse.headers ?? {};
+        return response;
+      }
+      const stopPrice = query.get("triggerPrice") ?? "";
       const failPriceCount = failedPrices.get(stopPrice) ?? 0;
       if (postFailures > 0 || failPriceCount > 0) {
         if (postFailures > 0) postFailures -= 1;
@@ -199,22 +229,41 @@ function mockProtectionExchange(h: Harness, initial: Array<Record<string, unknow
         onPostFailure?.();
         return jsonRes({ code: -1000, msg: "simulated protective placement failure" }, 400);
       }
-      const order = orderFixture({
-        clientOrderId: query.get("newClientOrderId") ?? "generated",
+      const order = {
+        algoId: nextAlgoId++,
+        clientAlgoId: query.get("clientAlgoId") ?? "generated",
+        algoType: "CONDITIONAL",
+        orderType: query.get("type") ?? "STOP_MARKET",
         symbol: query.get("symbol") ?? "BTCUSDT",
         side: query.get("side") === "SELL" ? "SELL" : "BUY",
-        type: query.get("type") ?? "STOP_MARKET",
-        stopPrice: query.get("stopPrice") ?? "0",
+        algoStatus: "NEW",
+        triggerPrice: query.get("triggerPrice") ?? "0",
         closePosition: query.get("closePosition") === "true",
-        status: "NEW",
-      });
-      orders.push(order);
+        quantity: query.get("quantity") ?? "0",
+        actualQty: "0",
+        actualPrice: "0",
+        createTime: Date.now(),
+        updateTime: Date.now(),
+      };
+      algoOrders.push(order);
+      algoHistory.push(order);
       return jsonRes(order);
     }
     return jsonRes({ code: -1000, msg: "unsupported test method" }, 400);
   });
+  h.http.route("/fapi/v1/algoOpenOrders", () => {
+    const request = h.http.calls[h.http.calls.length - 1];
+    const symbol = new URL(request.url).searchParams.get("symbol");
+    const removed = algoOrders.filter((order) => order.symbol === symbol);
+    for (const order of removed) order.algoStatus = "CANCELED";
+    for (let index = algoOrders.length - 1; index >= 0; index--) {
+      if (algoOrders[index].symbol === symbol) algoOrders.splice(index, 1);
+    }
+    return jsonRes(removed);
+  });
   return {
-    orders,
+    orders: algoOrders,
+    algoOrders,
     failPosts(count: number) {
       postFailures = count;
     },
@@ -224,6 +273,9 @@ function mockProtectionExchange(h: Harness, initial: Array<Record<string, unknow
     },
     throwOnPosts(errors: Error[]) {
       postErrors.push(...errors);
+    },
+    respondToPost(status: number, code: number, msg: string, headers?: Record<string, string>) {
+      postResponses.push({ status, code, msg, headers });
     },
   };
 }
@@ -561,6 +613,83 @@ describe("cancel flows and races", () => {
 });
 
 describe("position close and native protection", () => {
+  test.each(["STOP_MARKET", "TAKE_PROFIT_MARKET"] as const)(
+    "%s uses only the Algo Order API",
+    async (type) => {
+      const h = setup({ risk: { ...makeCfg().risk, maxOrderNotionalUsd: 100 } });
+      mockProtectionExchange(h);
+      const clientOrderId = `standalone-${type.toLowerCase()}`;
+      const res = await h.svc.submitOrder({
+        symbol: "BTCUSDT",
+        side: type === "STOP_MARKET" ? "SELL" : "BUY",
+        type,
+        qty: "0.001",
+        stopPrice: type === "STOP_MARKET" ? "49000" : "51000",
+        clientOrderId,
+      });
+
+      expect(res.ok).toBe(true);
+      expect(algoPlaceCalls(h)).toHaveLength(1);
+      expect(h.http.callsTo("/fapi/v1/order").filter((call) => call.method === "POST")).toHaveLength(0);
+      const params = queryOf(algoPlaceCalls(h)[0]);
+      expect(params.get("clientAlgoId")).toBe(clientOrderId);
+      expect(params.get("triggerPrice")).toBe(type === "STOP_MARKET" ? "49000" : "51000");
+    },
+  );
+
+  test("-4120 is surfaced as a loud Algo API configuration error", async () => {
+    const h = setup();
+    mockProtectionExchange(h);
+    h.http.scriptApiError("/fapi/v1/algoOrder", -4120, "Order type not supported on this endpoint", 400);
+
+    const result = await h.svc.submitOrder({
+      symbol: "BTCUSDT",
+      side: "SELL",
+      type: "STOP_MARKET",
+      qty: "0.001",
+      stopPrice: "49000",
+      clientOrderId: "algo-required",
+    });
+
+    expect(result).toMatchObject({
+      ok: false,
+      errorCode: -4120,
+      failureKind: "definite_rejection",
+    });
+    expect(result.error).toContain("Algo Order API");
+    expect(findByClientOrderId("algo-required")?.status).toBe("REJECTED");
+    expect(getDb().prepare("SELECT action FROM audit_log WHERE action = ?").get("order.rejected.algo_api_configuration")).toBeTruthy();
+  });
+
+  test("removeProtection cancels Algo orders and deletes the intent", async () => {
+    const h = setup();
+    const exchange = mockProtectionExchange(h, [
+      orderFixture({
+        clientOrderId: "remove-tp",
+        type: "TAKE_PROFIT_MARKET",
+        side: "SELL",
+        stopPrice: "52000",
+        closePosition: true,
+      }),
+      orderFixture({
+        clientOrderId: "remove-sl",
+        type: "STOP_MARKET",
+        side: "SELL",
+        stopPrice: "48000",
+        closePosition: true,
+      }),
+    ]);
+    saveProtectionIntent({ symbol: "BTCUSDT", side: "long", tpPrice: "52000", slPrice: "48000" });
+
+    const result = await h.svc.removeProtection("BTCUSDT");
+
+    expect(result).toEqual({ ok: true });
+    expect(exchange.algoOrders).toHaveLength(0);
+    expect(h.http.callsTo("/fapi/v1/algoOrder").filter((call) => call.method === "DELETE")).toHaveLength(2);
+    expect(h.http.callsTo("/fapi/v1/order").filter((call) => call.method === "DELETE")).toHaveLength(0);
+    expect(getProtectionIntent("BTCUSDT")).toBeNull();
+  });
+
   test("closePosition submits reduce-only MARKET on the opposite side", async () => {
     const h = setup();
     liveState().positions.set("BTCUSDT", {
@@ -661,15 +790,15 @@ describe("position close and native protection", () => {
     const out = await h.svc.protectPosition({ symbol: "BTCUSDT", tpPrice: "45000.5", slPrice: "52000.5" });
     expect(out.tp).toMatchObject({ ok: true });
     expect(out.sl?.ok).toBe(true);
-    const posts = placeCalls(h).map((c) => queryOf(c));
+    const posts = algoPlaceCalls(h).map((c) => queryOf(c));
     const tp = posts.find((q) => q.get("type") === "TAKE_PROFIT_MARKET");
     const sl = posts.find((q) => q.get("type") === "STOP_MARKET");
     expect(tp).toBeDefined();
     expect(sl).toBeDefined();
     expect(tp?.get("closePosition")).toBe("true");
     expect(sl?.get("closePosition")).toBe("true");
-    expect(tp?.get("stopPrice")).toBe("45000.5");
-    expect(sl?.get("stopPrice")).toBe("52000.5");
+    expect(tp?.get("triggerPrice")).toBe("45000.5");
+    expect(sl?.get("triggerPrice")).toBe("52000.5");
     expect(tp?.get("side")).toBe("BUY"); // short position closes via BUY
     // closePosition=true orders never carry a quantity.
     expect(tp?.get("quantity")).toBeNull();
@@ -693,8 +822,8 @@ describe("position close and native protection", () => {
     const out = await h.svc.protectPosition({ symbol: "BTCUSDT", tpPrice: "50000" });
     expect(out.tp?.ok).toBe(false);
     expect(out.tp?.error).toContain("immediately-triggering");
-    expect(exchange.orders.map((order) => order.clientOrderId)).toEqual(["old-tp-invalid"]);
-    expect(h.http.callsTo("/fapi/v1/order").filter((call) => call.method === "DELETE")).toHaveLength(0);
+    expect(exchange.orders.map((order) => order.clientAlgoId)).toEqual(["old-tp-invalid"]);
+    expect(h.http.callsTo("/fapi/v1/algoOrder").filter((call) => call.method === "DELETE")).toHaveLength(0);
   });
 
   test("short SL below mark is rejected before exchange traffic", async () => {
@@ -734,7 +863,7 @@ describe("position close and native protection", () => {
 
     expect(out.tp?.ok).toBe(true);
     expect(h.http.callsTo("/fapi/v1/premiumIndex")).toHaveLength(1);
-    expect(h.http.callsTo("/fapi/v1/order").filter((call) => call.method === "DELETE")).toHaveLength(1);
+    expect(h.http.callsTo("/fapi/v1/algoOrder").filter((call) => call.method === "DELETE")).toHaveLength(1);
   });
 
   test("failed fresh-mark fetch rejects before canceling existing protection", async () => {
@@ -760,8 +889,8 @@ describe("position close and native protection", () => {
 
     expect(out.tp?.ok).toBe(false);
     expect(out.tp?.error).toContain("Unable to fetch a fresh mark price");
-    expect(exchange.orders.map((order) => order.clientOrderId)).toEqual(["old-tp-mark-failure"]);
-    expect(h.http.callsTo("/fapi/v1/order").filter((call) => call.method === "DELETE" || call.method === "POST")).toHaveLength(0);
+    expect(exchange.orders.map((order) => order.clientAlgoId)).toEqual(["old-tp-mark-failure"]);
+    expect(h.http.callsTo("/fapi/v1/algoOrder").filter((call) => call.method === "DELETE" || call.method === "POST")).toHaveLength(0);
   });
 
   test("rollback skips an old stop passed by the market and alerts high severity", async () => {
@@ -793,7 +922,7 @@ describe("position close and native protection", () => {
 
       expect(out.sl?.ok).toBe(false);
       expect(out.sl?.error).toContain("Exchange rejected the order");
-      expect(placeCalls(h)).toHaveLength(1);
+      expect(algoPlaceCalls(h)).toHaveLength(1);
       expect(getProtectionIntent("BTCUSDT")).toMatchObject({
         status: "PENDING_REPLACE",
         protectionStatus: "UNPROTECTED",
@@ -827,12 +956,12 @@ describe("position close and native protection", () => {
     });
     createIntent({ clientOrderId: "old-tp-fail", kind: "algo", symbol: "BTCUSDT", side: "SELL", type: "TAKE_PROFIT_MARKET", qty: "" });
     updateIntent("old-tp-fail", { status: "SUBMITTED" });
-    h.http.scriptApiError("/fapi/v1/order", -1000, "cancel unavailable", 400);
+    h.http.scriptApiError("/fapi/v1/algoOrder", -1000, "cancel unavailable", 400);
     const out = await h.svc.protectPosition({ symbol: "BTCUSDT", tpPrice: "52000" });
     expect(out.tp?.ok).toBe(false);
     expect(out.tp?.error).toContain("replacement blocked");
     expect(placeCalls(h)).toHaveLength(0);
-    expect(exchange.orders.map((order) => order.clientOrderId)).toEqual(["old-tp-fail"]);
+    expect(exchange.orders.map((order) => order.clientAlgoId)).toEqual(["old-tp-fail"]);
   });
 
   test("protectPosition cancels the existing protection of the same type first", async () => {
@@ -880,11 +1009,11 @@ describe("position close and native protection", () => {
     createIntent({ clientOrderId: "old-tp", kind: "algo", symbol: "BTCUSDT", side: "SELL", type: "TAKE_PROFIT_MARKET", qty: "" });
     updateIntent("old-tp", { status: "SUBMITTED" });
     await h.svc.protectPosition({ symbol: "BTCUSDT", tpPrice: "55000.5" });
-    const deletes = h.http.callsTo("/fapi/v1/order").filter((c) => c.method === "DELETE");
+    const deletes = h.http.callsTo("/fapi/v1/algoOrder").filter((c) => c.method === "DELETE");
     expect(deletes.length).toBe(1);
-    expect(queryOf(deletes[0]).get("origClientOrderId")).toBe("old-tp");
+    expect(queryOf(deletes[0]).get("clientAlgoId")).toBe("old-tp");
     expect(exchange.orders).toHaveLength(1);
-    expect(exchange.orders[0].stopPrice).toBe("55000.5");
+    expect(exchange.orders[0].triggerPrice).toBe("55000.5");
   });
 
   test("definite placement rejection rolls back once without retrying", async () => {
@@ -911,15 +1040,71 @@ describe("position close and native protection", () => {
       error: "Exchange rejected the order: simulated protective placement failure",
       failureKind: "definite_rejection",
     });
-    expect(placeCalls(h).map((call) => queryOf(call).get("stopPrice"))).toEqual(["52000", "51000"]);
-    expect(h.http.callsTo("/fapi/v1/order").filter((call) => call.method === "DELETE")).toHaveLength(1);
+    expect(algoPlaceCalls(h).map((call) => queryOf(call).get("triggerPrice"))).toEqual(["52000", "51000"]);
+    expect(h.http.callsTo("/fapi/v1/algoOrder").filter((call) => call.method === "DELETE")).toHaveLength(1);
     expect(exchange.orders).toHaveLength(1);
-    expect(exchange.orders[0].stopPrice).toBe("51000");
+    expect(exchange.orders[0].triggerPrice).toBe("51000");
     expect(getProtectionIntent("BTCUSDT")).toMatchObject({
       status: "CONFIRMED",
       protectionStatus: "PROTECTED",
       tpPrice: "51000",
     });
+  });
+
+  test("429 Retry-After is honored before replacement rollback", async () => {
+    const h = setup();
+    const exchange = mockProtectionExchange(h, [
+      orderFixture({
+        clientOrderId: "rate-limit-old-tp",
+        type: "TAKE_PROFIT_MARKET",
+        side: "SELL",
+        stopPrice: "51000",
+        closePosition: true,
+      }),
+    ]);
+    const waits: number[] = [];
+    h.rest.setSleeperForTests(async (ms) => { waits.push(ms); });
+    exchange.respondToPost(429, -1003, "Too many requests", { "Retry-After": "2" });
+    liveState().positions.set("BTCUSDT", {
+      symbol: "BTCUSDT", side: "long", qty: "0.001", entryPrice: "49000", markPrice: "50000",
+      unrealizedProfit: "1", leverage: "1", liquidationPrice: "0", notional: "50", updatedAt: Date.now(),
+    });
+
+    const result = await h.svc.protectPosition({ symbol: "BTCUSDT", tpPrice: "52000" });
+
+    expect(result.tp?.ok).toBe(false);
+    expect(waits).toEqual([2000]);
+    expect(algoPlaceCalls(h).map((call) => queryOf(call).get("triggerPrice"))).toEqual(["52000", "51000"]);
+    expect(exchange.algoOrders.map((order) => order.triggerPrice)).toEqual(["51000"]);
+  });
+
+  test("418 stops replacement retries and marks protection UNPROTECTED", async () => {
+    const h = setup();
+    const exchange = mockProtectionExchange(h, [
+      orderFixture({
+        clientOrderId: "ban-old-tp",
+        type: "TAKE_PROFIT_MARKET",
+        side: "SELL",
+        stopPrice: "51000",
+        closePosition: true,
+      }),
+    ]);
+    exchange.respondToPost(418, -1003, "IP banned", { "Retry-After": "60" });
+    liveState().positions.set("BTCUSDT", {
+      symbol: "BTCUSDT", side: "long", qty: "0.001", entryPrice: "49000", markPrice: "50000",
+      unrealizedProfit: "1", leverage: "1", liquidationPrice: "0", notional: "50", updatedAt: Date.now(),
+    });
+
+    const result = await h.svc.protectPosition({ symbol: "BTCUSDT", tpPrice: "52000" });
+
+    expect(result.tp?.ok).toBe(false);
+    expect(algoPlaceCalls(h)).toHaveLength(1);
+    expect(exchange.algoOrders).toHaveLength(0);
+    expect(getProtectionIntent("BTCUSDT")).toMatchObject({
+      status: "PENDING_REPLACE",
+      protectionStatus: "UNPROTECTED",
+    });
+    expect(h.freezes.join(" ")).toContain("HTTP 418");
   });
 
   test("transient placement failure retries once without canceling a restored order", async () => {
@@ -942,9 +1127,9 @@ describe("position close and native protection", () => {
     const out = await h.svc.protectPosition({ symbol: "BTCUSDT", tpPrice: "52000" });
 
     expect(out.tp?.ok).toBe(true);
-    expect(placeCalls(h).map((call) => queryOf(call).get("stopPrice"))).toEqual(["52000", "52000"]);
-    expect(h.http.callsTo("/fapi/v1/order").filter((call) => call.method === "DELETE")).toHaveLength(1);
-    expect(exchange.orders.map((order) => order.stopPrice)).toEqual(["52000"]);
+    expect(algoPlaceCalls(h).map((call) => queryOf(call).get("triggerPrice"))).toEqual(["52000", "52000"]);
+    expect(h.http.callsTo("/fapi/v1/algoOrder").filter((call) => call.method === "DELETE")).toHaveLength(1);
+    expect(exchange.orders.map((order) => order.triggerPrice)).toEqual(["52000"]);
   });
 
   test("transient failure followed by retry rejection rolls back without another cancel", async () => {
@@ -968,9 +1153,9 @@ describe("position close and native protection", () => {
     const out = await h.svc.protectPosition({ symbol: "BTCUSDT", tpPrice: "52000" });
 
     expect(out.tp?.ok).toBe(false);
-    expect(placeCalls(h).map((call) => queryOf(call).get("stopPrice"))).toEqual(["52000", "52000", "51000"]);
-    expect(h.http.callsTo("/fapi/v1/order").filter((call) => call.method === "DELETE")).toHaveLength(1);
-    expect(exchange.orders.map((order) => order.stopPrice)).toEqual(["51000"]);
+    expect(algoPlaceCalls(h).map((call) => queryOf(call).get("triggerPrice"))).toEqual(["52000", "52000", "51000"]);
+    expect(h.http.callsTo("/fapi/v1/algoOrder").filter((call) => call.method === "DELETE")).toHaveLength(1);
+    expect(exchange.orders.map((order) => order.triggerPrice)).toEqual(["51000"]);
   });
 
   test("concurrent protect requests for one symbol do not interleave", async () => {
@@ -1009,9 +1194,9 @@ describe("position close and native protection", () => {
     releaseFirstMark();
     await Promise.all([first, second]);
 
-    expect(placeCalls(h).map((call) => queryOf(call).get("stopPrice"))).toEqual(["52000", "53000"]);
-    expect(h.http.callsTo("/fapi/v1/order").filter((call) => call.method === "DELETE")).toHaveLength(1);
-    expect(exchange.orders.map((order) => order.stopPrice)).toEqual(["53000"]);
+    expect(algoPlaceCalls(h).map((call) => queryOf(call).get("triggerPrice"))).toEqual(["52000", "53000"]);
+    expect(h.http.callsTo("/fapi/v1/algoOrder").filter((call) => call.method === "DELETE")).toHaveLength(1);
+    expect(exchange.orders.map((order) => order.triggerPrice)).toEqual(["53000"]);
     expect(isProtectionIntentLocked("BTCUSDT", persistenceProfileFromConfig(h.cfg))).toBe(false);
   });
 
@@ -1077,7 +1262,7 @@ describe("position close and native protection", () => {
 
     expect(out.tp?.ok).toBe(false);
     expect(exchange.orders).toHaveLength(1);
-    expect(exchange.orders[0].stopPrice).toBe("51000");
+    expect(exchange.orders[0].triggerPrice).toBe("51000");
     expect(getProtectionIntent("BTCUSDT")).toMatchObject({
       status: "CONFIRMED",
       protectionStatus: "PROTECTED",
@@ -1114,7 +1299,7 @@ describe("position close and native protection", () => {
     expect(intent).toMatchObject({ status: "PENDING_REPLACE", protectionStatus: "UNPROTECTED" });
     expect(intent.restoreAttemptedAt).toBeGreaterThanOrEqual(intent.createdAt);
     expect(restoreProtection).not.toHaveBeenCalled();
-    expect(placeCalls(h)).toHaveLength(1);
+    expect(algoPlaceCalls(h)).toHaveLength(1);
   });
 
   test("timeout is reconciled against open orders before the one retry", async () => {
@@ -1124,15 +1309,15 @@ describe("position close and native protection", () => {
       symbol: "BTCUSDT", side: "long", qty: "0.001", entryPrice: "49000", markPrice: "50000",
       unrealizedProfit: "1", leverage: "1", liquidationPrice: "0", notional: "50", updatedAt: Date.now(),
     });
-    h.http.scriptTimeout("/fapi/v1/order");
+    h.http.scriptTimeout("/fapi/v1/algoOrder");
 
     const out = await h.svc.protectPosition({ symbol: "BTCUSDT", tpPrice: "52000" });
 
     expect(out.tp).toMatchObject({ ok: true });
     const calls = h.http.calls;
-    const firstPost = calls.findIndex((call) => call.method === "POST" && call.url.includes("/fapi/v1/order"));
-    const secondPost = calls.findIndex((call, index) => index > firstPost && call.method === "POST" && call.url.includes("/fapi/v1/order"));
-    const reconcileRead = calls.findIndex((call, index) => index > firstPost && call.url.includes("/fapi/v1/openOrders"));
+    const firstPost = calls.findIndex((call) => call.method === "POST" && call.url.includes("/fapi/v1/algoOrder"));
+    const secondPost = calls.findIndex((call, index) => index > firstPost && call.method === "POST" && call.url.includes("/fapi/v1/algoOrder"));
+    const reconcileRead = calls.findIndex((call, index) => index > firstPost && call.url.includes("/fapi/v1/openAlgoOrders"));
     expect(reconcileRead).toBeGreaterThan(firstPost);
     expect(secondPost).toBeGreaterThan(reconcileRead);
   });
@@ -1188,7 +1373,7 @@ describe("position close and native protection", () => {
     const recon = new Reconciler({
       persistenceProfile: persistenceProfileFromConfig(h.cfg),
       rest: h.rest,
-      snapshot: async () => applyOpenOrdersSnapshot(exchange.orders as never),
+      snapshot: async () => applyOpenOrdersSnapshot([], exchange.algoOrders as never),
       freeze: () => undefined,
       unfreeze: () => undefined,
       restoreProtection: (intent) => h.svc.restoreProtection(intent),
@@ -1199,11 +1384,11 @@ describe("position close and native protection", () => {
 
     expect(exchange.orders).toHaveLength(1);
     expect(exchange.orders[0]).toMatchObject({
-      type: "TAKE_PROFIT_MARKET",
-      stopPrice: "52000",
+      orderType: "TAKE_PROFIT_MARKET",
+      triggerPrice: "52000",
       closePosition: true,
     });
-    expect(placeCalls(h)).toHaveLength(1);
+    expect(algoPlaceCalls(h)).toHaveLength(1);
     expect(getProtectionIntent("BTCUSDT")).toMatchObject({ status: "CONFIRMED", protectionStatus: "PROTECTED" });
   });
 
@@ -1298,7 +1483,7 @@ describe("position close and native protection", () => {
     const recon = new Reconciler({
       persistenceProfile: persistenceProfileFromConfig(h.cfg),
       rest: h.rest,
-      snapshot: async () => applyOpenOrdersSnapshot(exchange.orders as never),
+      snapshot: async () => applyOpenOrdersSnapshot([], exchange.algoOrders as never),
       freeze: () => undefined,
       unfreeze: () => undefined,
       restoreProtection,

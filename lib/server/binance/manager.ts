@@ -54,7 +54,7 @@ import { backfillHistoricalOrders, historySymbols, hydrateHistoricalOrders } fro
 import { getProtectionIntent, listProtectionIntents, setProtectionStatus } from "./protection";
 import { StreamLeaseUnavailableError, UserDataStream } from "./stream";
 import { MARK_STALE_AFTER_MS, MarkPriceStream } from "./mark-price-stream";
-import type { AccountUpdateEvent, AlgoUpdateEvent, BinanceAlgoOrder, OrderTradeUpdateEvent, UserStreamEvent } from "./types";
+import type { AccountUpdateEvent, AlgoUpdateEvent, BinanceAlgoOrder, BinanceOrder, OrderTradeUpdateEvent, UserStreamEvent } from "./types";
 import { getDb } from "../db/connection";
 import { trackFillReceived, trackFreezeTriggered, trackOrderFilled, trackSystemStart, trackSystemStop, trackUnfreezeCleared, updateTradingGauges } from "../metrics/instrument";
 
@@ -1169,10 +1169,39 @@ export class BinanceLiveManager {
     return cancelAllAndFlatten(
       this.cfg.env,
       {
-        getOpenOrders: () => this.rest.getOpenOrdersEmergency(),
+        getOpenOrders: async (): Promise<BinanceOrder[]> => {
+          const regular = await this.rest.getOpenOrdersEmergency();
+          const algos = [...liveState().openOrders.values()]
+            .filter((order) => order.kind === "algo")
+            .map((order): BinanceOrder => ({
+              orderId: order.exchangeOrderId ?? order.algoId ?? 0,
+              clientOrderId: order.clientOrderId,
+              clientAlgoId: order.clientOrderId,
+              algoId: order.algoId ?? undefined,
+              kind: "algo",
+              symbol: order.symbol,
+              side: order.side,
+              type: order.type,
+              status: order.status,
+              price: order.price,
+              stopPrice: order.stopPrice,
+              origQty: order.origQty,
+              executedQty: order.executedQty,
+              cumQuote: "0",
+              avgPrice: order.avgPrice,
+              reduceOnly: order.reduceOnly,
+              closePosition: order.closePosition,
+              time: order.time,
+              updateTime: order.updateTime,
+            }));
+          return [...regular, ...algos];
+        },
+        getOpenAlgoOrders: (symbol) => this.rest.getOpenAlgoOrdersEmergency(symbol),
         getOpenPositions: async () => (await this.rest.getPositionRiskEmergency()).filter((row) => Number(row.positionAmt) !== 0).map((row) => ({ symbol: row.symbol, positionAmt: row.positionAmt })),
         cancelAllOpenOrders: (symbol) => this.rest.cancelAllOpenOrdersEmergency(symbol),
+        cancelAllAlgoOrders: (symbol) => this.rest.cancelAllAlgoOrdersEmergency(symbol),
         closePosition: (symbol, positionAmt) => this.orders.emergencyClosePosition(symbol, positionAmt),
+        emit: (event, data) => publishLive(event, data),
       },
       triggeredBy,
       this.persistenceProfile,

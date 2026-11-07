@@ -314,6 +314,13 @@ export function rememberOrder(o: BinanceOrder): void {
   else state.openOrders.delete(live.clientOrderId);
 }
 
+export function rememberAlgoOrder(o: BinanceAlgoOrder): void {
+  const live = normalizeBinanceAlgoOrder(o);
+  state.orders.set(live.clientOrderId, live);
+  if (WORKING_STATUSES.has(live.status)) state.openOrders.set(live.clientOrderId, live);
+  else state.openOrders.delete(live.clientOrderId);
+}
+
 /**
  * Records a terminal order imported from durable history (orders_log).
  * History is read-only: entries land in `orders` only, never `openOrders`,

@@ -33,6 +33,7 @@ export class BinanceApiError extends Error {
     public readonly exchangeMsg: string,
     public readonly httpStatus: number,
     public readonly path: string,
+    public readonly retryAfterMs: number | null = null,
   ) {
     super(`Binance ${path}: [${code}] ${exchangeMsg}`);
     this.name = "BinanceApiError";
@@ -45,6 +46,7 @@ export const ERR_UNKNOWN_CANCEL = -2011;
 export const ERR_INVALID_API_KEY = -2015;
 export const ERR_LISTEN_KEY = -1125;
 export const ERR_REDUCE_ONLY_REJECT = -2022;
+export const ERR_ALGO_ORDER_REQUIRED = -4120;
 
 export type BinanceErrorCertainty = "definite_rejection" | "unknown_outcome" | "not_an_api_error";
 
@@ -70,6 +72,9 @@ export interface PlaceOrderParams {
 export class BinanceRestClient {
   private http: HttpTransport;
   private timeoutMs = 10_000;
+  private ipBanUntil = 0;
+  private ipBanNeedsOperatorReset = false;
+  private sleep: (ms: number) => Promise<void> = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
   constructor(
     private readonly cfg: EnvConfig,
@@ -88,6 +93,10 @@ export class BinanceRestClient {
     this.timeoutMs = ms;
   }
 
+  setSleeperForTests(sleep: (ms: number) => Promise<void>): void {
+    this.sleep = sleep;
+  }
+
   private host(): string {
     const h = HOST_MAP[this.cfg.env];
     if (!h.rest) throw new Error(`No Binance REST host for MAWS_ENV=${this.cfg.env}`);
@@ -102,6 +111,9 @@ export class BinanceRestClient {
     bypassBreaker = false,
   ): Promise<unknown> {
     const operation = async () => {
+      if (this.ipBanNeedsOperatorReset || Date.now() < this.ipBanUntil) {
+        throw new BinanceApiError(418, "Local Binance IP-ban pause is active; confirm the ban has expired before restarting MAWS", 418, path);
+      }
       await this.limiter.acquire();
       const url = `${this.host()}${path}${query ? `?${query}` : ""}`;
       let res;
@@ -112,15 +124,20 @@ export class BinanceRestClient {
         throw err;
       }
       this.limiter.observe(res.headers);
+      const retryAfterMs = parseRetryAfterMs(res.headers);
       let parsed: unknown;
       try {
         parsed = res.body.length > 0 ? JSON.parse(res.body) : {};
       } catch {
-        throw new BinanceApiError(-1000, `Unparseable response from ${path}`, res.status, path);
+        throw new BinanceApiError(-1000, `Unparseable response from ${path}`, res.status, path, retryAfterMs);
       }
       if (res.status >= 400 || (parsed && typeof parsed === "object" && "code" in (parsed as object) && "msg" in (parsed as object) && res.status !== 200)) {
         const p = parsed as { code?: number; msg?: string };
-        throw new BinanceApiError(p.code ?? -1000, p.msg ?? `HTTP ${res.status}`, res.status, path);
+        if (res.status === 418) {
+          if (retryAfterMs == null) this.ipBanNeedsOperatorReset = true;
+          else this.ipBanUntil = Date.now() + retryAfterMs;
+        }
+        throw new BinanceApiError(p.code ?? -1000, p.msg ?? `HTTP ${res.status}`, res.status, path, retryAfterMs);
       }
       return parsed;
     };
@@ -142,6 +159,25 @@ export class BinanceRestClient {
     try {
       return (await this.raw(method, path, query, { "X-MBX-APIKEY": this.cfg.binanceApiKey }, bypassBreaker)) as T;
     } catch (err) {
+      if (err instanceof BinanceApiError && err.httpStatus === 418) {
+        log.error("Binance HTTP 418 received; submissions paused until Retry-After expires", {
+          path,
+          retryAfterMs: err.retryAfterMs,
+          operatorResetRequired: err.retryAfterMs == null,
+        });
+        throw err;
+      }
+      if (err instanceof BinanceApiError && err.httpStatus === 429) {
+        if (err.retryAfterMs != null) {
+          const delayMs = Math.min(30_000, err.retryAfterMs);
+          await this.sleep(delayMs);
+          log.warn("Binance HTTP 429 Retry-After honored once before returning control to caller", {
+            path,
+            retryAfterMs: delayMs,
+          });
+        }
+        throw err;
+      }
       if (err instanceof BinanceApiError && err.code === ERR_TIMESTAMP && !retriedAfterResync) {
         log.warn("timestamp rejected (-1021); resyncing clock and retrying once", { path });
         await this.resyncClock();
@@ -205,6 +241,12 @@ export class BinanceRestClient {
     return this.signedRequest<BinanceAlgoOrder[]>("GET", "/fapi/v1/openAlgoOrders", { symbol });
   }
 
+  /** Emergency path: list conditional orders without the normal breaker. */
+  getOpenAlgoOrdersEmergency(symbol: string): Promise<BinanceAlgoOrder[]> {
+    if (!symbol) throw new Error("A symbol is required to list open algo orders");
+    return this.signedRequest<BinanceAlgoOrder[]>("GET", "/fapi/v1/openAlgoOrders", { symbol }, false, true);
+  }
+
   getAlgoOrder(lookup: AlgoOrderLookup): Promise<BinanceAlgoOrder> {
     return this.signedRequest<BinanceAlgoOrder>(
       "GET",
@@ -246,6 +288,12 @@ export class BinanceRestClient {
   cancelAllAlgoOrders(symbol: string): Promise<BinanceAlgoOrder[]> {
     if (!symbol) throw new Error("A symbol is required to cancel open algo orders");
     return this.signedRequest<BinanceAlgoOrder[]>("DELETE", "/fapi/v1/algoOpenOrders", { symbol });
+  }
+
+  /** Emergency path: cancel every conditional order without the normal breaker. */
+  cancelAllAlgoOrdersEmergency(symbol: string): Promise<BinanceAlgoOrder[]> {
+    if (!symbol) throw new Error("A symbol is required to cancel open algo orders");
+    return this.signedRequest<BinanceAlgoOrder[]>("DELETE", "/fapi/v1/algoOpenOrders", { symbol }, false, true);
   }
 
   /**
@@ -339,6 +387,9 @@ export class BinanceRestClient {
   }
 
   private placeOrderInternal(params: PlaceOrderParams, bypassBreaker: boolean): Promise<BinanceOrder> {
+    if (params.type === "STOP_MARKET" || params.type === "TAKE_PROFIT_MARKET") {
+      throw new Error(`${params.type} must be submitted through the Binance Algo Order API`);
+    }
     const p: Record<string, string | number> = { symbol: params.symbol, side: params.side, type: params.type };
     if (params.quantity != null) p.quantity = params.quantity;
     if (params.price != null) p.price = params.price;
@@ -390,4 +441,14 @@ export class BinanceRestClient {
   closeListenKey(listenKey: string): Promise<unknown> {
     return this.keyOnly("DELETE", "/fapi/v1/listenKey", { listenKey });
   }
+}
+
+function parseRetryAfterMs(headers: Record<string, string>): number | null {
+  const entry = Object.entries(headers).find(([name]) => name.toLowerCase() === "retry-after")?.[1];
+  if (!entry) return null;
+  const seconds = Number(entry);
+  if (Number.isFinite(seconds) && seconds >= 0) return seconds * 1000;
+  const timestamp = Date.parse(entry);
+  if (Number.isFinite(timestamp)) return Math.max(0, timestamp - Date.now());
+  return null;
 }

@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, test } from "@jest/globals";
 
-import { BinanceRestClient } from "@/lib/server/binance/rest";
+import { BinanceApiError, BinanceRestClient } from "@/lib/server/binance/rest";
 import { RateLimiter } from "@/lib/server/binance/ratelimit";
 import { FakeHttp, freshEnv, installFakes, jsonRes, makeCfg } from "./helpers";
 
@@ -114,5 +114,49 @@ describe("Binance Algo Order REST methods", () => {
       }),
     ).toThrow("clientAlgoId");
     expect(http.calls).toHaveLength(0);
+  });
+
+  test("never submits conditional types to the standard order endpoint", () => {
+    expect(() => rest.placeOrder({
+      symbol: "BTCUSDT",
+      side: "SELL",
+      type: "STOP_MARKET",
+      quantity: "0.001",
+      stopPrice: "49000",
+    })).toThrow("must be submitted through the Binance Algo Order API");
+    expect(http.calls).toHaveLength(0);
+  });
+
+  test("honors a 429 Retry-After once before returning control to the caller", async () => {
+    const waits: number[] = [];
+    rest.setSleeperForTests(async (ms) => { waits.push(ms); });
+    http.script("/fapi/v1/algoOrder", () => {
+      const response = jsonRes({ code: -1003, msg: "Too many requests" }, 429);
+      response.headers = { "Retry-After": "2" };
+      return response;
+    });
+
+    await expect(rest.placeAlgoOrder({
+      algoType: "CONDITIONAL",
+      symbol: "BTCUSDT",
+      side: "SELL",
+      type: "STOP_MARKET",
+      triggerPrice: "49000",
+      closePosition: true,
+    })).rejects.toMatchObject({ httpStatus: 429, retryAfterMs: 2000 });
+    expect(waits).toEqual([2000]);
+    expect(http.calls).toHaveLength(1);
+  });
+
+  test("418 pauses subsequent Binance requests until Retry-After expires", async () => {
+    http.script("/fapi/v1/openAlgoOrders", () => {
+      const response = jsonRes({ code: -1003, msg: "IP banned" }, 418);
+      response.headers = { "Retry-After": "60" };
+      return response;
+    });
+
+    await expect(rest.getOpenAlgoOrders("BTCUSDT")).rejects.toBeInstanceOf(BinanceApiError);
+    await expect(rest.getOpenOrders("BTCUSDT")).rejects.toMatchObject({ httpStatus: 418 });
+    expect(http.calls).toHaveLength(1);
   });
 });
