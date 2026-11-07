@@ -5,7 +5,8 @@
  *   - TP/SL drag validation (a bracket may never cross its entry),
  *   - close-fraction clamping,
  *   - partial close being refused for live accounts,
- *   - reverse = guarded close, then market order on the opposite side.
+ *   - reverse dispatch never falls back to close-then-open; connected requests
+ *     use only the dedicated reverse endpoint.
  *
  * The confirm dialog and the DOM overlay are exercised in the browser check;
  * the actions below are the exact functions those buttons call.

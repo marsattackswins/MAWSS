@@ -4,16 +4,16 @@
  * TradeManager.tsx — on-chart trade management ("manage trades on the chart").
  *
  * One pill is pinned to each open position's entry line: side, size, open P&L,
- * TP/SL readouts, add/move exits, reverse and a close menu (Close all — plus
- * 25/50/75% where the broker supports it).
+ * TP/SL readouts, add/move exits, a disabled reverse control, and a close menu
+ * (Close all — plus 25/50/75% where the broker supports it).
  *
  * The TP/SL chips are DRAG HANDLES: hold one and a guide line follows the
  * pointer up and down, and on release the exit is created (or moved) at that
  * price — the same path a drag of the chart's own TP/SL line takes. The pill
  * itself is pinned left or right; right-click it to switch sides.
  *
- * Every action goes through the guarded MAWS dispatch layer (`dispatchClosePosition`,
- * `dispatchClosePositionFraction`, `dispatchReversePosition`, `dispatchProtect`);
+ * Every enabled action goes through the guarded MAWS dispatch layer
+ * (`dispatchClosePosition`, `dispatchClosePositionFraction`, `dispatchProtect`);
  * this component never talks to a broker, exchange or the live API directly, and
  * it mutates nothing itself — the confirmed book flows back through the store.
  */
