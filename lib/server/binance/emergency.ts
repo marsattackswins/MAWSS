@@ -124,24 +124,30 @@ async function executeFlatten(
     audit("operator", "emergency.flatten.failure", { accountId, triggeredBy, action: "close_position", error: String(err) });
   }
 
-  // Conditional-order cleanup is best effort: a failure there is reported but
-  // never gates the reduce-only close that removes the actual exposure.
-  const algoAttempts = await cancelOpenOrders(
-    accountId,
-    deps,
-    triggeredBy,
-    openOrders,
-    positions,
-    canceledOrderIds,
-    failures,
-    profile,
-  );
+  // Order matters: regular cancels first so nothing else works the position,
+  // then the reduce-only close that removes the exposure, and only then the
+  // best-effort conditional-order cleanup. A slow or failed algo cancel can
+  // never delay the close.
+  const symbols = [...new Set([
+    ...openOrders.map((order) => order.symbol),
+    ...positions.map((position) => position.symbol),
+  ])];
+  await cancelRegularOrders(accountId, deps, triggeredBy, openOrders, canceledOrderIds, failures, profile);
   const closedSymbols = await closeOpenPositions(
     accountId,
     deps,
     triggeredBy,
     positions,
     closedPositions,
+    failures,
+    profile,
+  );
+  const algoAttempts = await cancelAlgoOrders(
+    accountId,
+    deps,
+    triggeredBy,
+    symbols,
+    canceledOrderIds,
     failures,
     profile,
   );
@@ -171,43 +177,56 @@ async function executeFlatten(
   return summary;
 }
 
-async function cancelOpenOrders(
+/** Cancels every regular (non-algo) working order, symbol by symbol. */
+async function cancelRegularOrders(
   accountId: string,
   deps: EmergencyFlattenDeps,
   triggeredBy: string,
   openOrders: BinanceOrder[],
-  positions: EmergencyPosition[],
+  canceledOrderIds: string[],
+  failures: EmergencyFlattenFailure[],
+  profile: PersistenceProfile,
+): Promise<void> {
+  assertPersistenceProfile(profile);
+  for (const symbol of new Set(openOrders.map((order) => order.symbol))) {
+    const symbolOrders = openOrders.filter((order) => order.symbol === symbol && order.kind !== "algo");
+    if (symbolOrders.length === 0) continue;
+    try {
+      const canceled = await deps.cancelAllOpenOrders(symbol);
+      for (const order of canceled.length > 0 ? canceled : symbolOrders) {
+        canceledOrderIds.push(order.clientOrderId);
+        const intent = findByClientOrderId(order.clientOrderId, profile);
+        if (intent && !["FILLED", "REJECTED", "EXPIRED"].includes(intent.status)) {
+          updateIntent(order.clientOrderId, { status: "CANCELED", exchangeOrderId: order.orderId, lastState: JSON.stringify({ source: "emergency_flatten" }) }, Date.now(), profile);
+        }
+        markOrderCanceled(order.clientOrderId);
+        deps.emit?.("order-update", { clientOrderId: order.clientOrderId, status: "CANCELED", kind: "order" });
+      }
+      audit("operator", "emergency.orders.cancelled", { accountId, triggeredBy, symbol, count: canceled.length });
+    } catch (err) {
+      failures.push({ action: "cancel_orders", symbol, error: String(err) });
+      audit("operator", "emergency.flatten.failure", { accountId, triggeredBy, action: "cancel_orders", symbol, error: String(err) });
+    }
+  }
+}
+
+/**
+ * Best-effort conditional-order cleanup for the known symbols. Runs after the
+ * close, so a failure here is reported without ever blocking the reduce-only
+ * exit; retryAlgoCancels verifies and retries once.
+ */
+async function cancelAlgoOrders(
+  accountId: string,
+  deps: EmergencyFlattenDeps,
+  triggeredBy: string,
+  symbols: string[],
   canceledOrderIds: string[],
   failures: EmergencyFlattenFailure[],
   profile: PersistenceProfile,
 ): Promise<Map<string, AlgoCancelAttempt>> {
   assertPersistenceProfile(profile);
-  const symbols = [...new Set([
-    ...openOrders.map((order) => order.symbol),
-    ...positions.map((position) => position.symbol),
-  ])];
   const attempts = new Map<string, AlgoCancelAttempt>();
   for (const symbol of symbols) {
-    const symbolOrders = openOrders.filter((order) => order.symbol === symbol && order.kind !== "algo");
-    if (symbolOrders.length > 0) {
-      try {
-        const canceled = await deps.cancelAllOpenOrders(symbol);
-        for (const order of canceled.length > 0 ? canceled : symbolOrders) {
-          canceledOrderIds.push(order.clientOrderId);
-          const intent = findByClientOrderId(order.clientOrderId, profile);
-          if (intent && !["FILLED", "REJECTED", "EXPIRED"].includes(intent.status)) {
-            updateIntent(order.clientOrderId, { status: "CANCELED", exchangeOrderId: order.orderId, lastState: JSON.stringify({ source: "emergency_flatten" }) }, Date.now(), profile);
-          }
-          markOrderCanceled(order.clientOrderId);
-          deps.emit?.("order-update", { clientOrderId: order.clientOrderId, status: "CANCELED", kind: "order" });
-        }
-        audit("operator", "emergency.orders.cancelled", { accountId, triggeredBy, symbol, count: canceled.length });
-      } catch (err) {
-        failures.push({ action: "cancel_orders", symbol, error: String(err) });
-        audit("operator", "emergency.flatten.failure", { accountId, triggeredBy, action: "cancel_orders", symbol, error: String(err) });
-      }
-    }
-
     let attempt: AlgoCancelAttempt;
     try {
       attempt = await attemptAlgoCancel(symbol, deps);

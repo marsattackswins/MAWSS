@@ -129,7 +129,7 @@ describe("Phase 2 emergency flatten", () => {
     expect(getProtectionIntent("BTCUSDT")).toBeNull();
   });
 
-  test("emergency flatten cancels per-symbol Algo orders before closing", async () => {
+  test("emergency flatten closes before cancelling per-symbol Algo orders", async () => {
     let algosOpen = true;
     const calls: string[] = [];
     const summary = await cancelAllAndFlatten("algo-flatten-account", {
@@ -152,13 +152,14 @@ describe("Phase 2 emergency flatten", () => {
 
     expect(summary.canceledOrderIds).toContain("algo-stop");
     expect(summary.failures).toHaveLength(0);
-    expect(calls).toEqual(["cancel-algo", "close"]);
+    expect(calls).toEqual(["close", "cancel-algo"]);
   });
 
   test("an Algo cancellation failure never blocks the reduce-only close", async () => {
     let closes = 0;
     let cancelAttempts = 0;
     let algosOpen = true;
+    const calls: string[] = [];
     const summary = await cancelAllAndFlatten("algo-flatten-failure-account", {
       getOpenOrders: async () => [],
       getOpenPositions: async () => [{ symbol: "BTCUSDT", positionAmt: "0.001" }],
@@ -168,18 +169,21 @@ describe("Phase 2 emergency flatten", () => {
       cancelAllOpenOrders: async () => [],
       cancelAllAlgoOrders: async () => {
         cancelAttempts += 1;
+        calls.push("cancel-algo");
         if (cancelAttempts === 1) throw new Error("cancel failed");
         algosOpen = false;
         return [];
       },
       closePosition: async () => {
         closes += 1;
+        calls.push("close");
         return { ok: true, clientOrderId: "close-market", status: "NEW" };
       },
     }, "operator:test");
 
     expect(closes).toBe(1);
     expect(cancelAttempts).toBe(2);
+    expect(calls).toEqual(["close", "cancel-algo", "cancel-algo"]);
     expect(summary.failures).toEqual([
       expect.objectContaining({ action: "cancel_algo_orders", symbol: "BTCUSDT" }),
     ]);
