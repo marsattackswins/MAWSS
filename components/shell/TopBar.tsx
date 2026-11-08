@@ -35,7 +35,7 @@ import type { Timeframe } from "@/types";
 import { VelaTemplateMenu } from "@/components/shell/VelaTemplateMenu";
 import { VelaLayoutButton } from "@/components/shell/VelaLayoutButton";
 import {
-  BookOpen,
+  Camera,
   ChevronDown,
   ChevronsLeft,
   Diamond,
@@ -48,11 +48,14 @@ import { useEffect, useRef, useState, type FormEvent, type ReactNode } from "rea
 
 const BAR_TFS: Timeframe[] = ["1m", "5m", "15m", "30m", "1h", "4h", "1D", "1W", "1M"];
 const MORE_TFS: Timeframe[] = ["3m", "2h"];
-const TOPBAR_ICON_ORDER_KEY = "maws.topbarIconOrder.v1";
+const TOPBAR_ICON_ORDER_KEY = "maws.topbarIconOrder.v2";
 const TOPBAR_ICON_IDS = [
-  "layout",
+  "screenshot",
   "fullscreen",
   "theme",
+  "tradestate",
+  "journal",
+  "template",
 ] as const;
 type TopbarIconId = (typeof TOPBAR_ICON_IDS)[number];
 
@@ -65,7 +68,15 @@ function loadTopbarIconOrder(): TopbarIconId[] {
     const raw = localStorage.getItem(TOPBAR_ICON_ORDER_KEY);
     const saved: unknown = raw ? JSON.parse(raw) : null;
     const order = Array.isArray(saved) ? saved.filter(isTopbarIconId) : [];
-    return [...new Set(order), ...TOPBAR_ICON_IDS.filter((id) => !order.includes(id))];
+    const merged = [
+      ...new Set(order),
+      ...TOPBAR_ICON_IDS.filter((id) => !order.includes(id)),
+    ];
+    if (!order.includes("fullscreen")) {
+      merged.splice(merged.indexOf("fullscreen"), 1);
+      merged.splice(merged.indexOf("screenshot") + 1, 0, "fullscreen");
+    }
+    return merged;
   } catch {
     return [...TOPBAR_ICON_IDS];
   }
@@ -668,6 +679,37 @@ let themeTurns = 0;
 let themeTurnedTo = "";
 
 /**
+ * A stylized trade-journal icon: a small notebook with a pencil overlay.
+ * Replaces the generic BookOpen glyph with a purpose-built mark.
+ */
+function JournalIcon() {
+  return (
+    <svg
+      width="15"
+      height="15"
+      viewBox="0 0 15 15"
+      fill="none"
+      aria-hidden="true"
+      className="shrink-0"
+    >
+      {/* Notebook body */}
+      <rect x="2" y="1.5" width="9" height="12" rx="1.2" stroke="currentColor" strokeWidth="1.2" />
+      {/* Spine binding marks */}
+      <path d="M2 4.5h-1M2 7.5h-1M2 10.5h-1" stroke="currentColor" strokeWidth="1.1" strokeLinecap="round" />
+      {/* Three ruled lines */}
+      <path d="M4.5 5h4.5M4.5 7.5h4.5M4.5 10h3" stroke="currentColor" strokeWidth="1" strokeLinecap="round" />
+      {/* Pencil nib (bottom-right corner) */}
+      <path
+        d="M9.8 9.8l1.6-1.6.8.8-1.6 1.6-.8-.8z"
+        fill="currentColor"
+        stroke="none"
+      />
+      <path d="M9.8 9.8l-.3 1.1 1.1-.3" stroke="currentColor" strokeWidth="0.8" strokeLinecap="round" strokeLinejoin="round" fill="none" />
+    </svg>
+  );
+}
+
+/**
  * The topbar theme switch's icon.
  *
  * ONE crescent marks the four stops: NORTH-EAST for Vela Muted, SOUTH-EAST for
@@ -838,10 +880,17 @@ export function TopBar() {
   }, []);
 
   const toolbarIcons: Record<TopbarIconId, ReactNode> = {
-    layout: (
-      <div className="mr-1 flex items-center">
-        <VelaLayoutButton />
-      </div>
+    screenshot: (
+      <ToolbarBtn
+        label="Screenshot"
+        className="rounded-full"
+        onClick={() => {
+          closeAllMenus();
+          getWorkspace()?.downloadScreenshot?.();
+        }}
+      >
+        <Camera size={15} />
+      </ToolbarBtn>
     ),
     fullscreen: (
       <ToolbarBtn
@@ -882,6 +931,34 @@ export function TopBar() {
       >
         <ThemeIcon rotation={themeAngle} />
       </ToolbarBtn>
+    ),
+    tradestate: showBuySell ? (
+      <BuySellStrip
+        symbol={pane.symbol}
+        onSell={(price, qty) => placeMarket("sell", price, qty)}
+        onBuy={(price, qty) => placeMarket("buy", price, qty)}
+        onContextMenu={(x, y) => {
+          closeAllMenus();
+          setBuySellMenu({ x, y, symbol: pane.symbol });
+        }}
+      />
+    ) : null,
+    journal: (
+      <ToolbarBtn
+        label="Trade Journal"
+        className="gap-1.5 px-2 text-[13px]"
+        onClick={() => {
+          closeAllMenus();
+          if (settingsOpen) setSettingsOpen(false);
+          setJournalOverlayOpen(true);
+        }}
+      >
+        <JournalIcon />
+        Journal
+      </ToolbarBtn>
+    ),
+    template: (
+      <VelaTemplateMenu />
     ),
   };
 
@@ -1080,6 +1157,10 @@ export function TopBar() {
 
         <span className="top-sep" />
 
+        <VelaLayoutButton />
+
+        <span className="top-sep" />
+
         <ToolbarBtn
           label="Indicators"
           active={indicatorMenuOpen}
@@ -1133,21 +1214,6 @@ export function TopBar() {
       </div>
 
       <div className="relative z-[2] flex shrink-0 items-center gap-0.5">
-        <ToolbarBtn
-          label="Trade Journal"
-          className="gap-1 px-2 text-[13px]"
-          onClick={() => {
-            closeAllMenus();
-            if (settingsOpen) setSettingsOpen(false);
-            setJournalOverlayOpen(true);
-          }}
-        >
-          <BookOpen size={14} />
-          Journal
-        </ToolbarBtn>
-
-        <VelaTemplateMenu />
-
         {iconOrder.map((id) => (
           <div
             key={id}
@@ -1175,17 +1241,6 @@ export function TopBar() {
             {toolbarIcons[id]}
           </div>
         ))}
-        {showBuySell ? (
-          <BuySellStrip
-            symbol={pane.symbol}
-            onSell={(price, qty) => placeMarket("sell", price, qty)}
-            onBuy={(price, qty) => placeMarket("buy", price, qty)}
-            onContextMenu={(x, y) => {
-              closeAllMenus();
-              setBuySellMenu({ x, y, symbol: pane.symbol });
-            }}
-          />
-        ) : null}
         <button
           type="button"
           className="ml-1 flex h-[28px] w-[30px] shrink-0 items-center justify-center rounded-[4px] text-(--app-muted) hover:bg-(--app-hover) hover:text-(--app-text)"

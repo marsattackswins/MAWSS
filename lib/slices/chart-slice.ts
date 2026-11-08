@@ -743,6 +743,36 @@ export function createChartSlice(set: RootSet, get: RootGet): ChartSlice {
 /** Study types that moved to Vela-native indicators — dropped on hydrate. */
 const LEGACY_STUDY_TYPES = new Set<string>(["volume", "pmo", "ob"]);
 
+const VELA_THEME_NAMES = ["dark", "classic", "light", "gruvbox"] as const;
+
+function sameColor(a: unknown, b: unknown): boolean {
+  return String(a ?? "").toLowerCase() === String(b ?? "").toLowerCase();
+}
+
+/** Re-derive only the theme-owned chart colors that still carry a known palette.
+ *  A hand-picked color matches no candidate and survives; a stale muted/classic/
+ *  light/gruvbox/legacy value is replaced even when sibling colors were customized. */
+function themeManagedChartPatch(
+  settings: ChartSettings,
+  themed: Partial<ChartSettings>,
+): Partial<ChartSettings> {
+  const candidates: Array<Partial<ChartSettings>> = [
+    ...VELA_THEME_NAMES.map((name) => chartSettingsFromVelaTheme(name)),
+    DEFAULT_CHART_SETTINGS,
+  ];
+  const patch: Partial<ChartSettings> = {};
+  for (const key of THEME_OWNED_CHART_KEYS) {
+    const next = themed[key];
+    if (typeof next !== "string" || next === "") continue;
+    const current = settings[key];
+    const managed = candidates.some((candidate) => sameColor(candidate[key], current));
+    if (managed && !sameColor(next, current)) {
+      (patch as Record<string, unknown>)[key] = next;
+    }
+  }
+  return patch;
+}
+
 /** Chart-owned rehydration normalizations for persisted workspace state. */
 export function normalizeChartRehydrate(state: Store): void {
   state.chartSettings = {
@@ -754,30 +784,19 @@ export function normalizeChartRehydrate(state: Store): void {
   if (state.chartSettings.scaleFontSize === 14) {
     state.chartSettings.scaleFontSize = 12;
   }
-  // Self-heal a pre-Vela cosmetic palette: when EVERY theme-owned chart color
-  // still equals the legacy MAWS default (the user never customized chart
-  // cosmetics), re-derive them from the active Vela theme. Without this, a
-  // themed shell replays the old black/gray chart palette over every themed
-  // mount. Explicit customizations are left untouched.
-  const untouchedThemeColors = THEME_OWNED_CHART_KEYS.every(
-    (k) =>
-      String(state.chartSettings[k] ?? "").toLowerCase() ===
-      String(DEFAULT_CHART_SETTINGS[k] ?? "").toLowerCase(),
-  );
-  const themed = chartSettingsFromVelaTheme(
-    velaThemeNameFromAppSettings(normalizeAppSettings(state.appSettings)),
-  );
+  const appTheme = velaThemeNameFromAppSettings(normalizeAppSettings(state.appSettings));
+  const themed = chartSettingsFromVelaTheme(appTheme);
   // Guard against a resolver that didn't produce concrete colors (test stubs
   // for `resolveTheme`): writing undefined over the defaults would be worse
   // than keeping the persisted palette.
   const usableTheme = Object.values(themed).every(
     (v) => typeof v === "string" && v !== "",
   );
-  if (untouchedThemeColors && usableTheme) {
-    state.chartSettings = {
-      ...state.chartSettings,
-      ...themed,
-    };
+  if (usableTheme) {
+    const patch = themeManagedChartPatch(state.chartSettings, themed);
+    if (Object.keys(patch).length > 0) {
+      state.chartSettings = { ...state.chartSettings, ...patch };
+    }
   }
   state.layoutSync = { ...DEFAULT_LAYOUT_SYNC, ...state.layoutSync };
   // A workspace saved before the pane cap (or by a plugin) must open inside it.

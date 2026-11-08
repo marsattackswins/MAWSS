@@ -453,7 +453,7 @@ export function PositionsPanel() {
           </button>
           {brokerMenuOpen && (
             <div
-              className="absolute top-full left-0 z-50 mt-1 w-[210px] rounded-[8px] border border-(--app-border) bg-(--app-elevated) py-1 shadow-[0_8px_28px_rgba(0,0,0,0.65)]"
+              className="absolute top-full left-0 z-50 mt-1 w-[210px] rounded-[8px] border border-(--app-border) bg-(--app-menu) py-1 shadow-[0_8px_28px_rgba(0,0,0,0.65)]"
               role="menu"
               onMouseDown={(e) => e.stopPropagation()}
             >

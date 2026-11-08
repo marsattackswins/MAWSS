@@ -93,10 +93,17 @@ export interface VelaTheme {
     bgBar?: string;
     bgChip?: string;
     bgHover?: string;
+    /** Floating dropdown/popover surface — defaults to `bgCard` when absent. */
+    bgOverlay?: string;
     border?: string;
     textPrimary?: string;
     textSecondary?: string;
     textMuted?: string;
+    /** Per-part candle colors — when absent, `upColor`/`downColor` are used for all parts. */
+    upWickColor?: string;
+    downWickColor?: string;
+    upBorderColor?: string;
+    downBorderColor?: string;
 }
 
 export type ThemeName = 'dark' | 'light' | 'classic' | 'standard' | 'vela' | 'gruvbox';

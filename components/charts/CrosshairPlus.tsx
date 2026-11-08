@@ -239,7 +239,7 @@ export function CrosshairPlus({ pane, suppress }: { pane: ChartPaneState; suppre
         <div
           ref={wrapRef}
           data-crosshair-plus
-          className="fixed z-[80] w-[220px] rounded-[8px] border border-(--app-border) bg-(--app-elevated) py-1 shadow-[0_8px_28px_rgba(0,0,0,0.65)]"
+          className="fixed z-[80] w-[220px] rounded-[8px] border border-(--app-border) bg-(--app-menu) py-1 shadow-[0_8px_28px_rgba(0,0,0,0.65)]"
           style={{ left: menuLeft, top: menuTop }}
           onMouseDown={(e) => e.stopPropagation()}
           onMouseEnter={() => {

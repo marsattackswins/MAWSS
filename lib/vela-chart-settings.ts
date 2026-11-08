@@ -1,5 +1,9 @@
 import { useAppStore } from "@/lib/store";
-import { themeIndicatorSettings, themeStudySettings } from "@/lib/app-theme";
+import {
+  chartSettingsFromVelaTheme,
+  themeIndicatorSettings,
+  themeStudySettings,
+} from "@/lib/app-theme";
 import type { ChartSettings } from "@/types";
 
 /**
@@ -18,6 +22,69 @@ import type { ChartSettings } from "@/types";
  *  - The MAWS SettingsModal keeps only non-chart sections (app, trading,
  *    alerts, events, shortcuts).
  */
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return value != null && typeof value === "object" && !Array.isArray(value);
+}
+
+/** Config leaves the live app theme owns. Persisted cell/template documents
+ *  serialize them resolved under the theme active at save time; replaying them
+ *  verbatim repaints the chart with that stale palette on the next mount. */
+const THEME_OWNED_CONFIG_PATHS: ReadonlyArray<readonly string[]> = [
+  ["layout", "background"],
+  ["layout", "textColor"],
+  ["candles", "upColor"],
+  ["candles", "downColor"],
+  ["candles", "borderUpColor"],
+  ["candles", "borderDownColor"],
+  ["candles", "wickUpColor"],
+  ["candles", "wickDownColor"],
+  ["grid", "vertLines", "color"],
+  ["grid", "horzLines", "color"],
+  ["crosshair", "color"],
+  ["panes", "separatorColor"],
+  ["priceScale", "borderColor"],
+];
+
+/** Return a config document with theme-owned color leaves removed, so
+ *  `applyConfig`'s merge keeps the renderer's current theme-derived values. */
+export function stripThemeOwnedConfigColors(
+  config: Record<string, unknown>,
+): Record<string, unknown> {
+  const doc = JSON.parse(JSON.stringify(config)) as Record<string, unknown>;
+  const groups = new Set<string>();
+  for (const path of THEME_OWNED_CONFIG_PATHS) {
+    let node: unknown = doc;
+    for (const key of path.slice(0, -1)) {
+      if (!isRecord(node)) {
+        node = undefined;
+        break;
+      }
+      node = node[key];
+    }
+    if (isRecord(node)) {
+      delete node[path[path.length - 1] as string];
+      groups.add(path.slice(0, -1).join("."));
+    }
+  }
+  for (const groupPath of groups) {
+    const parts = groupPath.split(".");
+    let node: unknown = doc;
+    for (const key of parts.slice(0, -1)) {
+      node = isRecord(node) ? node[key] : undefined;
+    }
+    const last = parts[parts.length - 1];
+    if (
+      isRecord(node) &&
+      last !== undefined &&
+      isRecord(node[last]) &&
+      Object.keys(node[last] as Record<string, unknown>).length === 0
+    ) {
+      delete node[last];
+    }
+  }
+  return doc;
+}
 
 /** MAWS ChartSettings → a (partial) Vela `ChartConfig` document. */
 export function mawsToVelaConfig(s: ChartSettings): Record<string, unknown> {
@@ -310,9 +377,8 @@ export function startChartSettingsEcho(): () => void {
  * Chart mounts replay `mawsToVelaConfig(chartSettings)` OVER the theme, so a
  * theme pick that only calls `setTheme` looks right until the next remount
  * (refresh, timeframe/symbol change) and then reverts to the store's stale
- * palette. Mirroring the post-`setTheme` config (`getConfig()` resolves every
- * theme-owned slot from the live theme) keeps the store in step, so the themed
- * look survives every chart rebuild.
+ * palette. Writing the theme's chart cosmetics into `chartSettings` directly
+ * keeps the store in step even when no live renderer can mirror its config.
  */
 export function applyThemeToCharts(themeName: ThemeName): void {
   const st = useAppStore.getState();
@@ -330,20 +396,13 @@ export function applyThemeToCharts(themeName: ThemeName): void {
     try {
       h.vela.setTheme(themeName);
     } catch {
-      return; /* chart without a theme seam */
-    }
-    try {
-      const patch = velaToMawsPatch(
-        h.vela.renderer.getConfig(),
-        useAppStore.getState().chartSettings,
-      );
-      if (Object.keys(patch).length > 0) {
-        useAppStore.getState().patchChartSettings(patch);
-      }
-    } catch {
-      /* renderer without the config seam — the live theme still applied */
+      /* chart without a theme seam */
     }
   });
+
+  // Persist the theme-owned cosmetics even when no renderer config is available
+  // to mirror; the store→renderer echo then applies the same palette live.
+  useAppStore.getState().patchChartSettings(chartSettingsFromVelaTheme(themeName));
 }
 
 registerHostSettingsSections(mawsHostSections as never);

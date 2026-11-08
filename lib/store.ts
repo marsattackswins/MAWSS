@@ -79,6 +79,7 @@ export const workspacePartialize = (state: Store) => ({
   rightOpen: state.rightOpen,
   bottomOpen: state.bottomOpen,
   bottomTab: state.bottomTab,
+  journalOverlayOpen: state.journalOverlayOpen,
   rightDock: state.rightDock,
   rightDockOrder: state.rightDockOrder,
   rightWidth: state.rightWidth,

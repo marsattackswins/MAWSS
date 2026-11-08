@@ -19,6 +19,7 @@ import { createStudy } from "@/lib/studies";
 import { syncPaneNativeIndicators } from "@/lib/vela-indicators";
 import { INDICATOR_ORDER, indicatorTitle } from "@/lib/indicators";
 import { velaCatalogEntry } from "@/lib/vela-indicator-catalog";
+import { stripThemeOwnedConfigColors } from "@/lib/vela-chart-settings";
 import type { IndicatorId, IndicatorInstance, PaneNative } from "@/types";
 
 type TemplateStudies = Array<Pick<IndicatorInstance, "type" | "settings" | "hidden">>;
@@ -261,7 +262,7 @@ export function applyTemplate(id: string, targetPaneId?: string): boolean {
   const target = resolveTemplateTarget(targetPaneId);
   if (!target || target.handle.vela.renderer.applyConfig == null) return false;
   try {
-    target.handle.vela.renderer.applyConfig(tpl.config);
+    target.handle.vela.renderer.applyConfig(stripThemeOwnedConfigColors(tpl.config));
     if (tpl.indicators) {
       const studies = tpl.indicators.studies.map((study) =>
         createStudy(study.type, study.settings, study.hidden),

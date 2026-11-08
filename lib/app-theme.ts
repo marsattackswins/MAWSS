@@ -92,6 +92,13 @@ export function applyAppTheme(settings: AppSettings) {
   root.style.setProperty("--app-up", s.upColor || "#089981");
   root.style.setProperty("--app-down", s.downColor || "#f23645");
   root.style.setProperty("--app-accent", s.accentColor || "#2962ff");
+  // Dropdown menus sit on the settings-dialog surface. Gruvbox is the one
+  // palette whose card tone reads as a different color than its dialog
+  // surface, so its menus drop to the background tone; other themes keep the
+  // elevated card color they already share with their dialogs.
+  const menuColor =
+    velaThemeNameFromAppSettings(s) === "gruvbox" ? s.backgroundColor : s.elevatedColor;
+  root.style.setProperty("--app-menu", menuColor);
 
   // Alias used by some shell widgets
   root.style.setProperty("--maws-bg", s.backgroundColor);
@@ -106,6 +113,7 @@ export function applyAppTheme(settings: AppSettings) {
   root.style.setProperty("--maws-up", s.upColor || "#089981");
   root.style.setProperty("--maws-down", s.downColor || "#f23645");
   root.style.setProperty("--maws-accent", s.accentColor || "#2962ff");
+  root.style.setProperty("--maws-menu", menuColor);
 
   // Keep legacy TV tokens in sync for anything still referencing them.
   root.style.setProperty("--color-tv-bg", s.backgroundColor);
@@ -235,10 +243,10 @@ export function chartSettingsFromVelaTheme(
     backgroundColor: t.background,
     bodyUpColor: t.upColor,
     bodyDownColor: t.downColor,
-    borderUpColor: t.upColor,
-    borderDownColor: t.downColor,
-    wickUpColor: t.upColor,
-    wickDownColor: t.downColor,
+    borderUpColor: t.upBorderColor ?? t.upColor,
+    borderDownColor: t.downBorderColor ?? t.downColor,
+    wickUpColor: t.upWickColor ?? t.upColor,
+    wickDownColor: t.downWickColor ?? t.downColor,
     horzGridColor: t.gridColor,
     vertGridColor: t.gridColor,
     paneSeparatorColor: t.borderColor,

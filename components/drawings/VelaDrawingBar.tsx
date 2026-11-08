@@ -404,7 +404,7 @@ function mountMoreButton(root: HTMLElement, host: HTMLElement, sections: MoreSec
       "overflow-x:hidden",
       "border-radius:8px",
       "border:1px solid var(--app-border)",
-      "background:var(--app-elevated)",
+      "background:var(--app-menu)",
       "box-shadow:0 8px 28px rgba(0,0,0,0.65)",
       "color:var(--app-text)",
     ].join(";");

@@ -8,11 +8,16 @@ import {
 } from "@/lib/slices/chart-slice";
 import { DEFAULT_SYMBOLS } from "@/lib/maws/universe";
 import {
+  appSettingsFromVelaTheme,
+  chartSettingsFromVelaTheme,
+  THEME_OWNED_CHART_KEYS,
+} from "@/lib/app-theme";
+import {
   DEFAULT_CHART_SETTINGS,
   DEFAULT_INDICATOR_SETTINGS,
   DEFAULT_LAYOUT_SYNC,
 } from "@/types";
-import type { ChartPaneState } from "@/types";
+import type { ChartPaneState, ChartSettings } from "@/types";
 
 /**
  * Phase E regression tests for the chart-slice extraction:
@@ -743,6 +748,65 @@ describe("normalizeChartRehydrate (legacy compat)", () => {
     );
     // Signature match against pane studies pins the active template.
     expect(st.activeIndicatorTemplateId).toBe("t1");
+  });
+
+  it("re-derives a stale theme palette from the active app theme", () => {
+    // A theme pick (or a config replay captured under one — e.g. the boot-time
+    // chart template) leaves the theme-owned slots holding that theme's
+    // palette. On refresh they must follow the CURRENT app theme, not
+    // whichever theme last wrote them.
+    const st = fakeState({
+      appSettings: appSettingsFromVelaTheme("gruvbox"),
+      chartSettings: {
+        ...DEFAULT_CHART_SETTINGS,
+        ...chartSettingsFromVelaTheme("dark"),
+      },
+      panes: [],
+    });
+    normalizeChartRehydrate(st);
+    const themed = chartSettingsFromVelaTheme("gruvbox");
+    expect(st.chartSettings.backgroundColor).toBe(themed.backgroundColor);
+    expect(st.chartSettings.bodyUpColor).toBe(themed.bodyUpColor);
+    expect(st.chartSettings.horzGridColor).toBe(themed.horzGridColor);
+    expect(st.chartSettings.scaleTextColor).toBe(themed.scaleTextColor);
+  });
+
+  it("keeps hand-customized chart colors instead of re-theming them", () => {
+    const st = fakeState({
+      appSettings: appSettingsFromVelaTheme("gruvbox"),
+      chartSettings: {
+        ...DEFAULT_CHART_SETTINGS,
+        ...chartSettingsFromVelaTheme("dark"),
+        backgroundColor: "#123456",
+      },
+      panes: [],
+    });
+    normalizeChartRehydrate(st);
+    const themed = chartSettingsFromVelaTheme("gruvbox");
+    // The custom background survives while the remaining theme-owned slots
+    // still follow the active app theme key-by-key.
+    expect(st.chartSettings.backgroundColor).toBe("#123456");
+    expect(st.chartSettings.bodyUpColor).toBe(themed.bodyUpColor);
+    expect(st.chartSettings.horzGridColor).toBe(themed.horzGridColor);
+    expect(st.chartSettings.scaleTextColor).toBe(themed.scaleTextColor);
+  });
+
+  it("leaves a fully custom chart palette untouched", () => {
+    const custom = Object.fromEntries(
+      THEME_OWNED_CHART_KEYS.map((key, index) => [
+        key,
+        `#${(0x100000 + index).toString(16)}`,
+      ]),
+    ) as Partial<ChartSettings>;
+    const st = fakeState({
+      appSettings: appSettingsFromVelaTheme("gruvbox"),
+      chartSettings: { ...DEFAULT_CHART_SETTINGS, ...custom },
+      panes: [],
+    });
+    normalizeChartRehydrate(st);
+    for (const key of THEME_OWNED_CHART_KEYS) {
+      expect(st.chartSettings[key]).toBe(custom[key]);
+    }
   });
 });
 
