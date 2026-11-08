@@ -155,24 +155,65 @@ describe("Phase 2 emergency flatten", () => {
     expect(calls).toEqual(["cancel-algo", "close"]);
   });
 
-  test("emergency flatten reports an Algo cancellation failure and does not close through it", async () => {
+  test("an Algo cancellation failure never blocks the reduce-only close", async () => {
     let closes = 0;
+    let cancelAttempts = 0;
+    let algosOpen = true;
     const summary = await cancelAllAndFlatten("algo-flatten-failure-account", {
       getOpenOrders: async () => [],
       getOpenPositions: async () => [{ symbol: "BTCUSDT", positionAmt: "0.001" }],
-      getOpenAlgoOrders: async () => [{ clientAlgoId: "algo-stop", symbol: "BTCUSDT" }],
+      getOpenAlgoOrders: async () => (algosOpen
+        ? [{ clientAlgoId: "algo-stop", symbol: "BTCUSDT", closePosition: true }]
+        : []),
       cancelAllOpenOrders: async () => [],
-      cancelAllAlgoOrders: async () => { throw new Error("cancel failed"); },
+      cancelAllAlgoOrders: async () => {
+        cancelAttempts += 1;
+        if (cancelAttempts === 1) throw new Error("cancel failed");
+        algosOpen = false;
+        return [];
+      },
       closePosition: async () => {
         closes += 1;
         return { ok: true, clientOrderId: "close-market", status: "NEW" };
       },
     }, "operator:test");
 
+    expect(closes).toBe(1);
+    expect(cancelAttempts).toBe(2);
     expect(summary.failures).toEqual([
       expect.objectContaining({ action: "cancel_algo_orders", symbol: "BTCUSDT" }),
     ]);
-    expect(closes).toBe(0);
+    expect(summary.remainingAlgoOrders).toEqual([]);
+  });
+
+  test("a successful close with leftover closePosition Algo orders alerts and lists them", async () => {
+    freshEnv(makeCfg({ alertWebhookUrl: "https://alerts.example.test/hook" }));
+    const fetchSpy = jest.spyOn(global, "fetch").mockResolvedValue(new Response(null, { status: 200 }));
+    let closes = 0;
+    try {
+      const summary = await cancelAllAndFlatten("algo-leftover-account", {
+        getOpenOrders: async () => [],
+        getOpenPositions: async () => [{ symbol: "BTCUSDT", positionAmt: "0.001" }],
+        getOpenAlgoOrders: async () => [{ clientAlgoId: "algo-tp", symbol: "BTCUSDT", closePosition: true }],
+        cancelAllOpenOrders: async () => [],
+        cancelAllAlgoOrders: async () => [],
+        closePosition: async () => {
+          closes += 1;
+          return { ok: true, clientOrderId: "close-market", status: "NEW" };
+        },
+      }, "operator:test");
+
+      expect(closes).toBe(1);
+      expect(summary.remainingAlgoOrders).toEqual([{ symbol: "BTCUSDT", clientAlgoId: "algo-tp" }]);
+      expect(summary.failures).toEqual([
+        expect.objectContaining({ action: "cancel_algo_orders", symbol: "BTCUSDT" }),
+        expect.objectContaining({ action: "verify_algo_orders", symbol: "BTCUSDT" }),
+      ]);
+      const bodies = fetchSpy.mock.calls.map(([, init]) => String((init as RequestInit | undefined)?.body ?? ""));
+      expect(bodies.some((body) => body.includes("emergency_algo_orders_remaining:BTCUSDT"))).toBe(true);
+    } finally {
+      fetchSpy.mockRestore();
+    }
   });
 
   test("OrderService emergency close bypasses kill switch and REST breaker", async () => {
