@@ -14,7 +14,7 @@
     "test:charting": "vitest run --root lib/charting",
     "test:watch": "jest --watch",
     "test:coverage": "jest --coverage",
-    "test:integration": "node -r dotenv/config node_modules/.bin/jest --testPathPattern=tests/integration --runInBand --detectOpenHandles dotenv_config_path=.env.integration",
+    "test:integration": "node scripts/run-integration-tests.mjs",
     "test:integration:verbose": "MAWS_TEST_VERBOSE=true npm run test:integration",
     "test:integration:setup": "node scripts/check-integration-setup.mjs",
     "journal": "pnpm -C vendor/trade-journal/apps/web exec next start -p 3400",

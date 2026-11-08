@@ -18,6 +18,62 @@ import { resetBrokerClientsForTests } from "@/lib/server/binance/transport";
 import { BinanceLiveManager, resetLiveManagerForTests } from "@/lib/server/binance/manager";
 import { setRuntime, RUNTIME_KEYS } from "@/lib/server/runtime/flags";
 
+const TESTNET_REST_HOST = "testnet.binancefuture.com";
+const TESTNET_WS_HOST = "fstream.binancefuture.com";
+const PRODUCTION_KEY_VARIABLES = [
+  "MAWS_BINANCE_PRODUCTION_API_KEY",
+  "MAWS_BINANCE_PRODUCTION_API_SECRET",
+] as const;
+const PROTECTED_DATABASES = [".maws/maws.db", ".maws/maws-prod.db"] as const;
+
+function endpointHost(url: string): string {
+  try {
+    return new URL(url).hostname.toLowerCase();
+  } catch {
+    return "";
+  }
+}
+
+/**
+ * Refuses to run Testnet integration tests against anything else: a MAWS_ENV
+ * that does not resolve to testnet, non-testnet endpoints, production
+ * credentials in the environment, or a real database file. Runs before any
+ * manager, HTTP client, or database handle is created.
+ */
+export function assertTestnetSafety(
+  cfg: EnvConfig,
+  env: NodeJS.ProcessEnv = process.env,
+  repoRoot: string = process.cwd(),
+): void {
+  const rawEnv = (env.MAWS_ENV ?? "").trim().toLowerCase();
+  if (rawEnv !== "testnet") {
+    throw new Error(`Integration tests require MAWS_ENV=testnet (resolved: ${rawEnv || "unset"})`);
+  }
+  if (cfg.env !== "testnet") {
+    throw new Error(`Integration tests refuse MAWS_ENV=${cfg.env}; only testnet is allowed`);
+  }
+  const profile = cfg.activeProfileId ? cfg.profiles[cfg.activeProfileId] : null;
+  if (!profile || profile.environment !== "testnet") {
+    throw new Error(`Integration tests require the binance-testnet profile, got: ${cfg.activeProfileId ?? "none"}`);
+  }
+  if (endpointHost(profile.restEndpoint) !== TESTNET_REST_HOST || endpointHost(profile.webSocketEndpoint) !== TESTNET_WS_HOST) {
+    throw new Error(`Integration tests refuse non-Testnet endpoints: rest=${profile.restEndpoint} ws=${profile.webSocketEndpoint}`);
+  }
+  for (const name of PRODUCTION_KEY_VARIABLES) {
+    if ((env[name] ?? "").trim() !== "") {
+      throw new Error(`${name} must be unset when running integration tests`);
+    }
+  }
+  const dbPaths = [cfg.dbPath, env.MAWS_DB_PATH?.trim() || cfg.dbPath];
+  for (const dbPath of dbPaths) {
+    for (const protectedPath of PROTECTED_DATABASES) {
+      if (path.resolve(repoRoot, dbPath) === path.resolve(repoRoot, protectedPath)) {
+        throw new Error(`Integration tests refuse MAWS_DB_PATH=${protectedPath}`);
+      }
+    }
+  }
+}
+
 const VERBOSE = process.env.MAWS_TEST_VERBOSE === "true";
 
 export function log(...args: unknown[]): void {
@@ -82,7 +138,7 @@ export function loadTestnetConfig(): EnvConfig {
     },
   };
 
-  return {
+  const cfg: EnvConfig = {
     env: "testnet",
     brokerType: "binance",
     defaultProfile: "binance-testnet",
@@ -133,6 +189,8 @@ export function loadTestnetConfig(): EnvConfig {
       reconSuccessThreshold: 2,
     },
   };
+  assertTestnetSafety(cfg);
+  return cfg;
 }
 
 /**
