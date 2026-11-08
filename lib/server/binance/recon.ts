@@ -14,7 +14,8 @@ import {
   type OrderIntent,
 } from "./intents";
 import { BinanceApiError, ERR_UNKNOWN_ORDER, type BinanceRestClient } from "./rest";
-import { fillExists, liveState, persistFill, rememberFill, type LiveFill } from "./state";
+import { fillExists, isAlgoOrphanCleanupPending, isOrphanedAlgoOrder, liveState, persistFill, rememberFill, type LiveFill } from "./state";
+import { cancelOrphanedClosePositionAlgos } from "./algo-orphans";
 import { isTerminalStatus } from "./types";
 import { getReconciliationBreaker } from "../resilience/breakers";
 import { withRiskMutation } from "./mutation-queue";
@@ -186,6 +187,9 @@ export class Reconciler {
       await this.backfillMissedFills(diffs);
       if (!this.isCurrent()) return this.cancelled();
 
+      await this.cleanupOrphanedConditionalOrders(diffs);
+      if (!this.isCurrent()) return this.cancelled();
+
       const openOrders = liveState().openOrders;
       const intentSync = await this.reconcileActiveIntents(openOrders, diffs);
       if (!this.isCurrent()) return this.cancelled();
@@ -229,6 +233,9 @@ export class Reconciler {
     for (const intent of listProtectionIntents(this.persistenceProfile)) {
       if (!this.isCurrent()) return;
       if (isProtectionIntentLocked(intent.symbol, this.persistenceProfile)) continue;
+      // An in-flight orphan cleanup cannot prove protection, and it must not
+      // prune the intent on partial knowledge either.
+      if (isAlgoOrphanCleanupPending(intent.symbol)) continue;
       if (!liveState().positions.has(intent.symbol)) {
         deleteProtectionIntent(intent.symbol, this.persistenceProfile);
         continue;
@@ -260,7 +267,11 @@ export class Reconciler {
       }
       const closeSide = position.side === "long" ? "SELL" : "BUY";
       const openOrders = [...liveState().openOrders.values()].filter(
-        (order) => order.symbol === intent.symbol && order.side === closeSide && order.closePosition,
+        (order) =>
+          order.symbol === intent.symbol &&
+          order.side === closeSide &&
+          order.closePosition &&
+          !isOrphanedAlgoOrder(intent.symbol, order.clientOrderId),
       );
       const tpPrice = intent.tpPrice;
       const slPrice = intent.slPrice;
@@ -325,6 +336,38 @@ export class Reconciler {
    * /fapi/v1/order for them always reports "unknown order" and would turn
    * every protection order into drift.
    */
+  /**
+   * A flat symbol keeps its untriggered closePosition leg (the TP when the SL
+   * fills, the SL when the TP fills, either on liquidation) because Binance
+   * only removes the leg that fired. Cancel exactly the ids the snapshot just
+   * showed for that symbol; a new position's orders use new ids.
+   */
+  private async cleanupOrphanedConditionalOrders(diffs: string[]): Promise<void> {
+    const candidates = new Map<string, string[]>();
+    for (const order of liveState().openOrders.values()) {
+      if (order.kind !== "algo" || !order.closePosition) continue;
+      if (liveState().positions.has(order.symbol)) continue;
+      const ids = candidates.get(order.symbol) ?? [];
+      ids.push(order.clientOrderId);
+      candidates.set(order.symbol, ids);
+    }
+    for (const [symbol, ids] of candidates) {
+      if (!this.isCurrent()) return;
+      const outcome = await cancelOrphanedClosePositionAlgos(symbol, ids, {
+        getOpenAlgoOrders: (candidate) => this.deps.rest.getOpenAlgoOrders(candidate),
+        cancelAlgoOrder: (clientAlgoId) => this.deps.rest.cancelAlgoOrder({ clientAlgoId }),
+        isSymbolFlat: () => !liveState().positions.has(symbol),
+        isCurrent: () => this.isCurrent(),
+      }, this.persistenceProfile, "reconciliation");
+      if (outcome.canceled.length > 0) {
+        diffs.push(`cancelled ${outcome.canceled.length} orphaned conditional order(s) for flat ${symbol}`);
+      }
+      if (outcome.remaining.length > 0) {
+        diffs.push(`orphaned conditional order(s) remain open for flat ${symbol}: ${outcome.remaining.join(", ")}`);
+      }
+    }
+  }
+
   private async queryIntentExchangeState(intent: OrderIntent): Promise<IntentExchangeState | null> {
     if (intent.kind === "algo") {
       let order;

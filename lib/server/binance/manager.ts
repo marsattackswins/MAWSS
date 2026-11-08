@@ -27,6 +27,7 @@ import { incomeLedgerIncludes, syncIncomeHistory, type IncomeSyncResult } from "
 import { markIncomeSyncFailed, markIncomeSyncSucceeded } from "./metrics-freshness";
 import { withRiskMutationSync } from "./mutation-queue";
 import { cancelAllAndFlatten, type EmergencyFlattenSummary } from "./emergency";
+import { cancelOrphanedClosePositionAlgos, openClosePositionAlgoIds } from "./algo-orphans";
 import { publishLive } from "./sse";
 import {
   applyAccountEvent,
@@ -643,6 +644,29 @@ export class BinanceLiveManager {
     this.algoOrderRefreshTimers.set(symbol, timer);
   }
 
+  /**
+   * Orphaned closePosition legs: a flat symbol keeps its untriggered exit
+   * order because Binance only removes the leg that fired. Only the ids the
+   * live view already knew are cancelled, so a fresh position's new orders
+   * (new client ids) are never touched.
+   */
+  private cleanupOrphanedConditionalOrders(symbols: string[], generation: number): void {
+    for (const symbol of new Set(symbols)) {
+      const candidateIds = openClosePositionAlgoIds(symbol);
+      if (candidateIds.length === 0) continue;
+      void cancelOrphanedClosePositionAlgos(symbol, candidateIds, {
+        getOpenAlgoOrders: (candidate) => this.rest.getOpenAlgoOrders(candidate),
+        cancelAlgoOrder: (clientAlgoId) => this.rest.cancelAlgoOrder({ clientAlgoId }),
+        isSymbolFlat: () => !liveState().positions.has(symbol),
+        isCurrent: () => this.isGenerationCurrent(generation),
+      }, this.persistenceProfile, "account-update").catch((err: unknown) => {
+        if (this.isGenerationCurrent(generation)) {
+          log.warn("orphaned conditional order cleanup failed", { symbol, error: String(err) });
+        }
+      });
+    }
+  }
+
   private async refreshAlgoOrdersForSymbol(symbol: string, generation: number): Promise<void> {
     const [openOrders, algoOrders] = await Promise.all([
       this.rest.getOpenOrders(symbol),
@@ -858,6 +882,10 @@ export class BinanceLiveManager {
           updateTradingGauges();
           publishLive("account-update", { at: Date.now() });
           if (positionAmountChanged) this.scheduleAccountUpdateSnapshot();
+          // Going flat abandons the untriggered closePosition leg: clean it up
+          // now instead of waiting for the next reconciliation pass.
+          const flatSymbols = accountEv.a.P.filter((p) => Number(p.pa) === 0).map((p) => p.s);
+          if (flatSymbols.length > 0) this.cleanupOrphanedConditionalOrders(flatSymbols, this.lifecycleGeneration);
           // ACCOUNT_UPDATE `up` values are fill-time snapshots, not current
           // quotes. Immediately refresh the mark for every touched symbol so
           // the position's PnL becomes mark-derived again (applyMarkPrice).

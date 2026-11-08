@@ -107,6 +107,14 @@ export interface LiveState {
 
 const WORKING_STATUSES = new Set(["NEW", "PARTIALLY_FILLED"]);
 
+/**
+ * Conditional orders left behind by a position that went flat. Ids are added
+ * while a cleanup runs and survive a failed attempt so a later position can
+ * never be declared protected by an old exit order.
+ */
+const orphanAlgoOrderIds = new Map<string, Set<string>>();
+const orphanAlgoCleanupPending = new Set<string>();
+
 function createEmpty(): LiveState {
   return {
     account: null,
@@ -128,10 +136,43 @@ export function liveState(): LiveState {
 
 export function clearLiveState(): void {
   state = createEmpty();
+  orphanAlgoOrderIds.clear();
+  orphanAlgoCleanupPending.clear();
 }
 
 export function resetLiveStateForTests(): void {
   clearLiveState();
+}
+
+export function beginAlgoOrphanCleanup(symbol: string, clientAlgoIds: Iterable<string>): void {
+  orphanAlgoCleanupPending.add(symbol);
+  const ids = orphanAlgoOrderIds.get(symbol) ?? new Set<string>();
+  for (const id of clientAlgoIds) ids.add(id);
+  orphanAlgoOrderIds.set(symbol, ids);
+}
+
+export function finishAlgoOrphanCleanup(symbol: string, remainingClientAlgoIds: Iterable<string>): void {
+  orphanAlgoCleanupPending.delete(symbol);
+  const remaining = new Set(remainingClientAlgoIds);
+  if (remaining.size === 0) orphanAlgoOrderIds.delete(symbol);
+  else orphanAlgoOrderIds.set(symbol, remaining);
+}
+
+export function isAlgoOrphanCleanupPending(symbol: string): boolean {
+  return orphanAlgoCleanupPending.has(symbol);
+}
+
+/** A leftover exit order can never count as protection for a later position. */
+export function isOrphanedAlgoOrder(symbol: string, clientOrderId: string): boolean {
+  return orphanAlgoOrderIds.get(symbol)?.has(clientOrderId) ?? false;
+}
+
+/** Marks a locally known order terminal after a confirmed exchange cancel. */
+export function markOrderCanceledLocally(clientOrderId: string): void {
+  const order = state.orders.get(clientOrderId);
+  if (!order) return;
+  state.orders.set(clientOrderId, { ...order, status: "CANCELED", updateTime: Date.now() });
+  state.openOrders.delete(clientOrderId);
 }
 
 export function grossExposureUsd(): number {
