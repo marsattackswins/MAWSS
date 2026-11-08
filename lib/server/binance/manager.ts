@@ -22,7 +22,7 @@ import { BinanceRestClient, BinanceApiError } from "./rest";
 import { TransportTimeoutError } from "./transport";
 import { CircuitBreakerOpenError } from "../resilience/circuit-breaker";
 import { realizedSinceUtcMidnight, type RiskSnapshot } from "./risk";
-import { Reconciler, type ReconResult } from "./recon";
+import { Reconciler, checkPositionProtection, type ReconResult } from "./recon";
 import { incomeLedgerIncludes, syncIncomeHistory, type IncomeSyncResult } from "./income";
 import { markIncomeSyncFailed, markIncomeSyncSucceeded } from "./metrics-freshness";
 import { withRiskMutationSync } from "./mutation-queue";
@@ -51,10 +51,9 @@ import {
   markAlgoStateFresh,
   markAlgoStateStale,
   openPositionCount,
-  refreshPositionMarkAfterAccountUpdate,
-} from "./state";
+  refreshPositionMarkAfterAccountUpdate, isAlgoStateStale } from "./state";
 import { backfillHistoricalOrders, historySymbols, hydrateHistoricalOrders } from "./order-history";
-import { getProtectionIntent, listProtectionIntents, setProtectionStatus } from "./protection";
+import { getProtectionIntent, isProtectionIntentLocked, listProtectionIntents, setProtectionStatus } from "./protection";
 import { StreamLeaseUnavailableError, UserDataStream } from "./stream";
 import { MARK_STALE_AFTER_MS, MarkPriceStream } from "./mark-price-stream";
 import type { AccountUpdateEvent, AlgoUpdateEvent, BinanceAlgoOrder, BinanceOrder, OrderTradeUpdateEvent, UserStreamEvent } from "./types";
@@ -704,6 +703,23 @@ export class BinanceLiveManager {
     markAlgoStateFresh(symbol);
     updateTradingGauges();
     publishLive("snapshot", { at: Date.now(), symbol });
+    await this.checkProtectionAfterAlgoRefresh(symbol, generation);
+  }
+
+  /**
+   * A conditional-order refresh makes the exchange truth for this symbol
+   * current, so re-check its protection now: a TP/SL cancelled without a
+   * removal reason would otherwise read as protected until the next
+   * reconciliation pass.
+   */
+  private async checkProtectionAfterAlgoRefresh(symbol: string, generation: number): Promise<void> {
+    if (!this.isGenerationCurrent(generation)) return;
+    if (isProtectionIntentLocked(symbol, this.persistenceProfile)) return;
+    if (isAlgoStateStale(symbol)) return;
+    await checkPositionProtection(symbol, {
+      persistenceProfile: this.persistenceProfile,
+      isCurrent: () => this.isGenerationCurrent(generation),
+    });
   }
 
   private scheduleAccountUpdateSnapshot(): void {

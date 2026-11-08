@@ -24,14 +24,12 @@ import { eq, parseDec } from "./decimal";
 import { audit } from "../audit/log";
 import { alert } from "../alerts/dispatch";
 import { publishLive } from "./sse";
-import {
-  deleteProtectionIntent,
+import { deleteProtectionIntent,
   isProtectionIntentLocked,
   listProtectionIntents,
   markProtectionRestoreAttempted,
   setProtectionStatus,
-  type ProtectionIntent,
-} from "./protection";
+  type ProtectionIntent, getProtectionIntent } from "./protection";
 import {
   activePersistenceProfile,
   assertPersistenceProfile,
@@ -232,102 +230,11 @@ export class Reconciler {
   private async reconcileProtectionIntents(): Promise<void> {
     for (const intent of listProtectionIntents(this.persistenceProfile)) {
       if (!this.isCurrent()) return;
-      if (isProtectionIntentLocked(intent.symbol, this.persistenceProfile)) continue;
-      // A stale or mid-cleanup conditional-order view cannot prove protection,
-      // and it must not prune the intent on partial knowledge either.
-      if (isAlgoStateStale(intent.symbol) || isAlgoOrphanCleanupPending(intent.symbol)) continue;
-      if (!liveState().positions.has(intent.symbol)) {
-        deleteProtectionIntent(intent.symbol, this.persistenceProfile);
-        continue;
-      }
-
-      const position = liveState().positions.get(intent.symbol)!;
-      if (position.side !== intent.side) {
-        deleteProtectionIntent(intent.symbol, this.persistenceProfile);
-        const reason = `Protection intent side ${intent.side} does not match live position side ${position.side}`;
-        audit("operator", "position.protection.intent_side_mismatch", {
-          symbol: intent.symbol,
-          intentSide: intent.side,
-          positionSide: position.side,
-        }, undefined, this.persistenceProfile);
-        alert(`position_protection_intent_side_mismatch:${intent.symbol}`, {
-          symbol: intent.symbol,
-          intentSide: intent.side,
-          positionSide: position.side,
-          severity: "high",
-        });
-        continue;
-      }
-      if (
-        intent.status === "CONFIRMED" &&
-        intent.protectionStatus === "UNPROTECTED" &&
-        intent.failureReason?.startsWith("Protection removal incomplete:")
-      ) {
-        continue;
-      }
-      const closeSide = position.side === "long" ? "SELL" : "BUY";
-      const openOrders = [...liveState().openOrders.values()].filter(
-        (order) =>
-          order.symbol === intent.symbol &&
-          order.side === closeSide &&
-          order.closePosition &&
-          !isOrphanedAlgoOrder(intent.symbol, order.clientOrderId),
-      );
-      const tpPrice = intent.tpPrice;
-      const slPrice = intent.slPrice;
-      const tpMatches = tpPrice == null || openOrders.some(
-        (order) => order.type === "TAKE_PROFIT_MARKET" && samePrice(order.stopPrice, tpPrice),
-      );
-      const slMatches = slPrice == null || openOrders.some(
-        (order) => order.type === "STOP_MARKET" && samePrice(order.stopPrice, slPrice),
-      );
-      if (tpMatches && slMatches) {
-        setProtectionStatus(intent.symbol, "PROTECTED", null, this.persistenceProfile);
-        publishLive("account-update", { at: Date.now(), protection: intent.symbol, status: "PROTECTED" });
-        continue;
-      }
-
-      const missing = [
-        !tpMatches ? `TP ${intent.tpPrice}` : null,
-        !slMatches ? `SL ${intent.slPrice}` : null,
-      ].filter((part): part is string => part != null);
-      const reason = `Recorded protection has no matching open order: ${missing.join(", ")}`;
-      setProtectionStatus(intent.symbol, "UNPROTECTED", reason, this.persistenceProfile);
-      publishLive("account-update", { at: Date.now(), protection: intent.symbol, status: "UNPROTECTED" });
-      if (
-        intent.protectionStatus !== "UNPROTECTED" ||
-        (intent.status === "PENDING_REPLACE" && intent.failureReason === "Protection update in progress")
-      ) {
-        audit("operator", "position.protection.unprotected", { symbol: intent.symbol, reason }, undefined, this.persistenceProfile);
-        alert(`position_unprotected:${intent.symbol}`, { symbol: intent.symbol, reason });
-      }
-      log.error("position protection missing during reconciliation", { symbol: intent.symbol, missing });
-
-      if (intent.status !== "PENDING_REPLACE") continue;
-      const ageMs = Date.now() - intent.createdAt;
-      const maxAgeMs = serverConfig().protectionPendingMaxAgeMs;
-      if (ageMs < 0 || ageMs > maxAgeMs) {
-        const expiredReason = `Pending protection replacement expired after ${Math.max(0, ageMs)}ms; automatic restore limit is ${maxAgeMs}ms`;
-        setProtectionStatus(intent.symbol, "UNPROTECTED", expiredReason, this.persistenceProfile);
-        if (intent.failureReason !== expiredReason) {
-          audit("operator", "position.protection.pending_restore_expired", { symbol: intent.symbol, ageMs, maxAgeMs }, undefined, this.persistenceProfile);
-          alert(`position_protection_pending_expired:${intent.symbol}`, { symbol: intent.symbol, ageMs, maxAgeMs });
-        }
-        continue;
-      }
-      if (intent.restoreAttemptedAt >= intent.createdAt) continue;
-      if (intentsInUncertainStates(this.persistenceProfile).some((order) => order.symbol === intent.symbol)) continue;
-      if (!this.deps.restoreProtection) continue;
-      markProtectionRestoreAttempted(intent.symbol, Date.now(), this.persistenceProfile);
-      try {
-        await this.deps.restoreProtection(intent);
-      } catch (err) {
-        const restoreError = `Protection restore attempt failed: ${String(err)}`;
-        setProtectionStatus(intent.symbol, "UNPROTECTED", restoreError, this.persistenceProfile);
-        audit("operator", "position.protection.restore_failed", { symbol: intent.symbol, error: String(err) }, undefined, this.persistenceProfile);
-        alert(`position_protection_restore_failed:${intent.symbol}`, { symbol: intent.symbol, error: String(err) });
-        log.error("position protection restore failed", { symbol: intent.symbol, error: String(err) });
-      }
+      await checkPositionProtection(intent.symbol, {
+        persistenceProfile: this.persistenceProfile,
+        restoreProtection: this.deps.restoreProtection,
+        isCurrent: () => this.isCurrent(),
+      });
     }
   }
 
@@ -564,6 +471,129 @@ export class Reconciler {
     }
   }
 }
+
+export interface ProtectionCheckDeps {
+  persistenceProfile: PersistenceProfile;
+  /** Omitted by callers that only classify protection (no restore attempts). */
+  restoreProtection?(intent: ProtectionIntent): Promise<unknown>;
+  isCurrent?(): boolean;
+}
+
+/**
+ * Per-symbol protection check: claims PROTECTED, flags UNPROTECTED once and
+ * runs the bounded pending-replace restore. Reconciliation calls it for every
+ * intent; the live manager calls it right after a conditional-order refresh so
+ * a TP/SL cancelled on the exchange is flagged within seconds instead of after
+ * the next reconciliation interval.
+ */
+export async function checkPositionProtection(
+  symbol: string,
+  deps: ProtectionCheckDeps,
+): Promise<void> {
+  assertPersistenceProfile(deps.persistenceProfile);
+  if (deps.isCurrent && !deps.isCurrent()) return;
+  // A held protection lock means a replace is in flight; a stale conditional
+  // view cannot prove protection. Neither may prune the intent.
+  if (isProtectionIntentLocked(symbol, deps.persistenceProfile)) return;
+  if (isAlgoStateStale(symbol) || isAlgoOrphanCleanupPending(symbol)) return;
+  const intent = getProtectionIntent(symbol, deps.persistenceProfile);
+  if (!intent) return;
+  if (!liveState().positions.has(symbol)) {
+    deleteProtectionIntent(symbol, deps.persistenceProfile);
+    return;
+  }
+
+  const position = liveState().positions.get(symbol)!;
+  if (position.side !== intent.side) {
+    deleteProtectionIntent(symbol, deps.persistenceProfile);
+    const reason = `Protection intent side ${intent.side} does not match live position side ${position.side}`;
+    audit("operator", "position.protection.intent_side_mismatch", {
+      symbol,
+      intentSide: intent.side,
+      positionSide: position.side,
+    }, undefined, deps.persistenceProfile);
+    alert(`position_protection_intent_side_mismatch:${symbol}`, {
+      symbol,
+      intentSide: intent.side,
+      positionSide: position.side,
+      severity: "high",
+    });
+    return;
+  }
+  if (
+    intent.status === "CONFIRMED" &&
+    intent.protectionStatus === "UNPROTECTED" &&
+    intent.failureReason?.startsWith("Protection removal incomplete:")
+  ) {
+    return;
+  }
+  const closeSide = position.side === "long" ? "SELL" : "BUY";
+  const openOrders = [...liveState().openOrders.values()].filter(
+    (order) =>
+      order.symbol === symbol &&
+      order.side === closeSide &&
+      order.closePosition &&
+      !isOrphanedAlgoOrder(symbol, order.clientOrderId),
+  );
+  const tpPrice = intent.tpPrice;
+  const slPrice = intent.slPrice;
+  const tpMatches = tpPrice == null || openOrders.some(
+    (order) => order.type === "TAKE_PROFIT_MARKET" && samePrice(order.stopPrice, tpPrice),
+  );
+  const slMatches = slPrice == null || openOrders.some(
+    (order) => order.type === "STOP_MARKET" && samePrice(order.stopPrice, slPrice),
+  );
+  if (tpMatches && slMatches) {
+    setProtectionStatus(symbol, "PROTECTED", null, deps.persistenceProfile);
+    publishLive("account-update", { at: Date.now(), protection: symbol, status: "PROTECTED" });
+    return;
+  }
+
+  const missing = [
+    !tpMatches ? `TP ${intent.tpPrice}` : null,
+    !slMatches ? `SL ${intent.slPrice}` : null,
+  ].filter((part): part is string => part != null);
+  const reason = `Recorded protection has no matching open order: ${missing.join(", ")}`;
+  setProtectionStatus(symbol, "UNPROTECTED", reason, deps.persistenceProfile);
+  publishLive("account-update", { at: Date.now(), protection: symbol, status: "UNPROTECTED" });
+  // One alert per transition: a symbol that is already UNPROTECTED (or a
+  // replace that recorded its own pending state) is not re-alerted.
+  if (
+    intent.protectionStatus !== "UNPROTECTED" ||
+    (intent.status === "PENDING_REPLACE" && intent.failureReason === "Protection update in progress")
+  ) {
+    audit("operator", "position.protection.unprotected", { symbol, reason }, undefined, deps.persistenceProfile);
+    alert(`position_unprotected:${symbol}`, { symbol, reason });
+  }
+  log.error("position protection missing during reconciliation", { symbol, missing });
+
+  if (intent.status !== "PENDING_REPLACE") return;
+  const ageMs = Date.now() - intent.createdAt;
+  const maxAgeMs = serverConfig().protectionPendingMaxAgeMs;
+  if (ageMs < 0 || ageMs > maxAgeMs) {
+    const expiredReason = `Pending protection replacement expired after ${Math.max(0, ageMs)}ms; automatic restore limit is ${maxAgeMs}ms`;
+    setProtectionStatus(symbol, "UNPROTECTED", expiredReason, deps.persistenceProfile);
+    if (intent.failureReason !== expiredReason) {
+      audit("operator", "position.protection.pending_restore_expired", { symbol, ageMs, maxAgeMs }, undefined, deps.persistenceProfile);
+      alert(`position_protection_pending_expired:${symbol}`, { symbol, ageMs, maxAgeMs });
+    }
+    return;
+  }
+  if (intent.restoreAttemptedAt >= intent.createdAt) return;
+  if (intentsInUncertainStates(deps.persistenceProfile).some((order) => order.symbol === symbol)) return;
+  if (!deps.restoreProtection) return;
+  markProtectionRestoreAttempted(symbol, Date.now(), deps.persistenceProfile);
+  try {
+    await deps.restoreProtection(intent);
+  } catch (err) {
+    const restoreError = `Protection restore attempt failed: ${String(err)}`;
+    setProtectionStatus(symbol, "UNPROTECTED", restoreError, deps.persistenceProfile);
+    audit("operator", "position.protection.restore_failed", { symbol, error: String(err) }, undefined, deps.persistenceProfile);
+    alert(`position_protection_restore_failed:${symbol}`, { symbol, error: String(err) });
+    log.error("position protection restore failed", { symbol, error: String(err) });
+  }
+}
+
 
 function setLastRecon(patch: { lastRunAt: number; lastResult: "ok" | "drift" | "error"; driftCount: number }): void {
   setHealthSignal({ recon: { lastRunAt: patch.lastRunAt, lastResult: patch.lastResult, driftCount: patch.driftCount } });

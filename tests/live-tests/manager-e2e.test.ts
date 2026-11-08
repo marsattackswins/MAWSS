@@ -8,7 +8,7 @@ import { sseBus } from "@/lib/server/binance/sse";
 import { FakeHttp, FakeWs, freshEnv, installFakes, jsonRes, makeCfg, accountFixture, BTCUSDT_INFO, orderEvent, orderFixture } from "./helpers";
 import { healthSignals } from "@/lib/server/health/state";
 import { getMetrics, METRICS } from "@/lib/server/metrics/collector";
-import { getProtectionIntent, saveProtectionIntent } from "@/lib/server/binance/protection";
+import { getProtectionIntent, savePendingProtectionIntent, saveProtectionIntent, withProtectionIntentLock } from "@/lib/server/binance/protection";
 
 /**
  * End-to-end broker lifecycle against an in-memory testnet: startup, clock
@@ -41,8 +41,11 @@ async function applyManagerAccountUpdate(event: unknown): Promise<void> {
   await processEvent(event);
 }
 
-async function startManager(overrides: Record<string, () => unknown> = {}) {
-  const cfg = freshEnv(makeCfg());
+async function startManager(
+  overrides: Record<string, () => unknown> = {},
+  cfgOverrides: Parameters<typeof makeCfg>[0] = {},
+) {
+  const cfg = freshEnv(makeCfg(cfgOverrides));
   http = new FakeHttp();
   installFakes(http);
 
@@ -402,6 +405,100 @@ describe("BinanceLiveManager end-to-end (fake testnet)", () => {
     await waitForRiskSnapshot(() => liveState().openOrders.has("stream-sl-47"));
     expect(liveState().openOrders.has("stream-sl-46")).toBe(false);
     expect(http.callsTo("/fapi/v1/openAlgoOrders").length).toBeGreaterThanOrEqual(2);
+  });
+
+  test("a TP/SL cancelled on the exchange is flagged unprotected right after the refresh", async () => {
+    const position = {
+      symbol: "BTCUSDT",
+      positionAmt: "0.001",
+      entryPrice: "50000",
+      markPrice: "50000",
+      unRealizedProfit: "0",
+      liquidationPrice: "0",
+      leverage: "1",
+      positionSide: "BOTH",
+    };
+    let algoOrders: unknown[] = [algoOrderFixture("cancelled-sl", "49000")];
+    await startManager({
+      "/fapi/v2/positionRisk": () => [position],
+      "/fapi/v1/openAlgoOrders": () => algoOrders,
+    }, { alertWebhookUrl: "https://alerts.example.test/hook" });
+    saveProtectionIntent({ symbol: "BTCUSDT", side: "long", tpPrice: null, slPrice: "49000" });
+    expect(getProtectionIntent("BTCUSDT")?.protectionStatus).toBe("PROTECTED");
+    const fetchSpy = jest.spyOn(global, "fetch").mockResolvedValue(new Response(null, { status: 200 }));
+    const unprotectedAlerts = () => fetchSpy.mock.calls
+      .map(([, init]) => String((init as RequestInit | undefined)?.body ?? ""))
+      .filter((body) => body.includes("position_unprotected:BTCUSDT"));
+    const unprotectedAudits = () => (getDb()
+      .prepare("SELECT COUNT(*) AS n FROM audit_log WHERE action = 'position.protection.unprotected'")
+      .get() as { n: number }).n;
+    try {
+      // The order is gone from the exchange but no removal reason arrived.
+      algoOrders = [];
+      const ws = FakeWs.instances.find((instance) => instance.url.includes("LK-E2E"))!;
+      ws.emitMessage(algoUpdateEvent("cancelled-sl"));
+
+      await waitForRiskSnapshot(() => getProtectionIntent("BTCUSDT")?.protectionStatus === "UNPROTECTED");
+      expect(unprotectedAlerts()).toHaveLength(1);
+      expect(unprotectedAudits()).toBe(1);
+
+      ws.emitMessage(algoUpdateEvent("cancelled-sl"));
+      await waitForRiskSnapshot(() => http.callsTo("/fapi/v1/openAlgoOrders").length >= 3);
+      expect(unprotectedAlerts()).toHaveLength(1);
+      expect(unprotectedAudits()).toBe(1);
+    } finally {
+      fetchSpy.mockRestore();
+    }
+  });
+
+  test("the refresh-time protection check leaves a replace in flight alone", async () => {
+    const position = {
+      symbol: "BTCUSDT",
+      positionAmt: "0.001",
+      entryPrice: "50000",
+      markPrice: "50000",
+      unRealizedProfit: "0",
+      liquidationPrice: "0",
+      leverage: "1",
+      positionSide: "BOTH",
+    };
+    const algoOrders: unknown[] = [];
+    await startManager({
+      "/fapi/v2/positionRisk": () => [position],
+      "/fapi/v1/openAlgoOrders": () => algoOrders,
+    }, { alertWebhookUrl: "https://alerts.example.test/hook" });
+    savePendingProtectionIntent({
+      symbol: "BTCUSDT",
+      side: "long",
+      tpPrice: "52000",
+      slPrice: null,
+      previousTpPrice: null,
+      previousSlPrice: null,
+    });
+    const before = getProtectionIntent("BTCUSDT")!;
+    const fetchSpy = jest.spyOn(global, "fetch").mockResolvedValue(new Response(null, { status: 200 }));
+    let releaseLock!: () => void;
+    const held = new Promise<void>((resolve) => { releaseLock = resolve; });
+    const lockHolder = withProtectionIntentLock("BTCUSDT", () => held);
+    try {
+      const baseline = http.callsTo("/fapi/v1/openAlgoOrders").length;
+      const ws = FakeWs.instances.find((instance) => instance.url.includes("LK-E2E"))!;
+      ws.emitMessage(algoUpdateEvent("replace-in-flight"));
+      await waitForRiskSnapshot(() => http.callsTo("/fapi/v1/openAlgoOrders").length >= baseline + 1);
+      await new Promise((resolve) => setTimeout(resolve, 50));
+
+      expect(getProtectionIntent("BTCUSDT")).toMatchObject({
+        status: before.status,
+        protectionStatus: before.protectionStatus,
+        failureReason: before.failureReason,
+      });
+      const bodies = fetchSpy.mock.calls.map(([, init]) => String((init as RequestInit | undefined)?.body ?? ""));
+      expect(bodies.some((body) => body.includes("position_unprotected:BTCUSDT"))).toBe(false);
+    } finally {
+      releaseLock();
+      await lockHolder;
+      fetchSpy.mockRestore();
+    }
   });
 
   test("ALGO_UPDATE EXPIRED with a removal reason marks the position unprotected", async () => {
