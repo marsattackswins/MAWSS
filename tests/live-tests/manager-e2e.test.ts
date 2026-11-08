@@ -404,6 +404,52 @@ describe("BinanceLiveManager end-to-end (fake testnet)", () => {
     expect(http.callsTo("/fapi/v1/openAlgoOrders").length).toBeGreaterThanOrEqual(2);
   });
 
+  test("ALGO_UPDATE EXPIRED with a removal reason marks the position unprotected", async () => {
+    const position = {
+      symbol: "BTCUSDT",
+      positionAmt: "0.001",
+      entryPrice: "50000",
+      markPrice: "50000",
+      unRealizedProfit: "0",
+      liquidationPrice: "0",
+      leverage: "1",
+      positionSide: "BOTH",
+    };
+    let algoOrders: unknown[] = [algoOrderFixture("expired-sl", "49000")];
+    await startManager({
+      "/fapi/v2/positionRisk": () => [position],
+      "/fapi/v1/openAlgoOrders": () => algoOrders,
+    });
+    saveProtectionIntent({ symbol: "BTCUSDT", side: "long", tpPrice: null, slPrice: "49000" });
+    algoOrders = [];
+    const ws = FakeWs.instances.find((instance) => instance.url.includes("LK-E2E"))!;
+    ws.emitMessage({
+      e: "ALGO_UPDATE",
+      E: Date.now(),
+      T: Date.now(),
+      o: {
+        caid: "expired-sl",
+        aid: 72,
+        at: "CONDITIONAL",
+        o: "STOP_MARKET",
+        s: "BTCUSDT",
+        S: "SELL",
+        ps: "BOTH",
+        X: "EXPIRED",
+        ai: "",
+        rm: "expired",
+      },
+    });
+
+    expect(getProtectionIntent("BTCUSDT")).toMatchObject({
+      protectionStatus: "UNPROTECTED",
+      failureReason: "Binance removed protective algo order: expired",
+    });
+    const audited = getDb()
+      .prepare("SELECT id FROM audit_log WHERE action = 'position.protection.algo_rejected'")
+      .get();
+    expect(audited).toBeTruthy();
+  });
   test("a failed post-ALGO_UPDATE algo refresh retries once and clears staleness", async () => {
     const position = {
       symbol: "BTCUSDT",

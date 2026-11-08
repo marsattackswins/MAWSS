@@ -1035,7 +1035,8 @@ export class BinanceLiveManager {
       if (
         symbol &&
         payload.rm &&
-        (status === "CANCELED" || status === "REJECTED" || status === "REJECT") &&
+        (status === "CANCELED" || status === "REJECTED" || status === "REJECT" ||
+        status === "EXPIRED") &&
         Number(liveState().positions.get(symbol)?.qty ?? "0") !== 0 &&
         getProtectionIntent(symbol, this.persistenceProfile)
       ) {
