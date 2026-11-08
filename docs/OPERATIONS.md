@@ -2,6 +2,60 @@
 
 This document covers environment variables, configuration schema, secrets handling, circuit breakers, rate limits, logging/metrics, backup/restore, and incident response procedures.
 
+## Production first-start checklist
+
+Complete every item before the first production start. The database migration
+is one-way and the key permissions are set outside this repository, so a missed
+step is expensive to undo once the server has started.
+
+### Required environment
+
+- `MAWS_ENV=production`; `MAWS_ENABLE_REVERSE` must be unset or `false`.
+- `MAWS_OPERATOR_AUTH` in `<hex salt>:<hex scrypt hash>` format, generated with
+  `npm run gen-operator-auth`.
+- `MAWS_BINANCE_PRODUCTION_API_KEY` and `MAWS_BINANCE_PRODUCTION_API_SECRET`.
+  Do not also set a conflicting legacy `MAWS_BINANCE_API_KEY`/
+  `MAWS_BINANCE_API_SECRET` pair: startup fails closed with
+  `MAWS_PROFILE_CONFIGURATION_INVALID`.
+- All nine risk limits, explicitly, as positive finite numbers; production
+  startup names any that are missing:
+  - `MAWS_RISK_MAX_ORDER_NOTIONAL`
+  - `MAWS_RISK_MAX_GROSS_EXPOSURE`
+  - `MAWS_RISK_MAX_OPEN_ORDERS`
+  - `MAWS_RISK_MAX_OPEN_POSITIONS`
+  - `MAWS_RISK_DAILY_LOSS_PCT`
+  - `MAWS_RISK_PRICE_COLLAR_PCT`
+  - `MAWS_RISK_MAX_LEVERAGE`
+  - `MAWS_RISK_MAX_MARGIN_RATIO`
+  - `MAWS_RISK_MIN_LIQ_DISTANCE_PCT`
+
+### Optional
+
+- `MAWS_HEALTH_TOKEN`: read-only token for `/api/health`, `/api/health/broker`,
+  `/api/admin/health`, and `/api/admin/metrics`.
+- `MAWS_EMERGENCY_TOKEN`: separate token that can only authorize emergency
+  flatten. Both tokens must be at least 32 characters and differ from each
+  other and from the operator password.
+
+### Network and exchange
+
+- Behind nginx, set `MAWS_TRUST_PROXY=true`. The proxy must overwrite
+  `X-Forwarded-For` with `$remote_addr` and must be the only ingress; otherwise
+  every client shares the same login rate-limit key.
+- Bind Node to loopback and let nginx own the public interface: `HOSTNAME=127.0.0.1`
+  for the standalone server and `MAWS_SUPERVISOR_BIND=127.0.0.1` so the
+  supervisor's port takeover is not exposed. Do not bind `0.0.0.0` on a public host.
+- Restrict the Binance API key to the server's egress IP and disable withdrawals
+  on that key.
+
+### Data safety
+
+- Back up `.maws/` (the database plus its `-wal`/`-shm` sidecars) before the
+  first start. Migrations are one-way: there is no down migration, and rollback
+  means restoring that backup.
+- Do not run two AI tools on this repository at the same time. Concurrent agents
+  can interleave file writes, commits, and database migrations.
+
 ## Environment Variables
 
 ### Required Variables

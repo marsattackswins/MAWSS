@@ -44,8 +44,10 @@ yarn-error.log*
 !.env.example
 !.env.integration.example
 
-# MAWS server state (SQLite DB, backups) — never commit
+# MAWS server state (SQLite DB, backups, WAL/SHM sidecars) — never commit
 /.maws/
+/.maws/*-wal
+/.maws/*-shm
 
 # debug / inspection artifacts
 .inspect-tmp.db*
@@ -56,6 +58,12 @@ screenshots/
 
 # vendored third-party apps (LuxAlgo trade-journal checkout)
 /vendor/
+
+# agent/cloud attachment staging
+/.cloud-attachments/
+
+# accidental `nul` redirection artifact (Windows)
+/nul
 
 # typescript
 *.tsbuildinfo
