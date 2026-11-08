@@ -1,6 +1,6 @@
 import { BinanceLiveManager, resetLiveManagerForTests } from "@/lib/server/binance/manager";
 import { createIntent, findByClientOrderId, updateIntent } from "@/lib/server/binance/intents";
-import { applyPositionSnapshot, liveState } from "@/lib/server/binance/state";
+import { applyPositionSnapshot, isAlgoStateStale, liveState } from "@/lib/server/binance/state";
 import { MARK_STALE_AFTER_MS } from "@/lib/server/binance/mark-price-stream";
 import { getRuntime, RUNTIME_KEYS, setRuntime } from "@/lib/server/runtime/flags";
 import { getDb } from "@/lib/server/db/connection";
@@ -74,6 +74,44 @@ afterEach(() => {
   manager?.stop();
   resetLiveManagerForTests();
 });
+
+function algoOrderFixture(clientAlgoId: string, triggerPrice: string): unknown {
+  return {
+    algoId: 900 + clientAlgoId.length,
+    clientAlgoId,
+    algoType: "CONDITIONAL",
+    orderType: "STOP_MARKET",
+    symbol: "BTCUSDT",
+    side: "SELL",
+    positionSide: "BOTH",
+    algoStatus: "NEW",
+    triggerPrice,
+    quantity: "",
+    closePosition: true,
+    createTime: Date.now(),
+    updateTime: Date.now(),
+    actualOrderId: "",
+  };
+}
+
+function algoUpdateEvent(clientAlgoId: string): unknown {
+  return {
+    e: "ALGO_UPDATE",
+    E: Date.now(),
+    T: Date.now(),
+    o: {
+      caid: clientAlgoId,
+      aid: 71,
+      at: "CONDITIONAL",
+      o: "STOP_MARKET",
+      s: "BTCUSDT",
+      S: "SELL",
+      ps: "BOTH",
+      X: "NEW",
+      ai: "",
+    },
+  };
+}
 
 describe("BinanceLiveManager end-to-end (fake testnet)", () => {
   test("risk snapshot sums fresh mark-derived P&L and marks stale or missing sources unavailable", async () => {
@@ -364,6 +402,68 @@ describe("BinanceLiveManager end-to-end (fake testnet)", () => {
     await waitForRiskSnapshot(() => liveState().openOrders.has("stream-sl-47"));
     expect(liveState().openOrders.has("stream-sl-46")).toBe(false);
     expect(http.callsTo("/fapi/v1/openAlgoOrders").length).toBeGreaterThanOrEqual(2);
+  });
+
+  test("a failed post-ALGO_UPDATE algo refresh retries once and clears staleness", async () => {
+    const position = {
+      symbol: "BTCUSDT",
+      positionAmt: "0.001",
+      entryPrice: "50000",
+      markPrice: "50000",
+      unRealizedProfit: "0",
+      liquidationPrice: "0",
+      leverage: "1",
+      positionSide: "BOTH",
+    };
+    let algoOrders: unknown[] = [];
+    await startManager({
+      "/fapi/v2/positionRisk": () => [position],
+      "/fapi/v1/openAlgoOrders": () => algoOrders,
+    });
+    manager.algoOrderRefreshRetryMs = 5;
+    algoOrders = [algoOrderFixture("retry-sl", "49000")];
+    http.script("/fapi/v1/openAlgoOrders", () => new Error("conditional order read failed"));
+    const ws = FakeWs.instances.find((instance) => instance.url.includes("LK-E2E"))!;
+
+    ws.emitMessage(algoUpdateEvent("retry-sl"));
+
+    await waitForRiskSnapshot(() => liveState().openOrders.has("retry-sl"));
+    expect(isAlgoStateStale("BTCUSDT")).toBe(false);
+  });
+
+  test("algo state stays stale after a failed retry and clears on the next successful refresh", async () => {
+    const position = {
+      symbol: "BTCUSDT",
+      positionAmt: "0.001",
+      entryPrice: "50000",
+      markPrice: "50000",
+      unRealizedProfit: "0",
+      liquidationPrice: "0",
+      leverage: "1",
+      positionSide: "BOTH",
+    };
+    let algoOrders: unknown[] = [];
+    await startManager({
+      "/fapi/v2/positionRisk": () => [position],
+      "/fapi/v1/openAlgoOrders": () => algoOrders,
+    });
+    manager.algoOrderRefreshRetryMs = 5;
+    const baseline = http.callsTo("/fapi/v1/openAlgoOrders").length;
+    http.script("/fapi/v1/openAlgoOrders", () => new Error("conditional order read failed once"));
+    http.script("/fapi/v1/openAlgoOrders", () => new Error("conditional order read failed twice"));
+    const ws = FakeWs.instances.find((instance) => instance.url.includes("LK-E2E"))!;
+
+    ws.emitMessage(algoUpdateEvent("stale-sl"));
+
+    await waitForRiskSnapshot(() => isAlgoStateStale("BTCUSDT"));
+    await waitForRiskSnapshot(() => http.callsTo("/fapi/v1/openAlgoOrders").length >= baseline + 2);
+    expect(liveState().openOrders.has("fresh-sl")).toBe(false);
+
+    algoOrders = [algoOrderFixture("fresh-sl", "48800")];
+    ws.emitMessage(algoUpdateEvent("stale-sl"));
+
+    await waitForRiskSnapshot(() => !isAlgoStateStale("BTCUSDT"));
+    expect(liveState().openOrders.has("fresh-sl")).toBe(true);
   });
 
   test("ALGO_UPDATE FINISHED does not assume the actual order filled", async () => {

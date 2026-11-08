@@ -108,6 +108,14 @@ export interface LiveState {
 const WORKING_STATUSES = new Set(["NEW", "PARTIALLY_FILLED"]);
 
 /**
+ * Conditional-order trust flags per symbol. Algo orders are only visible
+ * through a per-symbol read, so a failed refresh must never leave a position
+ * looking protected (or let its intent be deleted): the symbol stays stale
+ * until a read succeeds.
+ */
+const algoStateStale = new Set<string>();
+
+/**
  * Conditional orders left behind by a position that went flat. Ids are added
  * while a cleanup runs and survive a failed attempt so a later position can
  * never be declared protected by an old exit order.
@@ -136,12 +144,25 @@ export function liveState(): LiveState {
 
 export function clearLiveState(): void {
   state = createEmpty();
+  algoStateStale.clear();
   orphanAlgoOrderIds.clear();
   orphanAlgoCleanupPending.clear();
 }
 
 export function resetLiveStateForTests(): void {
   clearLiveState();
+}
+
+export function markAlgoStateStale(symbol: string): void {
+  algoStateStale.add(symbol);
+}
+
+export function markAlgoStateFresh(symbol: string): void {
+  algoStateStale.delete(symbol);
+}
+
+export function isAlgoStateStale(symbol: string): boolean {
+  return algoStateStale.has(symbol);
 }
 
 export function beginAlgoOrphanCleanup(symbol: string, clientAlgoIds: Iterable<string>): void {

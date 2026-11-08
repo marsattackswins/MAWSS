@@ -14,7 +14,7 @@ import {
   type OrderIntent,
 } from "./intents";
 import { BinanceApiError, ERR_UNKNOWN_ORDER, type BinanceRestClient } from "./rest";
-import { fillExists, isAlgoOrphanCleanupPending, isOrphanedAlgoOrder, liveState, persistFill, rememberFill, type LiveFill } from "./state";
+import { fillExists, isAlgoOrphanCleanupPending, isAlgoStateStale, isOrphanedAlgoOrder, liveState, persistFill, rememberFill, type LiveFill } from "./state";
 import { cancelOrphanedClosePositionAlgos } from "./algo-orphans";
 import { isTerminalStatus } from "./types";
 import { getReconciliationBreaker } from "../resilience/breakers";
@@ -233,9 +233,9 @@ export class Reconciler {
     for (const intent of listProtectionIntents(this.persistenceProfile)) {
       if (!this.isCurrent()) return;
       if (isProtectionIntentLocked(intent.symbol, this.persistenceProfile)) continue;
-      // An in-flight orphan cleanup cannot prove protection, and it must not
-      // prune the intent on partial knowledge either.
-      if (isAlgoOrphanCleanupPending(intent.symbol)) continue;
+      // A stale or mid-cleanup conditional-order view cannot prove protection,
+      // and it must not prune the intent on partial knowledge either.
+      if (isAlgoStateStale(intent.symbol) || isAlgoOrphanCleanupPending(intent.symbol)) continue;
       if (!liveState().positions.has(intent.symbol)) {
         deleteProtectionIntent(intent.symbol, this.persistenceProfile);
         continue;

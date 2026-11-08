@@ -6,7 +6,14 @@
 import { BinanceRestClient } from "@/lib/server/binance/rest";
 import { RateLimiter } from "@/lib/server/binance/ratelimit";
 import { Reconciler } from "@/lib/server/binance/recon";
-import { applyOpenOrdersSnapshot, applyPositionSnapshot, liveState } from "@/lib/server/binance/state";
+import {
+  applyOpenOrdersSnapshot,
+  applyPositionSnapshot,
+  isAlgoStateStale,
+  liveState,
+  markAlgoStateFresh,
+  markAlgoStateStale,
+} from "@/lib/server/binance/state";
 import {
   getProtectionIntent,
   saveProtectionIntent,
@@ -147,3 +154,29 @@ test("a failed orphan cancel alerts and the leftover order never protects a late
   }
 });
 
+test("a stale conditional-order view claims no protection and deletes no intent", async () => {
+  const h = setup();
+  h.positions = [positionRow()];
+  h.algoOrders = [algoOrder("live-tp", "TAKE_PROFIT_MARKET", "52000")];
+  saveProtectionIntent({ symbol: "BTCUSDT", side: "long", tpPrice: "52000", slPrice: null }, Date.now(), h.profile);
+  setProtectionStatus("BTCUSDT", "UNPROTECTED", "awaiting reconciliation", h.profile);
+
+  await h.recon.run("fresh");
+  expect(getProtectionIntent("BTCUSDT", h.profile)?.protectionStatus).toBe("PROTECTED");
+
+  markAlgoStateStale("BTCUSDT");
+  setProtectionStatus("BTCUSDT", "UNPROTECTED", "stale algo view", h.profile);
+  await h.recon.run("stale");
+  expect(isAlgoStateStale("BTCUSDT")).toBe(true);
+  expect(getProtectionIntent("BTCUSDT", h.profile)?.protectionStatus).toBe("UNPROTECTED");
+
+  // Flat with a stale view: the intent must survive instead of being pruned.
+  h.positions = [];
+  h.algoOrders = [];
+  await h.recon.run("stale-flat");
+  expect(getProtectionIntent("BTCUSDT", h.profile)).not.toBeNull();
+
+  markAlgoStateFresh("BTCUSDT");
+  await h.recon.run("fresh-flat");
+  expect(getProtectionIntent("BTCUSDT", h.profile)).toBeNull();
+});

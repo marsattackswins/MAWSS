@@ -48,6 +48,8 @@ import {
   balanceUsd,
   grossExposureUsd,
   liveState,
+  markAlgoStateFresh,
+  markAlgoStateStale,
   openPositionCount,
   refreshPositionMarkAfterAccountUpdate,
 } from "./state";
@@ -74,6 +76,9 @@ const CLOCK_REFRESH_MS = 2.5 * 60 * 1000;
 const ACCOUNT_UPDATE_SNAPSHOT_DEBOUNCE_MS = 50;
 const ACCOUNT_UPDATE_SNAPSHOT_RETRY_MS = 2_000;
 
+/** Single retry for a failed post-ALGO_UPDATE conditional-order refresh. */
+const ALGO_ORDER_REFRESH_RETRY_MS = 2_000;
+
 export class BinanceLiveManager {
   status: ManagerStatus = "idle";
   error: string | null = null;
@@ -94,6 +99,8 @@ export class BinanceLiveManager {
   private accountUpdateSnapshotPending = false;
   private accountUpdateSnapshotRevision = 0;
   private algoOrderRefreshTimers = new Map<string, ReturnType<typeof setTimeout>>();
+  /** Delay before the single refresh retry; tests shorten it. */
+  algoOrderRefreshRetryMs = ALGO_ORDER_REFRESH_RETRY_MS;
   private lifecycleGeneration = 0;
   /**
    * Periodic proactive clock resync. Without it the clock signal goes stale
@@ -618,6 +625,7 @@ export class BinanceLiveManager {
     const algoOrders: BinanceAlgoOrder[] = [];
     for (const symbol of symbols) {
       algoOrders.push(...(await this.rest.getOpenAlgoOrders(symbol)));
+      markAlgoStateFresh(symbol);
     }
     if (!this.isGenerationCurrent(generation)) return;
     applyAccountSnapshot(account);
@@ -667,13 +675,33 @@ export class BinanceLiveManager {
     }
   }
 
-  private async refreshAlgoOrdersForSymbol(symbol: string, generation: number): Promise<void> {
+  /**
+   * Conditional orders are only visible per symbol, so a failed read leaves
+   * that symbol's protection state unknown: mark it stale (no PROTECTED claim,
+   * no intent deletion) and retry once before giving up.
+   */
+  private async refreshAlgoOrdersForSymbol(symbol: string, generation: number, attempt = 0): Promise<void> {
+    try {
+      await this.refreshAlgoOrdersOnce(symbol, generation);
+    } catch (err) {
+      if (!this.isGenerationCurrent(generation)) return;
+      markAlgoStateStale(symbol);
+      if (attempt > 0) throw err;
+      log.warn("post-ALGO_UPDATE order refresh failed; retrying once", { symbol, error: String(err) });
+      await new Promise((resolve) => setTimeout(resolve, this.algoOrderRefreshRetryMs));
+      if (!this.isGenerationCurrent(generation)) return;
+      return this.refreshAlgoOrdersForSymbol(symbol, generation, attempt + 1);
+    }
+  }
+
+  private async refreshAlgoOrdersOnce(symbol: string, generation: number): Promise<void> {
     const [openOrders, algoOrders] = await Promise.all([
       this.rest.getOpenOrders(symbol),
       this.rest.getOpenAlgoOrders(symbol),
     ]);
     if (!this.isGenerationCurrent(generation)) return;
     applySymbolOpenOrdersSnapshot(symbol, openOrders, algoOrders);
+    markAlgoStateFresh(symbol);
     updateTradingGauges();
     publishLive("snapshot", { at: Date.now(), symbol });
   }
