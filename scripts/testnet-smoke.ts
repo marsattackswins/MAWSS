@@ -1,17 +1,31 @@
 #!/usr/bin/env tsx
 
 /**
- * Binance USD⎓-M Demo Trading smoke test.
+ * Binance USDⓈ-M Demo Trading EXCHANGE PROBE.
+ *
+ * This script talks to the exchange directly. It never starts the MAWS app,
+ * so it cannot verify app-level behaviour: the app's PROTECTED/UNPROTECTED
+ * protection status, orphan cleanup performed by the manager, and risk-snapshot
+ * freshness are covered by tests/integration/algo-protection-failures.integration.test.ts.
+ * Every step below is labelled [exchange] in the report.
  *
  * Verifies the demo environment end-to-end: host connectivity, exchange info,
- * order lifecycle, algo orders (TP/SL), protection replacement, orphan
- * detection, emergency flatten, and multi-symbol trading.
+ * order lifecycle, Algo conditional orders (TP/SL), protection replacement,
+ * the orphan outcome after a direct close, emergency flatten, and multi-symbol
+ * trading.
  *
  * Safety — imports and calls assertTestnetSafety from tests/integration/helpers.ts:
  *  - Refuses unless MAWS_ENV=testnet and no production credentials are set.
  *  - Uses a temp DB path; never touches .maws.
  *  - Never reads .env files (process.env only).
  *  - Never prints API keys, secrets, or signatures.
+ *
+ * Failure semantics: any failed setup call FAILS its step and skips the checks
+ * that depend on it. Cleanup always re-reads positionRisk, openOrders and
+ * openAlgoOrders for every touched symbol, reports leftovers as
+ * "STILL OPEN: <symbol> <qty> <side>" (or "all flat"), and exits non-zero when
+ * anything is left open. Quantities are exact decimal strings from the
+ * exchange (never parseFloat/String on order quantities).
  *
  * Usage:
  *   tsx scripts/testnet-smoke.ts              # preflight (default)
@@ -36,6 +50,8 @@ const PROD_REST = "https://fapi.binance.com";
 const PROD_WS = "wss://fstream.binance.com";
 const SYMBOL = "BTCUSDT";
 const SECOND_SYMBOL = "ETHUSDT";
+const RUN_LABEL = "EXCHANGE PROBE";
+const APP_LEVEL_SUITE = "tests/integration/algo-protection-failures.integration.test.ts";
 
 // ─── Credentials (never print values) ──────────────────────────────────────
 
@@ -203,6 +219,85 @@ async function selftest(): Promise<void> {
   if (failed > 0) process.exit(1);
 }
 
+// ─── Decimal helpers (no floats for order quantities) ───────────────────────
+
+interface Dec {
+  units: bigint;
+  scale: number;
+}
+
+const DECIMAL_PATTERN = /^-?\d+(\.\d+)?$/;
+
+function parseDecimal(raw: string): Dec {
+  const value = raw.trim();
+  if (!DECIMAL_PATTERN.test(value)) throw new Error(`Invalid decimal value: ${raw}`);
+  const negative = value.startsWith("-");
+  const body = negative ? value.slice(1) : value;
+  const [intPart, fracPart = ""] = body.split(".");
+  const units = BigInt(`${intPart}${fracPart}`) * (negative ? -1n : 1n);
+  return { units, scale: fracPart.length };
+}
+
+function decimalToString(d: Dec): string {
+  const negative = d.units < 0n;
+  let digits = (negative ? -d.units : d.units).toString();
+  if (d.scale === 0) return `${negative ? "-" : ""}${digits}`;
+  digits = digits.padStart(d.scale + 1, "0");
+  const intPart = digits.slice(0, digits.length - d.scale);
+  const fracPart = digits.slice(digits.length - d.scale).replace(/0+$/, "");
+  return `${negative ? "-" : ""}${intPart}${fracPart ? `.${fracPart}` : ""}`;
+}
+
+function decimalToFixed(d: Dec, scale: number): string {
+  const negative = d.units < 0n;
+  let digits = (negative ? -d.units : d.units).toString();
+  if (d.scale < scale) {
+    digits += "0".repeat(scale - d.scale);
+  } else if (d.scale > scale) {
+    digits = digits.slice(0, digits.length - (d.scale - scale)) || "0";
+  }
+  if (scale === 0) return `${negative ? "-" : ""}${digits || "0"}`;
+  digits = digits.padStart(scale + 1, "0");
+  return `${negative ? "-" : ""}${digits.slice(0, digits.length - scale)}.${digits.slice(digits.length - scale)}`;
+}
+
+/** Exact absolute value of an exchange decimal string; never goes through a float. */
+function absoluteDecimalString(raw: string): string {
+  const value = raw.trim();
+  if (!DECIMAL_PATTERN.test(value)) throw new Error(`Invalid decimal value: ${raw}`);
+  return value.replace(/^[-+]/, "");
+}
+
+function isZeroDecimal(raw: string): boolean {
+  return parseDecimal(raw).units === 0n;
+}
+
+function scaleUnits(d: Dec, scale: number): bigint {
+  if (d.scale === scale) return d.units;
+  if (d.scale < scale) return d.units * 10n ** BigInt(scale - d.scale);
+  return d.units / 10n ** BigInt(d.scale - scale);
+}
+
+function divCeil(numerator: bigint, denominator: bigint): bigint {
+  if (denominator === 0n) throw new Error("Division by zero");
+  return numerator <= 0n ? 0n : (numerator + denominator - 1n) / denominator;
+}
+
+function divRoundNearest(numerator: bigint, denominator: bigint): bigint {
+  if (denominator === 0n) throw new Error("Division by zero");
+  const negative = numerator < 0n;
+  const absolute = negative ? -numerator : numerator;
+  const quotient = (absolute + denominator / 2n) / denominator;
+  return negative ? -quotient : quotient;
+}
+
+function coarserStep(a: Dec, b: Dec): Dec {
+  const scale = Math.max(a.scale, b.scale);
+  const aUnits = scaleUnits(a, scale);
+  const bUnits = scaleUnits(b, scale);
+  return { units: aUnits > bUnits ? aUnits : bUnits, scale };
+}
+
 // ─── HTTP helpers ──────────────────────────────────────────────────────────
 
 async function publicGet(p: string) {
@@ -231,92 +326,376 @@ async function signedRequest(method: string, p: string, params: Record<string, s
 
 function sleep(ms: number): Promise<void> { return new Promise(r => setTimeout(r, ms)); }
 
-// ─── Sizing ─────────────────────────────────────────────────────────────────
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
+// ─── Sizing (exact decimal strings) ─────────────────────────────────────────
 
 interface Filters {
-  minNotional: number;
-  lotMin: number;
-  lotStep: number;
-  mktMin: number;
-  mktStep: number;
-  tick: number;
+  symbol: string;
+  minNotional: Dec;
+  lotMin: Dec;
+  lotStep: Dec;
+  mktMin: Dec;
+  mktStep: Dec;
+  tick: Dec;
 }
 
 async function readFilters(symbol: string): Promise<Filters> {
   const { body } = await publicGet(`/fapi/v1/exchangeInfo?symbol=${symbol}`);
-  const sym = (body as Record<string, unknown[]>).symbols?.[0] as Record<string, unknown> | undefined;
+  const sym = (body as { symbols?: Array<Record<string, unknown>> }).symbols?.[0];
   if (!sym) throw new Error(`${symbol} not found in exchangeInfo`);
-  const f: Record<string, Record<string, string>> = {};
-  for (const flt of sym.filters as Array<Record<string, string>>) f[flt.filterType] = flt;
+  const filters: Record<string, Record<string, string>> = {};
+  for (const filter of (sym.filters as Array<Record<string, string>>) ?? []) filters[filter.filterType] = filter;
   return {
-    minNotional: parseFloat(f.MIN_NOTIONAL?.notional ?? "5"),
-    lotMin: parseFloat(f.LOT_SIZE?.minQty ?? "0.001"),
-    lotStep: parseFloat(f.LOT_SIZE?.stepSize ?? "0.001"),
-    mktMin: parseFloat(f.MARKET_LOT_SIZE?.minQty ?? "0.001"),
-    mktStep: parseFloat(f.MARKET_LOT_SIZE?.stepSize ?? "0.001"),
-    tick: parseFloat(f.PRICE_FILTER?.tickSize ?? "0.10"),
+    symbol,
+    minNotional: parseDecimal(filters.MIN_NOTIONAL?.notional ?? filters.MIN_NOTIONAL?.minNotional ?? "5"),
+    lotMin: parseDecimal(filters.LOT_SIZE?.minQty ?? "0.001"),
+    lotStep: parseDecimal(filters.LOT_SIZE?.stepSize ?? "0.001"),
+    mktMin: parseDecimal(filters.MARKET_LOT_SIZE?.minQty ?? "0.001"),
+    mktStep: parseDecimal(filters.MARKET_LOT_SIZE?.stepSize ?? "0.001"),
+    tick: parseDecimal(filters.PRICE_FILTER?.tickSize ?? "0.10"),
   };
 }
 
-async function readMark(symbol: string): Promise<number> {
+async function readMark(symbol: string): Promise<string> {
   const { body } = await publicGet(`/fapi/v1/premiumIndex?symbol=${symbol}`);
-  return parseFloat((body as Record<string, string>).markPrice);
+  return String((body as Record<string, string>).markPrice);
 }
 
-function calcQty(filters: Filters, mark: number) {
-  const target = filters.minNotional * 1.5;
-  const step = filters.mktStep;
-  const min = Math.max(filters.mktMin, filters.lotMin);
-  let q = Math.max(target / mark, min);
-  q = Math.ceil(q / step) * step;
-  q = parseFloat(q.toFixed(8));
-  if (q * mark < target) q = parseFloat((q + step).toFixed(8));
-  return { qty: q, notional: q * mark, minNotional: filters.minNotional, target };
+function notionalCovers(qtyUnits: bigint, qtyScale: number, mark: Dec, target: Dec): boolean {
+  return qtyUnits * mark.units * 10n ** BigInt(target.scale)
+    >= target.units * 10n ** BigInt(qtyScale + mark.scale);
 }
 
-function align(price: number, tick: number): number {
-  const decimals = (tick.toString().split(".")[1] ?? "").length;
-  return parseFloat((Math.round(price / tick) * tick).toFixed(decimals));
+/**
+ * Sizes to 1.5x MIN_NOTIONAL using BigInt step math. The returned quantity is
+ * an exact, step-aligned decimal string formatted with the LOT_SIZE step's
+ * decimal places (never a float artifact such as 0.0010000000000000002).
+ */
+function calcQty(f: Filters, markRaw: string): { qty: string; notionalUsd: number; targetUsd: number } {
+  const mark = parseDecimal(markRaw);
+  if (mark.units <= 0n) throw new Error(`Invalid mark price for ${f.symbol}: ${markRaw}`);
+  const target: Dec = { units: f.minNotional.units * 3n, scale: f.minNotional.scale + 1 };
+  const step = coarserStep(f.lotStep, f.mktStep);
+  const qtyScale = step.scale;
+  const rawUnits = divCeil(
+    target.units * 10n ** BigInt(mark.scale + qtyScale),
+    mark.units * 10n ** BigInt(target.scale),
+  );
+  let qtyUnits = divCeil(rawUnits, step.units) * step.units;
+  const lotMinUnits = scaleUnits(f.lotMin, qtyScale);
+  const marketMinUnits = scaleUnits(f.mktMin, qtyScale);
+  const minUnits = lotMinUnits > marketMinUnits ? lotMinUnits : marketMinUnits;
+  if (qtyUnits < minUnits) qtyUnits = divCeil(minUnits, step.units) * step.units;
+  for (let i = 0; i < 10 && !notionalCovers(qtyUnits, qtyScale, mark, target); i++) qtyUnits += step.units;
+  const outScale = Math.max(f.lotStep.scale, qtyScale);
+  const qty = decimalToFixed({ units: qtyUnits, scale: qtyScale }, outScale);
+  return {
+    qty,
+    notionalUsd: (Number(qtyUnits) / 10 ** qtyScale) * (Number(mark.units) / 10 ** mark.scale),
+    targetUsd: Number(target.units) / 10 ** target.scale,
+  };
+}
+
+/** Trigger price at `pct`% of the mark, rounded to the nearest tick. */
+function priceFromPct(markRaw: string, pct: number, tick: Dec): string {
+  const mark = parseDecimal(markRaw);
+  const numerator = mark.units * BigInt(pct) * 10n ** BigInt(tick.scale);
+  const denominator = 100n * 10n ** BigInt(mark.scale) * tick.units;
+  const ticks = divRoundNearest(numerator, denominator);
+  return decimalToFixed({ units: ticks * tick.units, scale: tick.scale }, tick.scale);
+}
+
+// ─── API answer helpers ─────────────────────────────────────────────────────
+
+interface ApiAnswer {
+  ok: boolean;
+  status: number;
+  code?: number;
+  msg?: string;
+  body: Record<string, unknown>;
+}
+
+function interpret(res: { status: number; body: unknown }, endpoint: string, stepNumber: number | "C"): ApiAnswer {
+  const body = (res.body ?? {}) as Record<string, unknown>;
+  const rawCode = body.code;
+  const failedByCode = rawCode !== undefined && String(rawCode) !== "200";
+  const ok = res.status === 200 && !failedByCode;
+  const code = rawCode !== undefined && Number.isFinite(Number(rawCode)) ? Number(rawCode) : undefined;
+  const msg = typeof body.msg === "string" ? body.msg : undefined;
+  if (!ok && code !== undefined) {
+    errorCodes.push({ code, msg: msg ?? `HTTP ${res.status}`, ep: endpoint, step: stepNumber });
+  }
+  return { ok, status: res.status, code, msg, body };
+}
+
+function describeApi(answer: ApiAnswer): string {
+  return `status=${answer.status} code=${answer.code ?? "?"} msg="${answer.msg ?? ""}"`;
+}
+
+async function placeMarket(
+  symbol: string,
+  side: "BUY" | "SELL",
+  quantity: string,
+  stepNumber: number | "C",
+  reduceOnly = false,
+): Promise<ApiAnswer> {
+  const res = await signedRequest("POST", "/fapi/v1/order", {
+    symbol,
+    side,
+    type: "MARKET",
+    quantity,
+    newOrderRespType: "RESULT",
+    ...(reduceOnly ? { reduceOnly: "true" } : {}),
+  });
+  return interpret(res, "POST /fapi/v1/order", stepNumber);
+}
+
+interface AlgoPlacement {
+  ok: boolean;
+  clientAlgoId: string;
+  algoId?: string;
+  error?: string;
+}
+
+/**
+ * Places a closePosition conditional order on the Algo endpoint with every
+ * parameter the endpoint requires: algoType=CONDITIONAL, triggerPrice,
+ * closePosition=true, workingType=MARK_PRICE.
+ */
+async function placeClosePositionAlgo(
+  params: {
+    symbol: string;
+    side: "BUY" | "SELL";
+    type: "TAKE_PROFIT_MARKET" | "STOP_MARKET";
+    triggerPrice: string;
+    clientAlgoId: string;
+  },
+  stepNumber: number | "C",
+): Promise<AlgoPlacement> {
+  const res = await signedRequest("POST", "/fapi/v1/algoOrder", {
+    algoType: "CONDITIONAL",
+    symbol: params.symbol,
+    side: params.side,
+    type: params.type,
+    triggerPrice: params.triggerPrice,
+    closePosition: "true",
+    workingType: "MARK_PRICE",
+    clientAlgoId: params.clientAlgoId,
+  });
+  const answer = interpret(res, "POST /fapi/v1/algoOrder", stepNumber);
+  if (!answer.ok) {
+    return { ok: false, clientAlgoId: params.clientAlgoId, error: describeApi(answer) };
+  }
+  return {
+    ok: true,
+    clientAlgoId: params.clientAlgoId,
+    algoId: answer.body.algoId === undefined ? undefined : String(answer.body.algoId),
+  };
+}
+
+async function deleteAlgo(clientAlgoId: string, stepNumber: number | "C"): Promise<ApiAnswer> {
+  const res = await signedRequest("DELETE", "/fapi/v1/algoOrder", { clientAlgoId });
+  return interpret(res, "DELETE /fapi/v1/algoOrder", stepNumber);
+}
+
+async function listOpenAlgoOrders(symbol: string): Promise<Record<string, unknown>[]> {
+  const res = await signedRequest("GET", "/fapi/v1/openAlgoOrders", { symbol });
+  if (res.status !== 200) throw new Error(`GET /fapi/v1/openAlgoOrders → ${res.status}`);
+  const body = res.body as unknown;
+  if (Array.isArray(body)) return body as Record<string, unknown>[];
+  const nested = (body as { orders?: unknown }).orders;
+  return Array.isArray(nested) ? nested as Record<string, unknown>[] : [];
+}
+
+function hasClientAlgoId(orders: Record<string, unknown>[], clientAlgoId: string): boolean {
+  return orders.some((order) => order.clientAlgoId === clientAlgoId);
+}
+
+async function waitForAlgoIds(symbol: string, clientAlgoIds: string[], timeoutMs: number): Promise<boolean> {
+  const start = Date.now();
+  while (Date.now() - start < timeoutMs) {
+    const orders = await listOpenAlgoOrders(symbol);
+    if (clientAlgoIds.every((id) => hasClientAlgoId(orders, id))) return true;
+    await sleep(500);
+  }
+  return false;
+}
+
+async function readPositionAmt(symbol: string): Promise<string | null> {
+  const res = await signedRequest("GET", "/fapi/v2/positionRisk", { symbol });
+  if (res.status !== 200 || !Array.isArray(res.body)) return null;
+  const rows = res.body as Record<string, string>[];
+  const row = rows.find((candidate) => candidate.symbol === symbol) ?? rows[0];
+  return row?.positionAmt ?? "0";
 }
 
 // ─── Step tracking ──────────────────────────────────────────────────────────
 
-interface StepResult { num: number; name: string; status: string; ms: number; obs: string }
+interface StepResult { num: number | "C"; name: string; status: string; ms: number; obs: string }
 const results: StepResult[] = [];
-const errorCodes: { code: number; msg: string; ep: string; step: number }[] = [];
+const errorCodes: { code: number; msg: string; ep: string; step: number | "C" }[] = [];
 const touched = new Set<string>();
 
-function record(num: number, name: string, status: string, ms: number, obs: string): void {
+/** A step's setup failed; the step is recorded FAIL and dependent checks are skipped. */
+class StepFailure extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "StepFailure";
+  }
+}
+
+function record(num: number | "C", name: string, status: string, ms: number, obs: string): void {
   results.push({ num, name, status, ms, obs });
   const tag = status === "PASS" ? "✓" : status === "FAIL" ? "✗" : "○";
-  console.log(`  [${tag}] Step ${num}: ${name} (${ms}ms) — ${obs}`);
+  const label = num === "C" ? "Cleanup" : `Step ${num}`;
+  console.log(`  [${tag}] ${label} [exchange]: ${name} (${ms}ms) — ${obs}`);
+}
+
+async function step(num: number, name: string, fn: () => Promise<string>): Promise<boolean> {
+  const start = Date.now();
+  try {
+    const obs = await fn();
+    record(num, name, "PASS", Date.now() - start, obs);
+    return true;
+  } catch (error) {
+    record(num, name, "FAIL", Date.now() - start, errorMessage(error));
+    return false;
+  }
+}
+
+function skip(num: number, name: string, reason: string): false {
+  record(num, name, "SKIP", 0, reason);
+  return false;
 }
 
 // ─── Cleanup ────────────────────────────────────────────────────────────────
 
-async function cleanup(): Promise<void> {
-  console.log("\n  Cleanup: canceling all orders and flattening positions...");
-  for (const sym of touched) {
-    try { await signedRequest("DELETE", "/fapi/v1/algoOpenOrders", { symbol: sym }); } catch {}
-    try { await signedRequest("DELETE", "/fapi/v1/allOpenOrders", { symbol: sym }); } catch {}
+interface OpenLeftover {
+  symbol: string;
+  qty: string;
+  side: string;
+  kind: "position" | "order" | "algo";
+}
+
+interface CleanupResult {
+  failures: string[];
+  stillOpen: OpenLeftover[];
+}
+
+/**
+ * Cancels everything the probe touched, flattens positions with the exchange's
+ * exact positionAmt string, and then re-reads positionRisk, openOrders and
+ * openAlgoOrders for every touched symbol. Nothing is swallowed: cancel and
+ * flatten errors are collected and the final verification is authoritative.
+ */
+async function cleanup(): Promise<CleanupResult> {
+  const failures: string[] = [];
+  const symbols = [...touched];
+  console.log(`\n  Cleanup [${RUN_LABEL}]: canceling orders and flattening ${symbols.length} symbol(s)...`);
+
+  for (const symbol of symbols) {
     try {
-      const { body } = await signedRequest("GET", "/fapi/v2/positionRisk", { symbol: sym });
-      const pos = Array.isArray(body) ? (body as Record<string, string>[])[0] : null;
-      if (pos && parseFloat(pos.positionAmt) !== 0) {
-        const qty = Math.abs(parseFloat(pos.positionAmt));
-        const side = parseFloat(pos.positionAmt) > 0 ? "SELL" : "BUY";
-        await signedRequest("POST", "/fapi/v1/order", { symbol: sym, side, type: "MARKET", quantity: String(qty), reduceOnly: "true" });
-        console.log(`    Flattened ${sym}: ${side} ${qty}`);
+      const algoCancel = await signedRequest("DELETE", "/fapi/v1/algoOpenOrders", { symbol });
+      if (algoCancel.status !== 200) failures.push(`${symbol}: cancel all Algo orders → status ${algoCancel.status}`);
+    } catch (error) {
+      failures.push(`${symbol}: cancel all Algo orders threw: ${errorMessage(error)}`);
+    }
+    try {
+      const orderCancel = await signedRequest("DELETE", "/fapi/v1/allOpenOrders", { symbol });
+      if (orderCancel.status !== 200) failures.push(`${symbol}: cancel all orders → status ${orderCancel.status}`);
+    } catch (error) {
+      failures.push(`${symbol}: cancel all orders threw: ${errorMessage(error)}`);
+    }
+    try {
+      const positionAmt = await readPositionAmt(symbol);
+      if (positionAmt === null) {
+        failures.push(`${symbol}: positionRisk unreadable before flatten`);
+      } else if (!isZeroDecimal(positionAmt)) {
+        const short = positionAmt.trim().startsWith("-");
+        const qty = absoluteDecimalString(positionAmt);
+        const side = short ? "BUY" : "SELL";
+        const closed = await placeMarket(symbol, side, qty, "C", true);
+        if (!closed.ok) failures.push(`${symbol}: flatten ${side} ${qty} rejected (${describeApi(closed)})`);
+        else console.log(`    Flattened ${symbol}: ${side} ${qty}`);
       }
-    } catch {}
+    } catch (error) {
+      failures.push(`${symbol}: flatten failed: ${errorMessage(error)}`);
+    }
   }
-  console.log("  Cleanup complete.");
+
+  const stillOpen: OpenLeftover[] = [];
+  for (const symbol of symbols) {
+    try {
+      const positionAmt = await readPositionAmt(symbol);
+      if (positionAmt === null) {
+        failures.push(`${symbol}: positionRisk unreadable during final verification`);
+      } else if (!isZeroDecimal(positionAmt)) {
+        stillOpen.push({
+          symbol,
+          qty: absoluteDecimalString(positionAmt),
+          side: positionAmt.trim().startsWith("-") ? "short" : "long",
+          kind: "position",
+        });
+      }
+    } catch (error) {
+      failures.push(`${symbol}: position verification failed: ${errorMessage(error)}`);
+    }
+
+    try {
+      const res = await signedRequest("GET", "/fapi/v1/openOrders", { symbol });
+      if (res.status !== 200 || !Array.isArray(res.body)) {
+        failures.push(`${symbol}: openOrders unreadable during final verification (status ${res.status})`);
+      } else {
+        for (const order of res.body as Record<string, unknown>[]) {
+          stillOpen.push({
+            symbol,
+            qty: String(order.origQty ?? "0"),
+            side: String(order.side ?? "?"),
+            kind: "order",
+          });
+        }
+      }
+    } catch (error) {
+      failures.push(`${symbol}: openOrders verification failed: ${errorMessage(error)}`);
+    }
+
+    try {
+      for (const order of await listOpenAlgoOrders(symbol)) {
+        stillOpen.push({
+          symbol,
+          qty: order.closePosition === true ? "closePosition" : String(order.quantity ?? "0"),
+          side: String(order.side ?? "?"),
+          kind: "algo",
+        });
+      }
+    } catch (error) {
+      failures.push(`${symbol}: openAlgoOrders verification failed: ${errorMessage(error)}`);
+    }
+  }
+
+  console.log("  Cleanup verification:");
+  if (stillOpen.length === 0) console.log("    all flat");
+  else for (const item of stillOpen) console.log(`    STILL OPEN: ${item.symbol} ${item.qty} ${item.side} (${item.kind})`);
+  for (const failure of failures) console.log(`    CLEANUP ERROR: ${failure}`);
+
+  const clean = stillOpen.length === 0 && failures.length === 0;
+  const observation = stillOpen.length === 0
+    ? (failures.length === 0 ? `all flat (verified ${symbols.join(", ")})` : `all flat but ${failures.length} cleanup error(s): ${failures.join("; ")}`)
+    : `${stillOpen.map((item) => `STILL OPEN: ${item.symbol} ${item.qty} ${item.side} (${item.kind})`).join("; ")}`
+      + (failures.length > 0 ? `; cleanup errors: ${failures.join("; ")}` : "");
+  record("C", "Final verification", clean ? "PASS" : "FAIL", 0, observation);
+  return { failures, stillOpen };
 }
 
 // ─── Preflight ──────────────────────────────────────────────────────────────
 
 async function preflight(): Promise<void> {
-  console.log("\n═══ PREFLIGHT MODE ═══\n");
+  console.log("\n═══ PREFLIGHT MODE — EXCHANGE PROBE ═══\n");
+  console.log("This probe talks to Binance directly and never starts the MAWS app.");
+  console.log(`App-level protection checks live in ${APP_LEVEL_SUITE}.\n`);
 
   // 1. Hosts
   console.log("1. Demo host connectivity:");
@@ -326,33 +705,33 @@ async function preflight(): Promise<void> {
   // 2. Exchange info
   console.log("\n2. Exchange info for BTCUSDT:");
   const f = await readFilters(SYMBOL);
-  console.log(`   MIN_NOTIONAL: $${f.minNotional}`);
-  console.log(`   LOT_SIZE: minQty=${f.lotMin}, stepSize=${f.lotStep}`);
-  console.log(`   MARKET_LOT_SIZE: minQty=${f.mktMin}, stepSize=${f.mktStep}`);
-  console.log(`   PRICE_FILTER: tickSize=${f.tick}`);
+  console.log(`   MIN_NOTIONAL: $${decimalToString(f.minNotional)}`);
+  console.log(`   LOT_SIZE: minQty=${decimalToString(f.lotMin)}, stepSize=${decimalToString(f.lotStep)}`);
+  console.log(`   MARKET_LOT_SIZE: minQty=${decimalToString(f.mktMin)}, stepSize=${decimalToString(f.mktStep)}`);
+  console.log(`   PRICE_FILTER: tickSize=${decimalToString(f.tick)}`);
 
   const mark = await readMark(SYMBOL);
   console.log(`   Mark price: $${mark}`);
 
   // 3. Sizing
-  console.log("\n3. Order sizing:");
+  console.log("\n3. Order sizing (exact decimal strings):");
   const s = calcQty(f, mark);
-  const tp = align(mark * 1.10, f.tick);
-  const sl = align(mark * 0.90, f.tick);
+  const tp = priceFromPct(mark, 110, f.tick);
+  const sl = priceFromPct(mark, 90, f.tick);
   console.log(`   Quantity: ${s.qty} BTC`);
-  console.log(`   Notional: $${s.notional.toFixed(2)} (min $${s.minNotional}, 1.5x target $${s.target})`);
+  console.log(`   Notional: $${s.notionalUsd.toFixed(2)} (min $${decimalToString(f.minNotional)}, 1.5x target $${s.targetUsd.toFixed(2)})`);
   console.log(`   TP (mark+10%): $${tp}`);
   console.log(`   SL (mark-10%): $${sl}`);
 
   // 4. Risk limits
   console.log("\n4. Risk limits (sized from notional):");
-  const orderCap = s.notional * 4;
-  const grossCap = s.notional * 8;
+  const orderCap = s.notionalUsd * 4;
+  const grossCap = s.notionalUsd * 8;
   console.log(`   Max order notional: $${orderCap.toFixed(2)} (4x order notional)`);
   console.log(`   Max gross exposure: $${grossCap.toFixed(2)} (8x order notional)`);
   console.log(`   Max leverage: 10  |  Max margin ratio: 0.5  |  Min liq distance: 5%`);
   console.log(`\n   NOTE: The default Testnet/local order cap of $50 is below BTCUSDT's`);
-  console.log(`   minimum notional of $${s.minNotional}. This smoke test uses`);
+  console.log(`   minimum notional of $${decimalToString(f.minNotional)}. This probe uses`);
   console.log(`   $${orderCap.toFixed(2)} as the order cap instead.`);
 
   // 5. Key check (names only)
@@ -363,19 +742,18 @@ async function preflight(): Promise<void> {
   console.log(`   MAWS_BINANCE_PRODUCTION_API_KEY: ${process.env.MAWS_BINANCE_PRODUCTION_API_KEY ? "SET (must be unset!)" : "unset ✓"}`);
 
   // 6. Steps list
-  console.log("\n6. Steps --run will execute:");
+  console.log("\n6. Steps --run will execute (all tagged [exchange]):");
   const steps = [
-    "1.  Account fields: totalMaintMargin and totalMarginBalance present and numeric",
-    "2.  Open small long, set TP/SL (mark ±10%), verify in openAlgoOrders, PROTECTED within 15s",
-    "3.  Replace TP/SL (±12%): new present, old gone, PROTECTED",
-    "4.  Invalid SL (above mark for long): rejected, originals untouched",
-    "5.  Cancel TP via REST DELETE /fapi/v1/algoOrder: gone from openAlgoOrders within 20s",
-    "    (app UNPROTECTED detection requires the live manager running)",
-    "6.  Re-protect, close position via REST, check orphan cleanup, open new position (no stale order)",
-    "7.  Emergency flatten: position closed, openAlgoOrders empty, zero failures",
-    "8.  Open position + second symbol immediately, record margin freshness",
-    "9.  POST /fapi/v1/order STOP_MARKET (old endpoint): expect -4120",
-    "10. Rate-limit / 418 handling: SKIP (cannot exercise live)",
+    "1.  [exchange] Account fields: totalMaintMargin and totalMarginBalance present and numeric",
+    "2.  [exchange] Open small long, place TP/SL on the Algo API (CONDITIONAL, triggerPrice, closePosition, MARK_PRICE)",
+    "3.  [exchange] Replace TP/SL (±12%): new present, old gone",
+    "4.  [exchange] Invalid SL (above mark for long): record Binance's code and message, originals untouched",
+    "5.  [exchange] DELETE the TP and confirm it leaves openAlgoOrders (app UNPROTECTED is NOT tested here)",
+    "6.  [exchange] Re-protect, close the position via reduce-only REST MARKET, observe which legs Binance removes, reopen and check for stale orders",
+    "7.  [exchange] Emergency flatten: position flat, openAlgoOrders empty, zero failures",
+    "8.  [exchange] Open a position on both symbols, record margin-field freshness",
+    "9.  [exchange] POST /fapi/v1/order STOP_MARKET (legacy endpoint): expect rejection, record code/msg",
+    "10. [exchange] Rate-limit / 418 handling: SKIP (cannot exercise live)",
   ];
   for (const st of steps) console.log(`   ${st}`);
 
@@ -392,7 +770,7 @@ async function preflight(): Promise<void> {
       } else {
         console.log(`   GET /fapi/v2/account → ${acct.status} (credentials may be invalid)`);
       }
-    } catch (e) { console.log(`   Error: ${(e as Error).message}`); }
+    } catch (e) { console.log(`   Error: ${errorMessage(e)}`); }
   } else {
     console.log("\n7. No keys present — skipping signed account check");
     console.log("   Set MAWS_BINANCE_TESTNET_API_KEY/SECRET to enable");
@@ -404,7 +782,10 @@ async function preflight(): Promise<void> {
 // ─── Run mode ───────────────────────────────────────────────────────────────
 
 async function run(): Promise<void> {
-  console.log("\n═══ RUN MODE ═══\n");
+  console.log(`\n═══ RUN MODE — ${RUN_LABEL} ═══\n`);
+  console.log("No MAWS app is started: these steps probe Binance directly. Protection");
+  console.log("status (UNPROTECTED), manager orphan cleanup and margin freshness are");
+  console.log(`app-level and are covered by ${APP_LEVEL_SUITE}.\n`);
   if (!hasKeys()) {
     console.log("ERROR: --run requires API credentials. Set MAWS_BINANCE_TESTNET_API_KEY/SECRET.");
     process.exit(1);
@@ -413,268 +794,284 @@ async function run(): Promise<void> {
   const f = await readFilters(SYMBOL);
   const mark = await readMark(SYMBOL);
   const s = calcQty(f, mark);
-  const tp = align(mark * 1.10, f.tick);
-  const sl = align(mark * 0.90, f.tick);
-  const tp2 = align(mark * 1.12, f.tick);
-  const sl2 = align(mark * 0.88, f.tick);
+  const tp = priceFromPct(mark, 110, f.tick);
+  const sl = priceFromPct(mark, 90, f.tick);
+  const tp2 = priceFromPct(mark, 112, f.tick);
+  const sl2 = priceFromPct(mark, 88, f.tick);
   const rid = crypto.randomBytes(4).toString("hex");
-  const algo: { tp: string | null; sl: string | null } = { tp: null, sl: null };
+  const ids: { tp: string | null; sl: string | null } = { tp: null, sl: null };
 
-  console.log(`Plan: ${s.qty} BTC @ ~$${mark} = $${s.notional.toFixed(2)}`);
-  console.log(`TP: $${tp}  SL: $${sl}\n`);
+  console.log(`Plan: ${s.qty} ${SYMBOL} @ ~$${mark} = $${s.notionalUsd.toFixed(2)} (exact decimal quantity)`);
+  console.log(`TP: ${tp}  SL: ${sl}\n`);
+
+  let cleanupResult: CleanupResult | null = null;
 
   try {
     // ── Step 1: Account fields ─────────────────────────────────────────────
-    try {
-      const start = Date.now();
+    await step(1, "Account fields", async () => {
       const acct = await signedRequest("GET", "/fapi/v2/account");
-      const ms = Date.now() - start;
-      const b = acct.body as Record<string, unknown>;
-      if (acct.status === 200 && b.totalMaintMargin !== undefined && b.totalMarginBalance !== undefined) {
-        record(1, "Account fields", "PASS", ms,
-          `totalMaintMargin=${parseFloat(b.totalMaintMargin as string)}, totalMarginBalance=${parseFloat(b.totalMarginBalance as string)}`);
-      } else {
-        record(1, "Account fields", "FAIL", ms, `status=${acct.status}, fields missing`);
+      if (acct.status !== 200) throw new StepFailure(`GET /fapi/v2/account → ${acct.status}`);
+      const body = acct.body as Record<string, unknown>;
+      const maintenance = body.totalMaintMargin;
+      const balance = body.totalMarginBalance;
+      if (maintenance === undefined || balance === undefined) {
+        throw new StepFailure("totalMaintMargin / totalMarginBalance missing");
       }
-    } catch (e) { record(1, "Account fields", "FAIL", 0, (e as Error).message); }
+      if (!Number.isFinite(Number(maintenance)) || !Number.isFinite(Number(balance))) {
+        throw new StepFailure("totalMaintMargin / totalMarginBalance are not numeric");
+      }
+      return `totalMaintMargin=${String(maintenance)}, totalMarginBalance=${String(balance)}`;
+    });
 
-    // ── Step 2: Open long + TP/SL ─────────────────────────────────────────
-    try {
-      const start = Date.now();
+    // ── Step 2: Open long + TP/SL on the Algo API ──────────────────────────
+    const opened = await step(2, "Open long + TP/SL (Algo API)", async () => {
       touched.add(SYMBOL);
+      const entry = await placeMarket(SYMBOL, "BUY", s.qty, 2);
+      if (!entry.ok) throw new StepFailure(`entry rejected: ${describeApi(entry)}`);
 
-      const orderRes = await signedRequest("POST", "/fapi/v1/order", {
-        symbol: SYMBOL, side: "BUY", type: "MARKET", quantity: String(s.qty), newOrderRespType: "RESULT",
-      });
-      if (orderRes.status !== 200) {
-        const b = orderRes.body as Record<string, unknown>;
-        if (b.code) errorCodes.push({ code: b.code as number, msg: b.msg as string, ep: "POST /fapi/v1/order", step: 2 });
-        record(2, "Open long + TP/SL", "FAIL", Date.now() - start, `order rejected: ${b.code ?? orderRes.status}`);
-        throw new Error("no position");
-      }
-
-      // Place TP
-      const tpRes = await signedRequest("POST", "/fapi/v1/algoOrder", {
+      const tpOrder = await placeClosePositionAlgo({
         symbol: SYMBOL, side: "SELL", type: "TAKE_PROFIT_MARKET",
-        stopPrice: String(tp), closePosition: "true", clientAlgoId: `smk-tp-${rid}`,
-      });
-      if (tpRes.status === 200) algo.tp = (tpRes.body as Record<string, string>).algoId;
-      else { const b = tpRes.body as Record<string, unknown>; if (b.code) errorCodes.push({ code: b.code as number, msg: b.msg as string, ep: "POST /fapi/v1/algoOrder", step: 2 }); }
+        triggerPrice: tp, clientAlgoId: `smk-tp-${rid}`,
+      }, 2);
+      if (!tpOrder.ok) throw new StepFailure(`TP placement failed: ${tpOrder.error}`);
+      ids.tp = tpOrder.clientAlgoId;
 
-      // Place SL
-      const slRes = await signedRequest("POST", "/fapi/v1/algoOrder", {
+      const slOrder = await placeClosePositionAlgo({
         symbol: SYMBOL, side: "SELL", type: "STOP_MARKET",
-        stopPrice: String(sl), closePosition: "true", clientAlgoId: `smk-sl-${rid}`,
-      });
-      if (slRes.status === 200) algo.sl = (slRes.body as Record<string, string>).algoId;
-      else { const b = slRes.body as Record<string, unknown>; if (b.code) errorCodes.push({ code: b.code as number, msg: b.msg as string, ep: "POST /fapi/v1/algoOrder", step: 2 }); }
+        triggerPrice: sl, clientAlgoId: `smk-sl-${rid}`,
+      }, 2);
+      if (!slOrder.ok) throw new StepFailure(`SL placement failed: ${slOrder.error}`);
+      ids.sl = slOrder.clientAlgoId;
 
-      // Poll openAlgoOrders
-      let both = false;
-      const wStart = Date.now();
-      while (Date.now() - wStart < 15000) {
-        const { body } = await signedRequest("GET", "/fapi/v1/openAlgoOrders", { symbol: SYMBOL });
-        const ords = Array.isArray(body) ? body as Record<string, string>[] : ((body as Record<string, unknown>)?.orders ?? []) as Record<string, string>[];
-        if (ords.some(o => o.clientAlgoId === `smk-tp-${rid}`) && ords.some(o => o.clientAlgoId === `smk-sl-${rid}`)) { both = true; break; }
-        await sleep(500);
+      if (!(await waitForAlgoIds(SYMBOL, [`smk-tp-${rid}`, `smk-sl-${rid}`], 15_000))) {
+        throw new StepFailure("TP/SL not visible in openAlgoOrders within 15s");
       }
-      const ms = Date.now() - start;
-      record(2, "Open long + TP/SL", both ? "PASS" : "FAIL", ms,
-        both ? `position opened, both algo orders present within ${ms}ms` : "algo orders not found in 15s");
-    } catch (e) { record(2, "Open long + TP/SL", "FAIL", 0, (e as Error).message); throw e; }
+      return "position opened; both Algo legs present (algoType=CONDITIONAL, triggerPrice, closePosition=true, workingType=MARK_PRICE)";
+    });
 
-    // ── Step 3: Replace TP/SL (±12%) ─────────────────────────────────────
-    try {
-      const start = Date.now();
-      if (algo.tp) await signedRequest("DELETE", "/fapi/v1/algoOrder", { symbol: SYMBOL, algoId: algo.tp });
-      if (algo.sl) await signedRequest("DELETE", "/fapi/v1/algoOrder", { symbol: SYMBOL, algoId: algo.sl });
-      const ntp = await signedRequest("POST", "/fapi/v1/algoOrder", {
+    // ── Step 3: Replace TP/SL (±12%) ───────────────────────────────────────
+    const replaced = opened ? await step(3, "Replace TP/SL (±12%)", async () => {
+      const oldTp = ids.tp;
+      const oldSl = ids.sl;
+      if (!oldTp || !oldSl) throw new StepFailure("step 2 did not place both legs");
+
+      const cancelTp = await deleteAlgo(oldTp, 3);
+      if (!cancelTp.ok) throw new StepFailure(`cancel old TP failed: ${describeApi(cancelTp)}`);
+      const cancelSl = await deleteAlgo(oldSl, 3);
+      if (!cancelSl.ok) throw new StepFailure(`cancel old SL failed: ${describeApi(cancelSl)}`);
+      ids.tp = null;
+      ids.sl = null;
+
+      const newTp = await placeClosePositionAlgo({
         symbol: SYMBOL, side: "SELL", type: "TAKE_PROFIT_MARKET",
-        stopPrice: String(tp2), closePosition: "true", clientAlgoId: `smk-tp2-${rid}`,
-      });
-      if (ntp.status === 200) algo.tp = (ntp.body as Record<string, string>).algoId;
-      const nsl = await signedRequest("POST", "/fapi/v1/algoOrder", {
-        symbol: SYMBOL, side: "SELL", type: "STOP_MARKET",
-        stopPrice: String(sl2), closePosition: "true", clientAlgoId: `smk-sl2-${rid}`,
-      });
-      if (nsl.status === 200) algo.sl = (nsl.body as Record<string, string>).algoId;
-      const { body } = await signedRequest("GET", "/fapi/v1/openAlgoOrders", { symbol: SYMBOL });
-      const ords = Array.isArray(body) ? body as Record<string, string>[] : ((body as Record<string, unknown>)?.orders ?? []) as Record<string, string>[];
-      const oldGone = !ords.some(o => o.clientAlgoId === `smk-tp-${rid}` || o.clientAlgoId === `smk-sl-${rid}`);
-      const newHere = ords.some(o => o.clientAlgoId === `smk-tp2-${rid}`) && ords.some(o => o.clientAlgoId === `smk-sl2-${rid}`);
-      const ms = Date.now() - start;
-      record(3, "Replace TP/SL (±12%)", oldGone && newHere ? "PASS" : "FAIL", ms, `oldGone=${oldGone} newPresent=${newHere}`);
-    } catch (e) { record(3, "Replace TP/SL (±12%)", "FAIL", 0, (e as Error).message); }
+        triggerPrice: tp2, clientAlgoId: `smk-tp2-${rid}`,
+      }, 3);
+      if (!newTp.ok) throw new StepFailure(`new TP placement failed: ${newTp.error}`);
+      ids.tp = newTp.clientAlgoId;
 
-    // ── Step 4: Invalid SL (above mark for long) ─────────────────────────
-    try {
-      const start = Date.now();
-      const badSl = align(mark * 1.20, f.tick);
+      const newSl = await placeClosePositionAlgo({
+        symbol: SYMBOL, side: "SELL", type: "STOP_MARKET",
+        triggerPrice: sl2, clientAlgoId: `smk-sl2-${rid}`,
+      }, 3);
+      if (!newSl.ok) throw new StepFailure(`new SL placement failed: ${newSl.error}`);
+      ids.sl = newSl.clientAlgoId;
+
+      const orders = await listOpenAlgoOrders(SYMBOL);
+      const oldGone = !hasClientAlgoId(orders, oldTp) && !hasClientAlgoId(orders, oldSl);
+      const newPresent = hasClientAlgoId(orders, `smk-tp2-${rid}`) && hasClientAlgoId(orders, `smk-sl2-${rid}`);
+      if (!oldGone || !newPresent) {
+        throw new StepFailure(`oldGone=${oldGone} newPresent=${newPresent}`);
+      }
+      return "old legs gone, new legs present";
+    }) : skip(3, "Replace TP/SL (±12%)", "step 2 failed");
+
+    // ── Step 4: Invalid SL (above mark for long) ───────────────────────────
+    const invalidOk = replaced ? await step(4, "Invalid SL rejection (Algo API)", async () => {
+      const badSl = priceFromPct(mark, 120, f.tick);
       const res = await signedRequest("POST", "/fapi/v1/algoOrder", {
-        symbol: SYMBOL, side: "SELL", type: "STOP_MARKET",
-        stopPrice: String(badSl), closePosition: "true", clientAlgoId: `smk-bad-${rid}`,
+        algoType: "CONDITIONAL",
+        symbol: SYMBOL,
+        side: "SELL",
+        type: "STOP_MARKET",
+        triggerPrice: badSl,
+        closePosition: "true",
+        workingType: "MARK_PRICE",
+        clientAlgoId: `smk-bad-${rid}`,
       });
-      const ms = Date.now() - start;
-      const b = res.body as Record<string, unknown>;
-      if (b.code) errorCodes.push({ code: b.code as number, msg: b.msg as string, ep: "POST /fapi/v1/algoOrder", step: 4 });
-      if (res.status !== 200) {
-        const { body } = await signedRequest("GET", "/fapi/v1/openAlgoOrders", { symbol: SYMBOL });
-        const ords = Array.isArray(body) ? body as Record<string, string>[] : ((body as Record<string, unknown>)?.orders ?? []) as Record<string, string>[];
-        const intact = ords.some(o => o.clientAlgoId === `smk-tp2-${rid}`) && ords.some(o => o.clientAlgoId === `smk-sl2-${rid}`);
-        record(4, "Invalid SL rejection", "PASS", ms, `rejected (code=${b.code}), originals intact=${intact}`);
-      } else {
-        record(4, "Invalid SL rejection", "FAIL", ms, "invalid SL was accepted (should be rejected)");
-        await signedRequest("DELETE", "/fapi/v1/algoOrder", { symbol: SYMBOL, algoId: b.algoId as string }).catch(() => {});
+      const answer = interpret(res, "POST /fapi/v1/algoOrder", 4);
+      if (answer.ok) {
+        await deleteAlgo(`smk-bad-${rid}`, 4);
+        throw new StepFailure("invalid SL was ACCEPTED (expected a rejection)");
       }
-    } catch (e) { record(4, "Invalid SL rejection", "FAIL", 0, (e as Error).message); }
+      const orders = await listOpenAlgoOrders(SYMBOL);
+      const originalsIntact = hasClientAlgoId(orders, `smk-tp2-${rid}`) && hasClientAlgoId(orders, `smk-sl2-${rid}`);
+      if (!originalsIntact) {
+        throw new StepFailure(`rejected code=${answer.code ?? "?"} msg="${answer.msg ?? ""}" but the original TP/SL are not intact`);
+      }
+      return `Binance answered code=${answer.code ?? "?"} msg="${answer.msg ?? ""}"; original TP/SL intact`;
+    }) : skip(4, "Invalid SL rejection (Algo API)", "step 3 failed");
 
-    // ── Step 5: Cancel TP via REST, check UNPROTECTED ────────────────────
-    try {
-      const start = Date.now();
-      if (algo.tp) {
-        await signedRequest("DELETE", "/fapi/v1/algoOrder", { symbol: SYMBOL, algoId: algo.tp });
-        algo.tp = null;
-      }
+    // ── Step 5: Cancel TP via REST (exchange visibility only) ──────────────
+    const canceled = invalidOk ? await step(5, "Cancel TP via REST (exchange visibility only)", async () => {
+      const tpClientAlgoId = `smk-tp2-${rid}`;
+      const ack = await deleteAlgo(tpClientAlgoId, 5);
+      ids.tp = null;
+      if (!ack.ok) throw new StepFailure(`DELETE TP failed: ${describeApi(ack)}`);
+
+      const started = Date.now();
       let gone = false;
-      const wStart = Date.now();
-      while (Date.now() - wStart < 20000) {
-        const { body } = await signedRequest("GET", "/fapi/v1/openAlgoOrders", { symbol: SYMBOL });
-        const ords = Array.isArray(body) ? body as Record<string, string>[] : ((body as Record<string, unknown>)?.orders ?? []) as Record<string, string>[];
-        if (!ords.some(o => o.clientAlgoId === `smk-tp2-${rid}`)) { gone = true; break; }
+      while (Date.now() - started < 20_000) {
+        if (!hasClientAlgoId(await listOpenAlgoOrders(SYMBOL), tpClientAlgoId)) { gone = true; break; }
         await sleep(500);
       }
-      const ms = Date.now() - start;
-      record(5, "Cancel TP via REST", gone ? "PASS" : "FAIL", ms,
-        gone ? `TP gone within ${ms}ms (app UNPROTECTED requires live manager)` : "TP still in openAlgoOrders after 20s");
-    } catch (e) { record(5, "Cancel TP via REST", "FAIL", 0, (e as Error).message); }
+      if (!gone) throw new StepFailure("TP still listed in openAlgoOrders 20s after a confirmed DELETE");
+      return `DELETE answered code=${ack.code ?? "200"}; TP absent after ${Date.now() - started}ms. EXCHANGE PROBE only: this step cancels the order itself, so the app's UNPROTECTED flag is NOT checked here (see ${APP_LEVEL_SUITE})`;
+    }) : skip(5, "Cancel TP via REST (exchange visibility only)", "step 4 failed");
 
-    // ── Step 6: Re-protect, close position, orphan check ────────────────
-    try {
-      const start = Date.now();
-      // Re-protect
-      const rp = await signedRequest("POST", "/fapi/v1/algoOrder", {
+    // ── Step 6: Re-protect, close, orphan outcome ──────────────────────────
+    const reProtected = canceled ? await step(6, "Re-protect, close, orphan outcome", async () => {
+      const reProtect = await placeClosePositionAlgo({
         symbol: SYMBOL, side: "SELL", type: "TAKE_PROFIT_MARKET",
-        stopPrice: String(tp), closePosition: "true", clientAlgoId: `smk-tp3-${rid}`,
-      });
-      if (rp.status === 200) algo.tp = (rp.body as Record<string, string>).algoId;
-      // Close position via reduce-only market order
-      const close = await signedRequest("POST", "/fapi/v1/order", {
-        symbol: SYMBOL, side: "SELL", type: "MARKET", quantity: String(s.qty), reduceOnly: "true",
-      });
-      const cb = close.body as Record<string, unknown>;
-      if (cb.code) errorCodes.push({ code: cb.code as number, msg: cb.msg as string, ep: "POST /fapi/v1/order", step: 6 });
-      if (close.status === 200) {
-        let cleared = false;
-        const wStart = Date.now();
-        while (Date.now() - wStart < 30000) {
-          const { body } = await signedRequest("GET", "/fapi/v1/openAlgoOrders", { symbol: SYMBOL });
-          const ords = Array.isArray(body) ? body as Record<string, string>[] : ((body as Record<string, unknown>)?.orders ?? []) as Record<string, string>[];
-          if (ords.length === 0) { cleared = true; break; }
-          await sleep(500);
-        }
-        const ms = Date.now() - start;
-        record(6, "Re-protect + close position", "PASS", ms,
-          cleared ? `position closed, algo orders auto-cancelled by Binance within ${ms}ms` : "position closed, algo orders remain (orphan cleanup needed)");
-      } else {
-        record(6, "Re-protect + close position", "FAIL", Date.now() - start, `close rejected: ${cb.code ?? close.status}`);
-      }
-      // Open new position, confirm no stale order
-      const newOrder = await signedRequest("POST", "/fapi/v1/order", {
-        symbol: SYMBOL, side: "BUY", type: "MARKET", quantity: String(s.qty),
-      });
-      if (newOrder.status === 200) {
-        await sleep(1000);
-        const { body } = await signedRequest("GET", "/fapi/v1/openAlgoOrders", { symbol: SYMBOL });
-        const ords = Array.isArray(body) ? body as Record<string, string>[] : ((body as Record<string, unknown>)?.orders ?? []) as Record<string, string>[];
-        const stale = ords.filter(o => !o.clientAlgoId?.includes(rid));
-        console.log(`  [${stale.length === 0 && ords.length === 0 ? "✓" : "!"}] Step 6b: new position opened, stale orders: ${stale.length}, total algo: ${ords.length}`);
-        await signedRequest("POST", "/fapi/v1/order", { symbol: SYMBOL, side: "SELL", type: "MARKET", quantity: String(s.qty), reduceOnly: "true" });
-      }
-    } catch (e) { record(6, "Re-protect + close position", "FAIL", 0, (e as Error).message); }
+        triggerPrice: tp, clientAlgoId: `smk-tp3-${rid}`,
+      }, 6);
+      if (!reProtect.ok) throw new StepFailure(`re-protect failed: ${reProtect.error}`);
+      ids.tp = reProtect.clientAlgoId;
 
-    // ── Step 7: Emergency flatten ───────────────────────────────────────
-    try {
-      const start = Date.now();
-      await signedRequest("POST", "/fapi/v1/order", { symbol: SYMBOL, side: "BUY", type: "MARKET", quantity: String(s.qty) });
-      await signedRequest("POST", "/fapi/v1/algoOrder", {
+      const close = await placeMarket(SYMBOL, "SELL", s.qty, 6, true);
+      if (!close.ok) throw new StepFailure(`reduce-only close rejected: ${describeApi(close)}`);
+
+      const closeStarted = Date.now();
+      let cleared = false;
+      while (Date.now() - closeStarted < 30_000) {
+        if ((await listOpenAlgoOrders(SYMBOL)).length === 0) { cleared = true; break; }
+        await sleep(500);
+      }
+      if (!cleared) throw new StepFailure("position closed but closePosition Algo orders remain after 30s");
+      const clearedInMs = Date.now() - closeStarted;
+
+      const reopened = await placeMarket(SYMBOL, "BUY", s.qty, 6);
+      if (!reopened.ok) throw new StepFailure(`new position rejected: ${describeApi(reopened)}`);
+      await sleep(1_000);
+      const stale = await listOpenAlgoOrders(SYMBOL);
+      if (stale.length > 0) {
+        throw new StepFailure(`new position inherited ${stale.length} stale Algo order(s): ${stale.map((order) => String(order.clientAlgoId)).join(", ")}`);
+      }
+
+      const flatten = await placeMarket(SYMBOL, "SELL", s.qty, 6, true);
+      if (!flatten.ok) throw new StepFailure(`new position close rejected: ${describeApi(flatten)}`);
+      return `re-protect ok; Algo orders gone ${clearedInMs}ms after the close (no app is running here → Binance auto-cancel; app orphan cleanup is covered by ${APP_LEVEL_SUITE}); new position had 0 stale Algo orders`;
+    }) : skip(6, "Re-protect, close, orphan outcome", "step 5 failed");
+
+    // ── Step 7: Emergency flatten ──────────────────────────────────────────
+    await step(7, "Emergency flatten (probe-level)", async () => {
+      touched.add(SYMBOL);
+      const entry = await placeMarket(SYMBOL, "BUY", s.qty, 7);
+      if (!entry.ok) throw new StepFailure(`entry rejected: ${describeApi(entry)}`);
+
+      const tpOrder = await placeClosePositionAlgo({
         symbol: SYMBOL, side: "SELL", type: "TAKE_PROFIT_MARKET",
-        stopPrice: String(tp), closePosition: "true", clientAlgoId: `smk-emg-tp-${rid}`,
-      });
-      await signedRequest("POST", "/fapi/v1/algoOrder", {
+        triggerPrice: tp, clientAlgoId: `smk-emg-tp-${rid}`,
+      }, 7);
+      if (!tpOrder.ok) throw new StepFailure(`TP placement failed: ${tpOrder.error}`);
+
+      const slOrder = await placeClosePositionAlgo({
         symbol: SYMBOL, side: "SELL", type: "STOP_MARKET",
-        stopPrice: String(sl), closePosition: "true", clientAlgoId: `smk-emg-sl-${rid}`,
-      });
-      // Flatten: cancel all algo + all orders, then reduce-only close
-      await signedRequest("DELETE", "/fapi/v1/algoOpenOrders", { symbol: SYMBOL });
-      await signedRequest("DELETE", "/fapi/v1/allOpenOrders", { symbol: SYMBOL });
-      await signedRequest("POST", "/fapi/v1/order", { symbol: SYMBOL, side: "SELL", type: "MARKET", quantity: String(s.qty), reduceOnly: "true" });
-      const { body } = await signedRequest("GET", "/fapi/v1/openAlgoOrders", { symbol: SYMBOL });
-      const ords = Array.isArray(body) ? body as Record<string, string>[] : ((body as Record<string, unknown>)?.orders ?? []) as Record<string, string>[];
-      const ms = Date.now() - start;
-      record(7, "Emergency flatten", ords.length === 0 ? "PASS" : "FAIL", ms,
-        ords.length === 0 ? "position closed, openAlgoOrders empty, zero failures" : `${ords.length} algo orders remain`);
-    } catch (e) { record(7, "Emergency flatten", "FAIL", 0, (e as Error).message); }
+        triggerPrice: sl, clientAlgoId: `smk-emg-sl-${rid}`,
+      }, 7);
+      if (!slOrder.ok) throw new StepFailure(`SL placement failed: ${slOrder.error}`);
 
-    // ── Step 8: Multi-symbol ────────────────────────────────────────────
-    try {
-      const start = Date.now();
+      const cancelAlgos = await signedRequest("DELETE", "/fapi/v1/algoOpenOrders", { symbol: SYMBOL });
+      if (cancelAlgos.status !== 200) throw new StepFailure(`cancel all Algo orders → ${cancelAlgos.status}`);
+      const cancelOrders = await signedRequest("DELETE", "/fapi/v1/allOpenOrders", { symbol: SYMBOL });
+      if (cancelOrders.status !== 200) throw new StepFailure(`cancel all orders → ${cancelOrders.status}`);
+
+      const close = await placeMarket(SYMBOL, "SELL", s.qty, 7, true);
+      if (!close.ok) throw new StepFailure(`flatten rejected: ${describeApi(close)}`);
+
+      const remaining = await listOpenAlgoOrders(SYMBOL);
+      if (remaining.length > 0) throw new StepFailure(`${remaining.length} Algo order(s) remain after cancel-all`);
+      const positionAmt = await readPositionAmt(SYMBOL);
+      if (positionAmt === null) throw new StepFailure("could not verify the position after flatten");
+      if (!isZeroDecimal(positionAmt)) throw new StepFailure(`position still open after flatten: ${positionAmt}`);
+      return "position flat, openAlgoOrders empty, zero failures";
+    });
+
+    // ── Step 8: Multi-symbol + margin freshness ────────────────────────────
+    await step(8, "Multi-symbol + margin freshness", async () => {
+      touched.add(SYMBOL);
       touched.add(SECOND_SYMBOL);
-      const ef = await readFilters(SECOND_SYMBOL);
-      const em = await readMark(SECOND_SYMBOL);
-      const es = calcQty(ef, em);
-      await signedRequest("POST", "/fapi/v1/order", { symbol: SYMBOL, side: "BUY", type: "MARKET", quantity: String(s.qty) });
-      const ethRes = await signedRequest("POST", "/fapi/v1/order", { symbol: SECOND_SYMBOL, side: "BUY", type: "MARKET", quantity: String(es.qty) });
+      const ethFilters = await readFilters(SECOND_SYMBOL);
+      const ethMark = await readMark(SECOND_SYMBOL);
+      const ethSize = calcQty(ethFilters, ethMark);
+
+      const btcEntry = await placeMarket(SYMBOL, "BUY", s.qty, 8);
+      if (!btcEntry.ok) throw new StepFailure(`BTC entry rejected: ${describeApi(btcEntry)}`);
+      const ethEntry = await placeMarket(SECOND_SYMBOL, "BUY", ethSize.qty, 8);
+      if (!ethEntry.ok) throw new StepFailure(`ETH entry rejected: ${describeApi(ethEntry)}`);
+
+      const started = Date.now();
       let fresh = false;
-      const wStart = Date.now();
-      while (Date.now() - wStart < 10000) {
-        const { body } = await signedRequest("GET", "/fapi/v2/account");
-        if ((body as Record<string, unknown>).totalMarginBalance !== undefined) { fresh = true; break; }
+      while (Date.now() - started < 10_000) {
+        const acct = await signedRequest("GET", "/fapi/v2/account");
+        const body = acct.body as Record<string, unknown>;
+        if (
+          acct.status === 200 &&
+          body.totalMaintMargin !== undefined &&
+          body.totalMarginBalance !== undefined &&
+          Number.isFinite(Number(body.totalMaintMargin)) &&
+          Number.isFinite(Number(body.totalMarginBalance))
+        ) { fresh = true; break; }
         await sleep(500);
       }
-      const ms = Date.now() - start;
-      const ok = ethRes.status === 200;
-      const eb = ethRes.body as Record<string, unknown>;
-      if (eb.code) errorCodes.push({ code: eb.code as number, msg: eb.msg as string, ep: "POST /fapi/v1/order", step: 8 });
-      record(8, "Multi-symbol", "PASS", ms,
-        ok ? `both accepted, margin fresh in ${ms}ms` : `BTC opened, ETH rejected (code=${eb.code}), margin check ${ms}ms`);
-      await signedRequest("POST", "/fapi/v1/order", { symbol: SYMBOL, side: "SELL", type: "MARKET", quantity: String(s.qty), reduceOnly: "true" });
-      if (ok) await signedRequest("POST", "/fapi/v1/order", { symbol: SECOND_SYMBOL, side: "SELL", type: "MARKET", quantity: String(es.qty), reduceOnly: "true" });
-    } catch (e) { record(8, "Multi-symbol", "FAIL", 0, (e as Error).message); }
+      if (!fresh) throw new StepFailure("margin fields did not become fresh within 10s");
 
-    // ── Step 9: Old endpoint STOP_MARKET ────────────────────────────────
-    try {
-      const start = Date.now();
-      const stopP = align(mark * 0.95, f.tick);
+      const closeBtc = await placeMarket(SYMBOL, "SELL", s.qty, 8, true);
+      if (!closeBtc.ok) throw new StepFailure(`BTC flatten rejected: ${describeApi(closeBtc)}`);
+      const closeEth = await placeMarket(SECOND_SYMBOL, "SELL", ethSize.qty, 8, true);
+      if (!closeEth.ok) throw new StepFailure(`ETH flatten rejected: ${describeApi(closeEth)}`);
+      return `both entries accepted; margin fields fresh in ${Date.now() - started}ms`;
+    });
+
+    // ── Step 9: Legacy endpoint STOP_MARKET ────────────────────────────────
+    await step(9, "Legacy /fapi/v1/order STOP_MARKET probe", async () => {
+      const stopPrice = priceFromPct(mark, 95, f.tick);
       const res = await signedRequest("POST", "/fapi/v1/order", {
-        symbol: SYMBOL, side: "SELL", type: "STOP_MARKET",
-        stopPrice: String(stopP), quantity: String(s.qty), reduceOnly: "true",
+        symbol: SYMBOL,
+        side: "SELL",
+        type: "STOP_MARKET",
+        stopPrice,
+        quantity: s.qty,
+        reduceOnly: "true",
         clientOrderId: `smk-old-${rid}`,
       });
-      const ms = Date.now() - start;
-      const b = res.body as Record<string, unknown>;
-      if (b.code) errorCodes.push({ code: b.code as number, msg: b.msg as string, ep: "POST /fapi/v1/order", step: 9 });
-      if (b.code === -4120) {
-        record(9, "Old STOP_MARKET endpoint", "PASS", ms, "rejected with -4120 (algo migration applies on demo)");
-      } else if (res.status === 200) {
-        record(9, "Old STOP_MARKET endpoint", "PASS", ms, "accepted — old endpoint still works on demo");
-        await signedRequest("DELETE", "/fapi/v1/order", { symbol: SYMBOL, clientOrderId: `smk-old-${rid}` }).catch(() => {});
-      } else {
-        record(9, "Old STOP_MARKET endpoint", "PASS", ms, `response code=${b.code}, msg=${b.msg}`);
+      const answer = interpret(res, "POST /fapi/v1/order", 9);
+      if (answer.ok) {
+        await signedRequest("DELETE", "/fapi/v1/order", { symbol: SYMBOL, origClientOrderId: `smk-old-${rid}` });
+        throw new StepFailure("legacy endpoint ACCEPTED a conditional order (expected -4120)");
       }
-    } catch (e) { record(9, "Old STOP_MARKET endpoint", "FAIL", 0, (e as Error).message); }
+      return `rejected with code=${answer.code ?? "?"} msg="${answer.msg ?? ""}" (expected -4120: conditional orders require the Algo API)`;
+    });
 
-    // ── Step 10: Rate-limit / 418 ───────────────────────────────────────
+    // ── Step 10: Rate-limit / 418 ──────────────────────────────────────────
     record(10, "Rate-limit / 418 handling", "SKIP", 0, "cannot be exercised live without triggering actual rate limits");
 
+    if (reProtected) {
+      // Kept only to make the dependency chain explicit in the console output.
+      console.log("  [exchange] step 6 completed its re-protect / close / reopen sequence");
+    }
   } finally {
-    await cleanup();
+    cleanupResult = await cleanup();
   }
 
-  writeReport("run");
+  writeReport("run", cleanupResult);
+  printIntegrationFollowup();
 
-  const fails = results.filter(r => r.status === "FAIL");
-  if (fails.length > 0) {
-    console.log(`\n${fails.length} step(s) FAILED`);
+  const failed = results.filter((result) => result.status === "FAIL");
+  if (failed.length > 0 || cleanupResult === null || cleanupResult.stillOpen.length > 0 || cleanupResult.failures.length > 0) {
+    if (cleanupResult && cleanupResult.stillOpen.length > 0) {
+      console.log(`\n${cleanupResult.stillOpen.length} item(s) STILL OPEN after cleanup`);
+    }
+    console.log(`\n${failed.length} step(s) FAILED or cleanup incomplete`);
     process.exit(1);
   }
   console.log("\n═══ RUN COMPLETE ═══\n");
@@ -682,19 +1079,23 @@ async function run(): Promise<void> {
 
 // ─── Report ─────────────────────────────────────────────────────────────────
 
-function writeReport(mode: string): void {
+function writeReport(mode: string, cleanupResult: CleanupResult | null): void {
   const L: string[] = [];
-  L.push("# Testnet Smoke Test Report");
+  L.push("# Testnet Exchange Probe Report");
   L.push("");
   L.push(`**Date:** ${new Date().toISOString()}`);
   L.push(`**Mode:** ${mode}`);
+  L.push(`**Kind:** ${RUN_LABEL} — every step below talks to Binance directly and none of them exercises the MAWS app.`);
   L.push(`**Hosts:** ${DEMO_REST} / ${DEMO_WS}`);
+  L.push("");
+  L.push("App-level checks (protection status, manager orphan cleanup, risk freshness) are not covered here;");
+  L.push(`run \`npm run test:integration\` (suite: \`${APP_LEVEL_SUITE}\`).`);
   L.push("");
   L.push("## Results");
   L.push("");
   L.push("| Step | Name | Status | Time (ms) | Observations |");
   L.push("|------|------|--------|-----------|-------------|");
-  for (const r of results) L.push(`| ${r.num} | ${r.name} | ${r.status} | ${r.ms} | ${r.obs} |`);
+  for (const r of results) L.push(`| ${r.num} | [exchange] ${r.name} | ${r.status} | ${r.ms} | ${r.obs} |`);
   L.push("");
   if (errorCodes.length > 0) {
     L.push("## Binance Error Codes Seen");
@@ -704,6 +1105,20 @@ function writeReport(mode: string): void {
     for (const e of errorCodes) L.push(`| ${e.code} | ${e.msg} | ${e.ep} | ${e.step} |`);
     L.push("");
   }
+  L.push("## Cleanup");
+  L.push("");
+  if (cleanupResult === null) {
+    L.push("- cleanup did not run");
+  } else {
+    if (cleanupResult.stillOpen.length === 0) L.push("- all flat");
+    else for (const item of cleanupResult.stillOpen) L.push(`- STILL OPEN: ${item.symbol} ${item.qty} ${item.side} (${item.kind})`);
+    if (cleanupResult.failures.length > 0) {
+      L.push("");
+      L.push("Cleanup errors:");
+      for (const failure of cleanupResult.failures) L.push(`- ${failure}`);
+    }
+  }
+  L.push("");
   const pass = results.filter(r => r.status === "PASS").length;
   const fail = results.filter(r => r.status === "FAIL").length;
   const skip = results.filter(r => r.status === "SKIP").length;
@@ -718,19 +1133,30 @@ function writeReport(mode: string): void {
   console.log("\nReport written to testnet-smoke-report.md");
 }
 
+function printIntegrationFollowup(): void {
+  console.log("\nApp-level checks the exchange probe cannot perform:");
+  console.log("  npm run test:integration");
+  console.log(`  (suite: ${APP_LEVEL_SUITE})`);
+}
+
 // ─── Main ───────────────────────────────────────────────────────────────────
 
 const args = process.argv.slice(2);
 
 if (args.includes("--selftest")) {
-  selftest().catch(e => { console.error("Fatal:", (e as Error).message); process.exit(1); });
+  selftest().catch(e => { console.error("Fatal:", errorMessage(e)); process.exit(1); });
 } else {
   // assertTestnetSafety runs before any network call
   runSafetyCheck();
 
   if (args.includes("--run")) {
-    run().catch(e => { console.error("Fatal:", (e as Error).message); cleanup().finally(() => process.exit(1)); });
+    run().catch(async (error) => {
+      console.error("Fatal:", errorMessage(error));
+      await cleanup().catch((cleanupError) => console.error("Cleanup failed:", errorMessage(cleanupError)));
+      printIntegrationFollowup();
+      process.exit(1);
+    });
   } else {
-    preflight().catch(e => { console.error("Fatal:", (e as Error).message); process.exit(1); });
+    preflight().catch(e => { console.error("Fatal:", errorMessage(e)); process.exit(1); });
   }
 }
