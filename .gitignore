@@ -52,6 +52,7 @@ yarn-error.log*
 # debug / inspection artifacts
 .inspect-tmp.db*
 testnet-smoke-report.md
+testnet-verification-report.md
 
 # old build outputs accidentally committed
 /MAWS/
