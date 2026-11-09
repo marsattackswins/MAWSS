@@ -17,12 +17,17 @@ import { BinanceApiError } from "@/lib/server/binance/rest";
 import {
   cleanupTestnetState,
   createTestnetManager,
-  getCurrentMarkPrice,
   sleep,
   uniqueOrderId,
   waitFor,
   waitForPosition,
 } from "./helpers";
+import {
+  assertSizesWithinRiskCaps,
+  planTestnetOrder,
+  priceFromPct,
+  type OrderPlan,
+} from "./testnet-sizing";
 
 const hasTestnetCredentials = Boolean(
   (process.env.MAWS_BINANCE_TESTNET_API_KEY && process.env.MAWS_BINANCE_TESTNET_API_SECRET) ||
@@ -32,8 +37,6 @@ const testnetDescribe = hasTestnetCredentials ? describe : describe.skip;
 
 const SYMBOL = "BTCUSDT";
 const SECOND_SYMBOL = "ETHUSDT";
-const PRIMARY_QTY = "0.002";
-const SECOND_QTY = "0.02";
 const PROTECTION_TIMEOUT_MS = 20_000;
 const ORPHAN_TIMEOUT_MS = 30_000;
 const MARGIN_FRESH_TIMEOUT_MS = 30_000;
@@ -41,6 +44,8 @@ const MARGIN_FRESH_TIMEOUT_MS = 30_000;
 testnetDescribe("Algo protection failure handling (Binance Testnet only)", () => {
   let manager: BinanceLiveManager;
   let alertSpy: jest.SpyInstance;
+  let primary: OrderPlan;
+  let second: OrderPlan;
 
   beforeAll(async () => {
     alertSpy = jest.spyOn(alerts, "alert").mockImplementation(() => undefined);
@@ -48,6 +53,13 @@ testnetDescribe("Algo protection failure handling (Binance Testnet only)", () =>
     if (manager.cfg.env !== "testnet" || manager.cfg.activeProfileId !== "binance-testnet") {
       throw new Error("Algo protection failure tests require the Binance Testnet profile");
     }
+    // Size from the live exchangeInfo filters instead of hardcoded quantities.
+    primary = await planTestnetOrder(SYMBOL);
+    second = await planTestnetOrder(SECOND_SYMBOL);
+    console.log(
+      `[integration] sized ${SYMBOL} ${primary.qty} @ $${primary.mark} = $${primary.notionalUsd.toFixed(2)}; `
+      + `${SECOND_SYMBOL} ${second.qty} @ $${second.mark} = $${second.notionalUsd.toFixed(2)}`,
+    );
   }, 30_000);
 
   beforeEach(() => {
@@ -89,7 +101,35 @@ testnetDescribe("Algo protection failure handling (Binance Testnet only)", () =>
     return rows.find((row) => row.symbol === symbol)?.positionAmt ?? "0";
   }
 
+  function planFor(symbol: string): OrderPlan {
+    if (symbol === SYMBOL) return primary;
+    if (symbol === SECOND_SYMBOL) return second;
+    throw new Error(`no sized order plan for ${symbol}`);
+  }
+
+  /** Current exchange leverage for the symbol, or null when it cannot be read. */
+  async function currentLeverage(symbol: string): Promise<number | null> {
+    try {
+      const row = (await manager.rest.getPositionRisk(symbol)).find((candidate) => candidate.symbol === symbol);
+      const value = Number(row?.leverage);
+      return Number.isFinite(value) && value > 0 ? value : null;
+    } catch {
+      return null;
+    }
+  }
+
+  /**
+   * Fails with the cap's name before an order is submitted, so a mis-sized
+   * suite reports RISK_MAX_ORDER_NOTIONAL / RISK_MAX_GROSS_EXPOSURE /
+   * RISK_MAX_LEVERAGE instead of surfacing a rejection mid-test.
+   */
+  async function assertCapsAllow(symbols: string[]): Promise<void> {
+    const orders = symbols.map((symbol) => ({ symbol, notionalUsd: planFor(symbol).notionalUsd }));
+    assertSizesWithinRiskCaps(manager.cfg.risk, orders, await currentLeverage(symbols[0]));
+  }
+
   async function openPosition(symbol: string, qty: string): Promise<void> {
+    await assertCapsAllow([symbol]);
     const result = await manager.orders.submitOrder({
       symbol,
       side: "BUY",
@@ -102,11 +142,11 @@ testnetDescribe("Algo protection failure handling (Binance Testnet only)", () =>
   }
 
   async function protectPosition(symbol: string): Promise<void> {
-    const mark = await getCurrentMarkPrice(symbol);
+    const plan = planFor(symbol);
     const placed = await manager.orders.protectPosition({
       symbol,
-      tpPrice: (mark * 1.1).toFixed(1),
-      slPrice: (mark * 0.9).toFixed(1),
+      tpPrice: priceFromPct(plan.mark, 110, plan.tick),
+      slPrice: priceFromPct(plan.mark, 90, plan.tick),
     });
     if (!placed.tp?.ok || !placed.sl?.ok) {
       throw new Error(`protection placement failed on ${symbol}: ${placed.tp?.error ?? placed.sl?.error ?? "unknown error"}`);
@@ -197,7 +237,7 @@ testnetDescribe("Algo protection failure handling (Binance Testnet only)", () =>
   // ─── (a) External TP cancel ─────────────────────────────────────────────
 
   test("operator-cancelled TP becomes UNPROTECTED within 20s with exactly one alert", async () => {
-    await openPosition(SYMBOL, PRIMARY_QTY);
+    await openPosition(SYMBOL, primary.qty);
     await protectPosition(SYMBOL);
 
     const openAlgos = await manager.rest.getOpenAlgoOrders(SYMBOL);
@@ -222,7 +262,7 @@ testnetDescribe("Algo protection failure handling (Binance Testnet only)", () =>
   // ─── (b) Close outside the app, then a new position ─────────────────────
 
   test("direct reduce-only close leaves no closePosition Algo order and no stale protection", async () => {
-    await openPosition(SYMBOL, PRIMARY_QTY);
+    await openPosition(SYMBOL, primary.qty);
     await protectPosition(SYMBOL);
 
     const oldAlgoIds = (await manager.rest.getOpenAlgoOrders(SYMBOL))
@@ -239,11 +279,22 @@ testnetDescribe("Algo protection failure handling (Binance Testnet only)", () =>
       : "Binance auto-cancel (no app orphan-cleanup alert observed)";
     console.log(`[integration] close=${closeMode}; closePosition Algo orders gone after ${clearedInMs}ms via ${mechanism}`);
 
-    await openPosition(SYMBOL, PRIMARY_QTY);
-    await manager.reconcileRun("algo-protection-failures:new-position");
+    // The old intent must be deleted once the symbol is flat. Report its status
+    // instead of assuming UNPROTECTED: a surviving row would let the next
+    // position inherit protection that no longer exists on the exchange.
+    await manager.reconcileRun("algo-protection-failures:flat");
+    const survivingIntent = getProtectionIntent(SYMBOL);
+    if (survivingIntent !== null && survivingIntent !== undefined) {
+      throw new Error(
+        `protection intent for ${SYMBOL} survived the flat position: status=${survivingIntent.status}, `
+        + `protectionStatus=${survivingIntent.protectionStatus}, tp=${survivingIntent.tpPrice ?? "null"}, `
+        + `sl=${survivingIntent.slPrice ?? "null"}`,
+      );
+    }
 
-    const intent = getProtectionIntent(SYMBOL);
-    expect(intent?.protectionStatus ?? "UNPROTECTED").not.toBe("PROTECTED");
+    await openPosition(SYMBOL, primary.qty);
+    await manager.reconcileRun("algo-protection-failures:new-position");
+    expect(getProtectionIntent(SYMBOL)).toBeNull();
     const remainingAlgos = await manager.rest.getOpenAlgoOrders(SYMBOL);
     expect(remainingAlgos.some((order) => oldAlgoIds.includes(order.clientAlgoId))).toBe(false);
     expect(remainingAlgos.filter((order) => order.closePosition)).toHaveLength(0);
@@ -256,17 +307,19 @@ testnetDescribe("Algo protection failure handling (Binance Testnet only)", () =>
   // ─── (c) Second symbol and margin freshness ─────────────────────────────
 
   test("second risk-increasing order on another symbol records margin freshness", async () => {
-    await openPosition(SYMBOL, PRIMARY_QTY);
+    await openPosition(SYMBOL, primary.qty);
+    // Both positions are live at once, so the gross-exposure cap must allow both.
+    await assertCapsAllow([SYMBOL, SECOND_SYMBOL]);
 
-    const second = await manager.orders.submitOrder({
+    const secondOrder = await manager.orders.submitOrder({
       symbol: SECOND_SYMBOL,
       side: "BUY",
       type: "MARKET",
-      qty: SECOND_QTY,
+      qty: second.qty,
       clientOrderId: uniqueOrderId("cross"),
     });
-    console.log(`[integration] ${SECOND_SYMBOL} order accepted=${second.ok}${second.ok ? "" : ` error=${second.error ?? "unknown"}`}`);
-    if (second.ok) await waitForPosition(SECOND_SYMBOL, true, 15_000);
+    console.log(`[integration] ${SECOND_SYMBOL} order accepted=${secondOrder.ok}${secondOrder.ok ? "" : ` error=${secondOrder.error ?? "unknown"}`}`);
+    if (secondOrder.ok) await waitForPosition(SECOND_SYMBOL, true, 15_000);
 
     // Freshness is measured from immediately after the risk-increasing order.
     const started = Date.now();
