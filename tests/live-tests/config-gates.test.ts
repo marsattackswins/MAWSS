@@ -24,14 +24,74 @@ const VALID_RISK_CAPS = {
 const envSrc = (src: Record<string, string>) => src as unknown as NodeJS.ProcessEnv;
 
 describe("environment configuration (fail closed)", () => {
-  test("host map is fixed: local -> production public endpoints, testnet -> testnet hosts, shadow/production -> real fapi hosts", () => {
+  test("host map is fixed: local -> production public endpoints, testnet -> demo hosts, shadow/production -> real fapi hosts", () => {
     expect(HOST_MAP.local.rest).toBe("https://fapi.binance.com");
     expect(HOST_MAP.local.uds).toBe("wss://fstream.binance.com");
-    expect(HOST_MAP.testnet.rest).toBe("https://testnet.binancefuture.com");
-    expect(HOST_MAP.testnet.uds).toBe("wss://fstream.binancefuture.com");
+    expect(HOST_MAP.testnet.rest).toBe("https://demo-fapi.binance.com");
+    expect(HOST_MAP.testnet.uds).toBe("wss://demo-fstream.binance.com");
     expect(HOST_MAP.shadow.rest).toBe("https://fapi.binance.com");
     expect(HOST_MAP.production.rest).toBe("https://fapi.binance.com");
     expect(HOST_MAP.production.uds).toBe("wss://fstream.binance.com");
+  });
+
+  test("testnet profile resolves only to demo hosts", () => {
+    expect(HOST_MAP.testnet.rest).toBe("https://demo-fapi.binance.com");
+    expect(HOST_MAP.testnet.uds).toBe("wss://demo-fstream.binance.com");
+  });
+
+  test("production profile resolves only to production hosts", () => {
+    expect(HOST_MAP.production.rest).toBe("https://fapi.binance.com");
+    expect(HOST_MAP.production.uds).toBe("wss://fstream.binance.com");
+  });
+
+  test("no env/profile combination mixes demo and production hosts", () => {
+    const testnetCfg = loadEnvConfig(envSrc({
+      MAWS_ENV: "testnet",
+      MAWS_OPERATOR_AUTH: AUTH,
+      ...KEYS,
+    }));
+    expect(testnetCfg.profiles["binance-testnet"].restEndpoint).toBe("https://demo-fapi.binance.com");
+    expect(testnetCfg.profiles["binance-testnet"].webSocketEndpoint).toBe("wss://demo-fstream.binance.com");
+    expect(testnetCfg.profiles["binance-production"].restEndpoint).toBe("https://fapi.binance.com");
+    expect(testnetCfg.profiles["binance-production"].webSocketEndpoint).toBe("wss://fstream.binance.com");
+
+    const prodCfg = loadEnvConfig(envSrc({
+      MAWS_ENV: "production",
+      MAWS_OPERATOR_AUTH: AUTH,
+      ...KEYS,
+      ...VALID_RISK_CAPS,
+    }));
+    expect(prodCfg.profiles["binance-testnet"].restEndpoint).toBe("https://demo-fapi.binance.com");
+    expect(prodCfg.profiles["binance-testnet"].webSocketEndpoint).toBe("wss://demo-fstream.binance.com");
+    expect(prodCfg.profiles["binance-production"].restEndpoint).toBe("https://fapi.binance.com");
+    expect(prodCfg.profiles["binance-production"].webSocketEndpoint).toBe("wss://fstream.binance.com");
+  });
+
+  test("testnet credentials are bound to demo hosts, never production hosts", () => {
+    const cfg = loadEnvConfig(envSrc({
+      MAWS_ENV: "testnet",
+      MAWS_OPERATOR_AUTH: AUTH,
+      MAWS_BINANCE_TESTNET_API_KEY: "demo-key",
+      MAWS_BINANCE_TESTNET_API_SECRET: "demo-secret",
+      MAWS_BINANCE_PRODUCTION_API_KEY: "prod-key",
+      MAWS_BINANCE_PRODUCTION_API_SECRET: "prod-secret",
+    }));
+    // Testnet profile carries demo credentials and demo hosts
+    expect(cfg.profiles["binance-testnet"].apiKey).toBe("demo-key");
+    expect(cfg.profiles["binance-testnet"].restEndpoint).toBe("https://demo-fapi.binance.com");
+    // Production profile carries production credentials and production hosts
+    expect(cfg.profiles["binance-production"].apiKey).toBe("prod-key");
+    expect(cfg.profiles["binance-production"].restEndpoint).toBe("https://fapi.binance.com");
+    // Active credentials come from the testnet profile, not production
+    expect(cfg.binanceApiKey).toBe("demo-key");
+    expect(cfg.binanceApiKey).not.toBe("prod-key");
+  });
+
+  test("legacy testnet hosts are absent from the host map", () => {
+    for (const entry of Object.values(HOST_MAP)) {
+      expect(entry.rest).not.toContain("binancefuture.com");
+      expect(entry.uds).not.toContain("binancefuture.com");
+    }
   });
 
   test("defaults to local with no config", () => {

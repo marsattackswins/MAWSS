@@ -50,7 +50,7 @@ jobs:
       - name: Check Binance Testnet availability
         run: |
           echo "Checking Binance testnet connectivity..."
-          curl -f https://testnet.binancefuture.com/fapi/v1/ping || exit 1
+          curl -f https://demo-fapi.binance.com/fapi/v1/ping || exit 1
 
       - name: Run integration tests
         id: run-tests

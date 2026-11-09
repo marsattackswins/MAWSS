@@ -327,7 +327,7 @@ describe("user-data stream: snapshot-plus-buffer recovery", () => {
     await h.stream.start();
     expect(h.lease.isOwner()).toBe(true);
     expect(FakeWs.instances).toHaveLength(1);
-    expect(FakeWs.last().url).toBe("wss://fstream.binancefuture.com/ws/LK-1");
+    expect(FakeWs.last().url).toBe("wss://demo-fstream.binance.com/ws/LK-1");
     expect(h.http.callsTo("/fapi/v1/listenKey").filter((c) => c.method === "POST")).toHaveLength(1);
     h.stream.stop();
   });

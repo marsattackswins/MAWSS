@@ -158,8 +158,8 @@ export interface EnvConfig {
 
 /**
  * Fixed literal host map. Base URLs are never configurable via environment.
- * local/testnet use the Binance Futures Testnet; shadow/production use the
- * real USD-M Futures endpoints.
+ * local uses production public endpoints (chart only); testnet uses Binance
+ * USDⓈ-M Demo Trading; shadow/production use the real USD-M Futures endpoints.
  */
 export const HOST_MAP: Record<MawsEnv, { rest: string; uds: string; label: string }> = {
   local: {
@@ -168,9 +168,9 @@ export const HOST_MAP: Record<MawsEnv, { rest: string; uds: string; label: strin
     label: "Binance USD-M Futures (local, public data only)",
   },
   testnet: {
-    rest: "https://testnet.binancefuture.com",
-    uds: "wss://fstream.binancefuture.com",
-    label: "Binance USD-M Futures Testnet",
+    rest: "https://demo-fapi.binance.com",
+    uds: "wss://demo-fstream.binance.com",
+    label: "Binance USD-M Futures Demo Trading",
   },
   shadow: {
     rest: "https://fapi.binance.com",
@@ -183,6 +183,32 @@ export const HOST_MAP: Record<MawsEnv, { rest: string; uds: string; label: strin
     label: "Binance USD-M Futures (production)",
   },
 };
+
+/** Retired Binance testnet hosts — startup fails if any profile resolves to these. */
+const LEGACY_HOSTS = ["testnet.binancefuture.com", "fstream.binancefuture.com"];
+
+function hostnameOf(url: string): string {
+  try {
+    return new URL(url).hostname.toLowerCase();
+  } catch {
+    return "";
+  }
+}
+
+function assertNoLegacyHosts(profiles: ProfileRegistry): void {
+  for (const profile of Object.values(profiles)) {
+    const hosts = [hostnameOf(profile.restEndpoint), hostnameOf(profile.webSocketEndpoint)];
+    for (const host of hosts) {
+      if (LEGACY_HOSTS.includes(host)) {
+        throw new Error(
+          `Legacy Binance testnet host "${host}" is retired. ` +
+          `Demo Trading uses demo-fapi.binance.com (REST) and ` +
+          `demo-fstream.binance.com (WebSocket). Update your configuration.`,
+        );
+      }
+    }
+  }
+}
 
 const PROFILE_CONFIGURATION_ERROR = "MAWS_PROFILE_CONFIGURATION_INVALID";
 
@@ -295,7 +321,7 @@ function buildProfiles(
   return {
     "binance-testnet": makeProfile(
       "binance-testnet",
-      "Binance Testnet",
+      "Binance Demo Trading",
       "testnet",
       testnetCredentials,
       isComplete(testnetCredentials),
@@ -419,6 +445,7 @@ export function loadEnvConfig(source: NodeJS.ProcessEnv = process.env): EnvConfi
     activeCredentials,
     credentialProfileForEnvironment(env),
   );
+  assertNoLegacyHosts(profiles);
   const cfg: EnvConfig = {
     env,
     brokerType,

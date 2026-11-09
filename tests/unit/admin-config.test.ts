@@ -10,14 +10,14 @@ jest.mock("@/lib/server/env/config", () => ({
     profiles: {
       "binance-testnet": {
         profileId: "binance-testnet",
-        label: "Binance Testnet",
+        label: "Binance Demo Trading",
         environment: "testnet",
         configured: true,
         executionEnabled: false,
         apiKey: "test-api-key-12345",
         apiSecret: "test-api-secret-67890",
-        restEndpoint: "https://testnet.binancefuture.com",
-        webSocketEndpoint: "wss://fstream.binancefuture.com",
+        restEndpoint: "https://demo-fapi.binance.com",
+        webSocketEndpoint: "wss://demo-fstream.binance.com",
       },
       "binance-production": {
         profileId: "binance-production",
@@ -73,7 +73,7 @@ jest.mock("@/lib/server/env/config", () => ({
   safeProfileMetadata: () => [
     {
       profileId: "binance-testnet",
-      label: "Binance Testnet",
+      label: "Binance Demo Trading",
       environment: "testnet",
       configured: true,
       requiresProductionConfirmation: false,
@@ -91,9 +91,9 @@ jest.mock("@/lib/server/env/config", () => ({
   HOST_MAP: {
     local: { rest: "", uds: "", label: "local (public data only)" },
     testnet: {
-      rest: "https://testnet.binancefuture.com",
-      uds: "wss://fstream.binancefuture.com",
-      label: "Binance USD-M Futures Testnet",
+      rest: "https://demo-fapi.binance.com",
+      uds: "wss://demo-fstream.binance.com",
+      label: "Binance USD-M Futures Demo Trading",
     },
     shadow: {
       rest: "https://fapi.binance.com",

@@ -1,6 +1,6 @@
 /**
- * Integration test helpers for Binance testnet.
- * These helpers make REAL network calls to testnet.binancefuture.com.
+ * Integration test helpers for Binance USDⓈ-M Demo Trading.
+ * These helpers make REAL network calls to demo-fapi.binance.com.
  */
 
 import crypto from "node:crypto";
@@ -18,8 +18,8 @@ import { resetBrokerClientsForTests } from "@/lib/server/binance/transport";
 import { BinanceLiveManager, resetLiveManagerForTests } from "@/lib/server/binance/manager";
 import { setRuntime, RUNTIME_KEYS } from "@/lib/server/runtime/flags";
 
-const TESTNET_REST_HOST = "testnet.binancefuture.com";
-const TESTNET_WS_HOST = "fstream.binancefuture.com";
+const TESTNET_REST_HOST = "demo-fapi.binance.com";
+const TESTNET_WS_HOST = "demo-fstream.binance.com";
 const PRODUCTION_KEY_VARIABLES = [
   "MAWS_BINANCE_PRODUCTION_API_KEY",
   "MAWS_BINANCE_PRODUCTION_API_SECRET",
@@ -116,14 +116,14 @@ export function loadTestnetConfig(): EnvConfig {
   const profiles: ProfileRegistry = {
     "binance-testnet": {
       profileId: "binance-testnet",
-      label: "Binance Testnet",
+      label: "Binance Demo Trading",
       environment: "testnet",
       configured: true,
       executionEnabled: true,
       apiKey,
       apiSecret,
-      restEndpoint: "https://testnet.binancefuture.com",
-      webSocketEndpoint: "wss://fstream.binancefuture.com",
+      restEndpoint: "https://demo-fapi.binance.com",
+      webSocketEndpoint: "wss://demo-fstream.binance.com",
     },
     "binance-production": {
       profileId: "binance-production",
@@ -357,7 +357,7 @@ export function sleep(ms: number): Promise<void> {
  * Get current mark price from testnet for a symbol.
  */
 export async function getCurrentMarkPrice(symbol: string): Promise<number> {
-  const res = await fetch(`https://testnet.binancefuture.com/fapi/v1/premiumIndex?symbol=${symbol}`);
+  const res = await fetch(`https://demo-fapi.binance.com/fapi/v1/premiumIndex?symbol=${symbol}`);
   if (!res.ok) throw new Error(`Failed to fetch mark price: ${res.statusText}`);
   const data = await res.json();
   return Number(data.markPrice);

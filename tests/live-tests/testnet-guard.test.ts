@@ -60,6 +60,15 @@ describe("integration testnet safety guard", () => {
     profile.webSocketEndpoint = "wss://fstream.binance.com";
     expect(() => assertTestnetSafety(cfg, source(), process.cwd())).toThrow(/non-Testnet endpoints/);
 
+    // Legacy testnet hosts must also be rejected
+    profile.webSocketEndpoint = webSocket;
+    profile.restEndpoint = "https://testnet.binancefuture.com";
+    expect(() => assertTestnetSafety(cfg, source(), process.cwd())).toThrow(/non-Testnet endpoints/);
+
+    profile.restEndpoint = rest;
+    profile.webSocketEndpoint = "wss://fstream.binancefuture.com";
+    expect(() => assertTestnetSafety(cfg, source(), process.cwd())).toThrow(/non-Testnet endpoints/);
+
     profile.webSocketEndpoint = webSocket;
     expect(() => assertTestnetSafety(cfg, source(), process.cwd())).not.toThrow();
   });

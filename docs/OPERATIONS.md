@@ -67,7 +67,7 @@ step is expensive to undo once the server has started.
 **Purpose**: Selects the server deployment context and risk enforcement. The active trading profile is selected from the UI.
 
 - `local`: Chart Only startup; Testnet and Production can be attached from the UI when configured and authenticated
-- `testnet`: Binance USD-M Futures Testnet startup context, requires auth and testnet credentials
+- `testnet`: Binance USD-M Futures Demo Trading startup context (REST `demo-fapi.binance.com`, WebSocket `demo-fstream.binance.com`), requires auth and demo credentials. Demo and live keys are separate; algo-order and margin-field behavior on demo is unverified until the integration smoke test runs.
 - `shadow`: Production market data with read-only account, zero submissions
 - `production`: Real trading, requires all risk limits and execution gates
 

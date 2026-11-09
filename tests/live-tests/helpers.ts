@@ -31,14 +31,14 @@ export function tempDbPath(): string {
 const TEST_PROFILES: ProfileRegistry = {
   "binance-testnet": {
     profileId: "binance-testnet",
-    label: "Binance Testnet",
+    label: "Binance Demo Trading",
     environment: "testnet",
     configured: true,
     executionEnabled: true,
     apiKey: "test-api-key",
     apiSecret: "test-api-secret",
-    restEndpoint: "https://testnet.binancefuture.com",
-    webSocketEndpoint: "wss://fstream.binancefuture.com",
+    restEndpoint: "https://demo-fapi.binance.com",
+    webSocketEndpoint: "wss://demo-fstream.binance.com",
   },
   "binance-production": {
     profileId: "binance-production",
