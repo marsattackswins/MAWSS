@@ -21,6 +21,7 @@
     "journal:build": "pnpm -C vendor/trade-journal/apps/web exec next build",
     "smoke:live": "tsx scripts/smoke-live.ts",
     "smoke:live:dry": "tsx scripts/smoke-live.ts --dry-run",
+    "smoke:testnet": "tsx scripts/testnet-smoke.ts",
     "secret-scan": "node scripts/secret-scan.mjs",
     "gen-operator-auth": "node scripts/gen-operator-auth.mjs",
     "clean": "node -e \"require('fs').rmSync('.next',{recursive:true,force:true})\""
