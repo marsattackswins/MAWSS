@@ -40,6 +40,15 @@ import path from "node:path";
 import fs from "node:fs";
 
 import { assertTestnetSafety } from "../tests/integration/helpers";
+import {
+  absoluteDecimalString,
+  calcQty,
+  decimalToString,
+  isZeroDecimal,
+  priceFromPct,
+  readFilters,
+  readMark,
+} from "../tests/integration/testnet-sizing";
 import type { EnvConfig, ProfileRegistry } from "@/lib/server/env/config";
 
 // ─── Constants (must match HOST_MAP in lib/server/env/config.ts) ──────────
@@ -219,85 +228,6 @@ async function selftest(): Promise<void> {
   if (failed > 0) process.exit(1);
 }
 
-// ─── Decimal helpers (no floats for order quantities) ───────────────────────
-
-interface Dec {
-  units: bigint;
-  scale: number;
-}
-
-const DECIMAL_PATTERN = /^-?\d+(\.\d+)?$/;
-
-function parseDecimal(raw: string): Dec {
-  const value = raw.trim();
-  if (!DECIMAL_PATTERN.test(value)) throw new Error(`Invalid decimal value: ${raw}`);
-  const negative = value.startsWith("-");
-  const body = negative ? value.slice(1) : value;
-  const [intPart, fracPart = ""] = body.split(".");
-  const units = BigInt(`${intPart}${fracPart}`) * (negative ? -1n : 1n);
-  return { units, scale: fracPart.length };
-}
-
-function decimalToString(d: Dec): string {
-  const negative = d.units < 0n;
-  let digits = (negative ? -d.units : d.units).toString();
-  if (d.scale === 0) return `${negative ? "-" : ""}${digits}`;
-  digits = digits.padStart(d.scale + 1, "0");
-  const intPart = digits.slice(0, digits.length - d.scale);
-  const fracPart = digits.slice(digits.length - d.scale).replace(/0+$/, "");
-  return `${negative ? "-" : ""}${intPart}${fracPart ? `.${fracPart}` : ""}`;
-}
-
-function decimalToFixed(d: Dec, scale: number): string {
-  const negative = d.units < 0n;
-  let digits = (negative ? -d.units : d.units).toString();
-  if (d.scale < scale) {
-    digits += "0".repeat(scale - d.scale);
-  } else if (d.scale > scale) {
-    digits = digits.slice(0, digits.length - (d.scale - scale)) || "0";
-  }
-  if (scale === 0) return `${negative ? "-" : ""}${digits || "0"}`;
-  digits = digits.padStart(scale + 1, "0");
-  return `${negative ? "-" : ""}${digits.slice(0, digits.length - scale)}.${digits.slice(digits.length - scale)}`;
-}
-
-/** Exact absolute value of an exchange decimal string; never goes through a float. */
-function absoluteDecimalString(raw: string): string {
-  const value = raw.trim();
-  if (!DECIMAL_PATTERN.test(value)) throw new Error(`Invalid decimal value: ${raw}`);
-  return value.replace(/^[-+]/, "");
-}
-
-function isZeroDecimal(raw: string): boolean {
-  return parseDecimal(raw).units === 0n;
-}
-
-function scaleUnits(d: Dec, scale: number): bigint {
-  if (d.scale === scale) return d.units;
-  if (d.scale < scale) return d.units * 10n ** BigInt(scale - d.scale);
-  return d.units / 10n ** BigInt(d.scale - scale);
-}
-
-function divCeil(numerator: bigint, denominator: bigint): bigint {
-  if (denominator === 0n) throw new Error("Division by zero");
-  return numerator <= 0n ? 0n : (numerator + denominator - 1n) / denominator;
-}
-
-function divRoundNearest(numerator: bigint, denominator: bigint): bigint {
-  if (denominator === 0n) throw new Error("Division by zero");
-  const negative = numerator < 0n;
-  const absolute = negative ? -numerator : numerator;
-  const quotient = (absolute + denominator / 2n) / denominator;
-  return negative ? -quotient : quotient;
-}
-
-function coarserStep(a: Dec, b: Dec): Dec {
-  const scale = Math.max(a.scale, b.scale);
-  const aUnits = scaleUnits(a, scale);
-  const bUnits = scaleUnits(b, scale);
-  return { units: aUnits > bUnits ? aUnits : bUnits, scale };
-}
-
 // ─── HTTP helpers ──────────────────────────────────────────────────────────
 
 async function publicGet(p: string) {
@@ -328,84 +258,6 @@ function sleep(ms: number): Promise<void> { return new Promise(r => setTimeout(r
 
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
-}
-
-// ─── Sizing (exact decimal strings) ─────────────────────────────────────────
-
-interface Filters {
-  symbol: string;
-  minNotional: Dec;
-  lotMin: Dec;
-  lotStep: Dec;
-  mktMin: Dec;
-  mktStep: Dec;
-  tick: Dec;
-}
-
-async function readFilters(symbol: string): Promise<Filters> {
-  const { body } = await publicGet(`/fapi/v1/exchangeInfo?symbol=${symbol}`);
-  const sym = (body as { symbols?: Array<Record<string, unknown>> }).symbols?.[0];
-  if (!sym) throw new Error(`${symbol} not found in exchangeInfo`);
-  const filters: Record<string, Record<string, string>> = {};
-  for (const filter of (sym.filters as Array<Record<string, string>>) ?? []) filters[filter.filterType] = filter;
-  return {
-    symbol,
-    minNotional: parseDecimal(filters.MIN_NOTIONAL?.notional ?? filters.MIN_NOTIONAL?.minNotional ?? "5"),
-    lotMin: parseDecimal(filters.LOT_SIZE?.minQty ?? "0.001"),
-    lotStep: parseDecimal(filters.LOT_SIZE?.stepSize ?? "0.001"),
-    mktMin: parseDecimal(filters.MARKET_LOT_SIZE?.minQty ?? "0.001"),
-    mktStep: parseDecimal(filters.MARKET_LOT_SIZE?.stepSize ?? "0.001"),
-    tick: parseDecimal(filters.PRICE_FILTER?.tickSize ?? "0.10"),
-  };
-}
-
-async function readMark(symbol: string): Promise<string> {
-  const { body } = await publicGet(`/fapi/v1/premiumIndex?symbol=${symbol}`);
-  return String((body as Record<string, string>).markPrice);
-}
-
-function notionalCovers(qtyUnits: bigint, qtyScale: number, mark: Dec, target: Dec): boolean {
-  return qtyUnits * mark.units * 10n ** BigInt(target.scale)
-    >= target.units * 10n ** BigInt(qtyScale + mark.scale);
-}
-
-/**
- * Sizes to 1.5x MIN_NOTIONAL using BigInt step math. The returned quantity is
- * an exact, step-aligned decimal string formatted with the LOT_SIZE step's
- * decimal places (never a float artifact such as 0.0010000000000000002).
- */
-function calcQty(f: Filters, markRaw: string): { qty: string; notionalUsd: number; targetUsd: number } {
-  const mark = parseDecimal(markRaw);
-  if (mark.units <= 0n) throw new Error(`Invalid mark price for ${f.symbol}: ${markRaw}`);
-  const target: Dec = { units: f.minNotional.units * 3n, scale: f.minNotional.scale + 1 };
-  const step = coarserStep(f.lotStep, f.mktStep);
-  const qtyScale = step.scale;
-  const rawUnits = divCeil(
-    target.units * 10n ** BigInt(mark.scale + qtyScale),
-    mark.units * 10n ** BigInt(target.scale),
-  );
-  let qtyUnits = divCeil(rawUnits, step.units) * step.units;
-  const lotMinUnits = scaleUnits(f.lotMin, qtyScale);
-  const marketMinUnits = scaleUnits(f.mktMin, qtyScale);
-  const minUnits = lotMinUnits > marketMinUnits ? lotMinUnits : marketMinUnits;
-  if (qtyUnits < minUnits) qtyUnits = divCeil(minUnits, step.units) * step.units;
-  for (let i = 0; i < 10 && !notionalCovers(qtyUnits, qtyScale, mark, target); i++) qtyUnits += step.units;
-  const outScale = Math.max(f.lotStep.scale, qtyScale);
-  const qty = decimalToFixed({ units: qtyUnits, scale: qtyScale }, outScale);
-  return {
-    qty,
-    notionalUsd: (Number(qtyUnits) / 10 ** qtyScale) * (Number(mark.units) / 10 ** mark.scale),
-    targetUsd: Number(target.units) / 10 ** target.scale,
-  };
-}
-
-/** Trigger price at `pct`% of the mark, rounded to the nearest tick. */
-function priceFromPct(markRaw: string, pct: number, tick: Dec): string {
-  const mark = parseDecimal(markRaw);
-  const numerator = mark.units * BigInt(pct) * 10n ** BigInt(tick.scale);
-  const denominator = 100n * 10n ** BigInt(mark.scale) * tick.units;
-  const ticks = divRoundNearest(numerator, denominator);
-  return decimalToFixed({ units: ticks * tick.units, scale: tick.scale }, tick.scale);
 }
 
 // ─── API answer helpers ─────────────────────────────────────────────────────
@@ -586,6 +438,35 @@ interface CleanupResult {
 }
 
 /**
+ * Flattens one symbol with the exchange's exact positionAmt decimal string.
+ * Testnet occasionally rejects a reduce-only close with -2022 even in one-way
+ * mode; that definite rejection is retried once WITHOUT reduceOnly, and only
+ * after re-reading the position and confirming it is unchanged.
+ */
+async function flattenPosition(symbol: string): Promise<string | null> {
+  const positionAmt = await readPositionAmt(symbol);
+  if (positionAmt === null) throw new Error("positionRisk unreadable before flatten");
+  if (isZeroDecimal(positionAmt)) return null;
+  const short = positionAmt.trim().startsWith("-");
+  const qty = absoluteDecimalString(positionAmt);
+  const side = short ? "BUY" : "SELL";
+
+  const closed = await placeMarket(symbol, side, qty, "C", true);
+  if (closed.ok) return `${side} ${qty} reduce-only MARKET`;
+  if (closed.code !== -2022) throw new Error(`flatten ${side} ${qty} rejected (${describeApi(closed)})`);
+
+  const after = await readPositionAmt(symbol);
+  if (after === null || after.trim() !== positionAmt.trim()) {
+    throw new Error(
+      `position changed after the -2022 rejection; not retrying without reduceOnly (before=${positionAmt}, after=${after ?? "unreadable"})`,
+    );
+  }
+  const retry = await placeMarket(symbol, side, qty, "C", false);
+  if (!retry.ok) throw new Error(`flatten retry without reduceOnly rejected (${describeApi(retry)})`);
+  return `${side} ${qty} MARKET after -2022 reduce-only rejection (testnet fallback)`;
+}
+
+/**
  * Cancels everything the probe touched, flattens positions with the exchange's
  * exact positionAmt string, and then re-reads positionRisk, openOrders and
  * openAlgoOrders for every touched symbol. Nothing is swallowed: cancel and
@@ -610,17 +491,8 @@ async function cleanup(): Promise<CleanupResult> {
       failures.push(`${symbol}: cancel all orders threw: ${errorMessage(error)}`);
     }
     try {
-      const positionAmt = await readPositionAmt(symbol);
-      if (positionAmt === null) {
-        failures.push(`${symbol}: positionRisk unreadable before flatten`);
-      } else if (!isZeroDecimal(positionAmt)) {
-        const short = positionAmt.trim().startsWith("-");
-        const qty = absoluteDecimalString(positionAmt);
-        const side = short ? "BUY" : "SELL";
-        const closed = await placeMarket(symbol, side, qty, "C", true);
-        if (!closed.ok) failures.push(`${symbol}: flatten ${side} ${qty} rejected (${describeApi(closed)})`);
-        else console.log(`    Flattened ${symbol}: ${side} ${qty}`);
-      }
+      const mechanism = await flattenPosition(symbol);
+      if (mechanism) console.log(`    Flattened ${symbol}: ${mechanism}`);
     } catch (error) {
       failures.push(`${symbol}: flatten failed: ${errorMessage(error)}`);
     }
@@ -946,8 +818,21 @@ async function run(): Promise<void> {
         if ((await listOpenAlgoOrders(SYMBOL)).length === 0) { cleared = true; break; }
         await sleep(500);
       }
-      if (!cleared) throw new StepFailure("position closed but closePosition Algo orders remain after 30s");
       const clearedInMs = Date.now() - closeStarted;
+      let clearing: string;
+      if (cleared) {
+        clearing = `Algo orders gone ${clearedInMs}ms after the close (Binance auto-cancel observed)`;
+      } else {
+        // No app is running here, so this is Binance's own behaviour. Leaving
+        // the legs open would fail the probe for something the app must handle:
+        // record it, cancel them, and continue to the stale-order check.
+        const remaining = await listOpenAlgoOrders(SYMBOL);
+        const cancelAll = await signedRequest("DELETE", "/fapi/v1/algoOpenOrders", { symbol: SYMBOL });
+        if (cancelAll.status !== 200) {
+          throw new StepFailure(`NO Binance auto-cancel and manual Algo cancel-all failed with status ${cancelAll.status}`);
+        }
+        clearing = `NO Binance auto-cancel: app orphan cleanup required (${remaining.length} leg(s) still listed ${clearedInMs}ms after the close; probe canceled them via DELETE /fapi/v1/algoOpenOrders)`;
+      }
 
       const reopened = await placeMarket(SYMBOL, "BUY", s.qty, 6);
       if (!reopened.ok) throw new StepFailure(`new position rejected: ${describeApi(reopened)}`);
@@ -959,7 +844,7 @@ async function run(): Promise<void> {
 
       const flatten = await placeMarket(SYMBOL, "SELL", s.qty, 6, true);
       if (!flatten.ok) throw new StepFailure(`new position close rejected: ${describeApi(flatten)}`);
-      return `re-protect ok; Algo orders gone ${clearedInMs}ms after the close (no app is running here → Binance auto-cancel; app orphan cleanup is covered by ${APP_LEVEL_SUITE}); new position had 0 stale Algo orders`;
+      return `re-protect ok; ${clearing}; new position had 0 stale Algo orders (app-level orphan cleanup is covered by ${APP_LEVEL_SUITE})`;
     }) : skip(6, "Re-protect, close, orphan outcome", "step 5 failed");
 
     // ── Step 7: Emergency flatten ──────────────────────────────────────────
