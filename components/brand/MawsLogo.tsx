@@ -5,11 +5,15 @@ export function MawsLogo({
   title = "MAWS",
   /** When false, glyph only (parent supplies the chip background). */
   withBackground = false,
+  /** Fill with `currentColor` instead of fixed white — the rail-style parents
+   *  style it from their own text color (muted → hover/text states). */
+  mono = false,
 }: {
   size?: number;
   className?: string;
   title?: string;
   withBackground?: boolean;
+  mono?: boolean;
 }) {
   const cell = 3;
   const origin = 5.5;
@@ -43,7 +47,7 @@ export function MawsLogo({
     >
       <title>{title}</title>
       {withBackground && <rect width="32" height="32" rx="6" fill="#0A0A0A" />}
-      <g fill="#E8EAED">
+      <g fill={mono ? "currentColor" : "#E8EAED"}>
         {cells.map(([c, r]) => {
           const p = px(c, r);
           return <rect key={`${c}-${r}`} x={p.x} y={p.y} width={p.width} height={p.height} />;

@@ -4,6 +4,7 @@ import { OrderService } from "@/lib/server/binance/orders";
 import { RateLimiter } from "@/lib/server/binance/ratelimit";
 import { checkRisk } from "@/lib/server/binance/risk";
 import { liveState, resetLiveStateForTests } from "@/lib/server/binance/state";
+import { getProtectionIntent, saveProtectionIntent } from "@/lib/server/binance/protection";
 import { getBinanceRestBreaker, getReconciliationBreaker } from "@/lib/server/resilience/breakers";
 import { setRuntime, RUNTIME_KEYS } from "@/lib/server/runtime/flags";
 import { buildHealthStatus } from "@/lib/server/health/status";
@@ -18,6 +19,7 @@ import { BTCUSDT_INFO } from "./helpers";
 beforeEach(() => {
   freshEnv(makeCfg());
   resetLiveStateForTests();
+  liveState().symbolLeverage.set("BTCUSDT", "1");
   resetHealthSignalsForTests();
   const now = Date.now();
   setHealthSignal({
@@ -43,6 +45,8 @@ describe("Phase 2 pending exposure", () => {
         openOrderCount: 1,
         openPositionCount: 0,
         realizedTodayUsd: 0,
+        unrealizedPnlUsd: 0,
+        unrealizedPnlFresh: true,
         workingOrders: [{ qty: "0.001", effectivePrice: "50000" }],
         uncertainIntents: [{ qty: "0.001", effectivePrice: "50000" }],
       },
@@ -71,6 +75,8 @@ describe("Phase 2 pending exposure", () => {
         openOrderCount: liveState().openOrders.size,
         openPositionCount: 0,
         realizedTodayUsd: 0,
+        unrealizedPnlUsd: 0,
+        unrealizedPnlFresh: true,
         workingOrders: [...liveState().openOrders.values()].map((o) => ({ qty: o.origQty, effectivePrice: o.price })),
       }),
       freeze: () => undefined,
@@ -89,16 +95,19 @@ describe("Phase 2 pending exposure", () => {
 
 describe("Phase 2 emergency flatten", () => {
   test("flattens orders and positions despite normal freezes and coalesces concurrent calls", async () => {
+    saveProtectionIntent({ symbol: "BTCUSDT", side: "long", tpPrice: "52000", slPrice: "48000" });
     let orderCancels = 0;
     let closes = 0;
     let positions = true;
     const deps = {
       getOpenOrders: async () => [orderFixture({ clientOrderId: "protective-1", symbol: "BTCUSDT" }) as never],
+      getOpenAlgoOrders: async () => [],
       getOpenPositions: async () => positions ? [{ symbol: "BTCUSDT", positionAmt: "0.001" }] : [],
       cancelAllOpenOrders: async () => {
         orderCancels += 1;
         return [orderFixture({ clientOrderId: "protective-1", status: "CANCELED" }) as never];
       },
+      cancelAllAlgoOrders: async () => [],
       closePosition: async () => {
         closes += 1;
         positions = false;
@@ -117,6 +126,98 @@ describe("Phase 2 emergency flatten", () => {
     expect(closes).toBe(1);
     expect(a.canceledOrderIds).toEqual(["protective-1"]);
     expect(a.closedPositions[0].result.ok).toBe(true);
+    expect(getProtectionIntent("BTCUSDT")).toBeNull();
+  });
+
+  test("emergency flatten closes before cancelling per-symbol Algo orders", async () => {
+    let algosOpen = true;
+    const calls: string[] = [];
+    const summary = await cancelAllAndFlatten("algo-flatten-account", {
+      getOpenOrders: async () => [],
+      getOpenPositions: async () => [{ symbol: "BTCUSDT", positionAmt: "0.001" }],
+      getOpenAlgoOrders: async () => algosOpen
+        ? [{ clientAlgoId: "algo-stop", symbol: "BTCUSDT" }]
+        : [],
+      cancelAllOpenOrders: async () => [],
+      cancelAllAlgoOrders: async () => {
+        calls.push("cancel-algo");
+        algosOpen = false;
+        return [];
+      },
+      closePosition: async () => {
+        calls.push("close");
+        return { ok: true, clientOrderId: "close-market", status: "NEW" };
+      },
+    }, "operator:test");
+
+    expect(summary.canceledOrderIds).toContain("algo-stop");
+    expect(summary.failures).toHaveLength(0);
+    expect(calls).toEqual(["close", "cancel-algo"]);
+  });
+
+  test("an Algo cancellation failure never blocks the reduce-only close", async () => {
+    let closes = 0;
+    let cancelAttempts = 0;
+    let algosOpen = true;
+    const calls: string[] = [];
+    const summary = await cancelAllAndFlatten("algo-flatten-failure-account", {
+      getOpenOrders: async () => [],
+      getOpenPositions: async () => [{ symbol: "BTCUSDT", positionAmt: "0.001" }],
+      getOpenAlgoOrders: async () => (algosOpen
+        ? [{ clientAlgoId: "algo-stop", symbol: "BTCUSDT", closePosition: true }]
+        : []),
+      cancelAllOpenOrders: async () => [],
+      cancelAllAlgoOrders: async () => {
+        cancelAttempts += 1;
+        calls.push("cancel-algo");
+        if (cancelAttempts === 1) throw new Error("cancel failed");
+        algosOpen = false;
+        return [];
+      },
+      closePosition: async () => {
+        closes += 1;
+        calls.push("close");
+        return { ok: true, clientOrderId: "close-market", status: "NEW" };
+      },
+    }, "operator:test");
+
+    expect(closes).toBe(1);
+    expect(cancelAttempts).toBe(2);
+    expect(calls).toEqual(["close", "cancel-algo", "cancel-algo"]);
+    expect(summary.failures).toEqual([
+      expect.objectContaining({ action: "cancel_algo_orders", symbol: "BTCUSDT" }),
+    ]);
+    expect(summary.remainingAlgoOrders).toEqual([]);
+  });
+
+  test("a successful close with leftover closePosition Algo orders alerts and lists them", async () => {
+    freshEnv(makeCfg({ alertWebhookUrl: "https://alerts.example.test/hook" }));
+    const fetchSpy = jest.spyOn(global, "fetch").mockResolvedValue(new Response(null, { status: 200 }));
+    let closes = 0;
+    try {
+      const summary = await cancelAllAndFlatten("algo-leftover-account", {
+        getOpenOrders: async () => [],
+        getOpenPositions: async () => [{ symbol: "BTCUSDT", positionAmt: "0.001" }],
+        getOpenAlgoOrders: async () => [{ clientAlgoId: "algo-tp", symbol: "BTCUSDT", closePosition: true }],
+        cancelAllOpenOrders: async () => [],
+        cancelAllAlgoOrders: async () => [],
+        closePosition: async () => {
+          closes += 1;
+          return { ok: true, clientOrderId: "close-market", status: "NEW" };
+        },
+      }, "operator:test");
+
+      expect(closes).toBe(1);
+      expect(summary.remainingAlgoOrders).toEqual([{ symbol: "BTCUSDT", clientAlgoId: "algo-tp" }]);
+      expect(summary.failures).toEqual([
+        expect.objectContaining({ action: "cancel_algo_orders", symbol: "BTCUSDT" }),
+        expect.objectContaining({ action: "verify_algo_orders", symbol: "BTCUSDT" }),
+      ]);
+      const bodies = fetchSpy.mock.calls.map(([, init]) => String((init as RequestInit | undefined)?.body ?? ""));
+      expect(bodies.some((body) => body.includes("emergency_algo_orders_remaining:BTCUSDT"))).toBe(true);
+    } finally {
+      fetchSpy.mockRestore();
+    }
   });
 
   test("OrderService emergency close bypasses kill switch and REST breaker", async () => {
@@ -136,7 +237,7 @@ describe("Phase 2 emergency flatten", () => {
       rest,
       getConstraints: () => null,
       getReferencePrice: async () => null,
-      getRiskSnapshot: () => ({ balanceUsd: 0, grossExposureUsd: 0, openOrderCount: 0, openPositionCount: 0, realizedTodayUsd: 0 }),
+      getRiskSnapshot: () => ({ balanceUsd: 0, grossExposureUsd: 0, openOrderCount: 0, openPositionCount: 0, realizedTodayUsd: 0, unrealizedPnlUsd: 0, unrealizedPnlFresh: true }),
       freeze: () => undefined,
       emit: () => undefined,
     });
@@ -166,7 +267,7 @@ describe("Phase 2 emergency flatten", () => {
       rest,
       getConstraints: () => null,
       getReferencePrice: async () => null,
-      getRiskSnapshot: () => ({ balanceUsd: 0, grossExposureUsd: 0, openOrderCount: 0, openPositionCount: 0, realizedTodayUsd: 0 }),
+      getRiskSnapshot: () => ({ balanceUsd: 0, grossExposureUsd: 0, openOrderCount: 0, openPositionCount: 0, realizedTodayUsd: 0, unrealizedPnlUsd: 0, unrealizedPnlFresh: true }),
       freeze: () => undefined,
       emit: () => undefined,
     });

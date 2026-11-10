@@ -1,8 +1,8 @@
 # Integration Tests — Quick Start (2 Minutes)
 
-## Step 1: Get Testnet Credentials (1 min)
+## Step 1: Get Demo Trading Credentials (1 min)
 
-1. Go to https://testnet.binancefuture.com
+1. Go to https://demo-fapi.binance.com
 2. Sign up (free, no verification needed)
 3. **API Management** → **Create API Key**
 4. Enable **Futures Trading** ✅
@@ -25,7 +25,7 @@ MAWS_BINANCE_TESTNET_API_SECRET=xyz789...
 
 ## Step 3: Fund Account (30 sec)
 
-1. Login to testnet.binancefuture.com
+1. Login to demo-fapi.binance.com
 2. Click **"Get Testnet Funds"** (top right)
 3. Request 10,000 USDT
 

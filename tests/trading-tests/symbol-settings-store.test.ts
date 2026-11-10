@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeEach, afterAll } from '@jest/globals';
 import { useAppStore } from '../../lib/store';
+import { useLiveStore } from '../../lib/live/store';
 import {
   quantizeQtyToStep,
   resolveSymbolTrading,
@@ -28,9 +29,9 @@ afterAll(() => replaceUniverse(universeSnapshot));
 beforeEach(() => {
   useAppStore.setState({
     symbolTrading: {},
-    mockBalance: BALANCE,
     chartSettings: { ...DEFAULT_CHART_SETTINGS, defaultLeverage: 7 },
   });
+  useLiveStore.setState({ account: { balance: BALANCE, available: BALANCE, equity: BALANCE, margin: 0, unrealized: 0, fetchedAt: Date.now(), equitySource: "exchange" } });
 });
 
 describe('resolveSymbolTrading (real store)', () => {
@@ -40,6 +41,21 @@ describe('resolveSymbolTrading (real store)', () => {
     expect(t.leverage).toBe(7); // from chartSettings.defaultLeverage
     expect(t.sizingMode).toBe('fixed');
     expect(t.marginPercent).toBe(DEFAULT_SYMBOL_TRADING.marginPercent);
+  });
+
+  it('takes the order type from the global chart default until a symbol overrides it', () => {
+    // No per-symbol entry: the ONE global "Order type" row (Settings → Trading →
+    // Defaults) governs the Buy/Sell buttons.
+    useAppStore.setState({
+      chartSettings: { ...DEFAULT_CHART_SETTINGS, defaultOrderType: 'limit' },
+    });
+    expect(resolveSymbolTrading(SYMBOL).defaultOrderType).toBe('limit');
+
+    // A saved per-symbol override still wins over the global default.
+    useAppStore
+      .getState()
+      .setSymbolTrading(SYMBOL, { ...DEFAULT_SYMBOL_TRADING, defaultOrderType: 'market' });
+    expect(resolveSymbolTrading(SYMBOL).defaultOrderType).toBe('market');
   });
 
   it('prefers per-symbol leverage over chart defaults', () => {

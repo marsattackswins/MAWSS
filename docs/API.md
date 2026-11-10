@@ -145,11 +145,19 @@ Return safe metadata for the available trading profiles. Credentials, endpoints,
 {
   "profiles": [
     {
-      "profileId": "paper",
-      "label": "Paper",
-      "environment": "paper",
+      "profileId": "binance-testnet",
+      "label": "Binance Testnet",
+      "environment": "testnet",
       "configured": true,
       "requiresProductionConfirmation": false,
+      "executionEnabled": false
+    },
+    {
+      "profileId": "binance-production",
+      "label": "Binance Live",
+      "environment": "production",
+      "configured": true,
+      "requiresProductionConfirmation": true,
       "executionEnabled": false
     }
   ]
@@ -170,7 +178,7 @@ The response identifies Chart Only with `profileId: null`. It does not expose cr
 
 ### POST /api/live/profile/switch
 
-Switch the server-managed profile, or detach to Chart Only/Paper Trading.
+Switch the server-managed profile.
 
 **Authentication**: Required (session cookie, CSRF token, and valid origin)
 
@@ -183,7 +191,7 @@ Switch the server-managed profile, or detach to Chart Only/Paper Trading.
 }
 ```
 
-Supported profile IDs are `paper`, `binance-testnet`, and `binance-production`. Production additionally requires `confirmProduction: true`. Switching is fail-closed: open exposure, uncertain mutations, reconciliation drift, or failed readiness checks block or stop the transition.
+Supported profile IDs are `binance-testnet` and `binance-production`. Production additionally requires `confirmProduction: true`. Switching is fail-closed: open exposure, uncertain mutations, reconciliation drift, or failed readiness checks block or stop the transition.
 
 ---
 

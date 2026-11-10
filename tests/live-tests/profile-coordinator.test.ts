@@ -88,7 +88,7 @@ afterEach(() => {
 });
 
 describe("profile coordinator", () => {
-  test("starts local Chart Only without a manager and switches to Testnet then Paper", async () => {
+  test("starts local Chart Only without a manager and refuses Testnet or Production attachment", async () => {
     const cfg = makeCfg({
       env: "local",
       activeProfileId: null,
@@ -107,49 +107,24 @@ describe("profile coordinator", () => {
     });
     expect(http.calls).toHaveLength(0);
 
-    const testnetSwitch = profileCoordinator().switchProfile({
+    await expect(profileCoordinator().switchProfile({
       profileId: "binance-testnet",
       requestId: "local-testnet-switch",
+    })).rejects.toMatchObject({
+      code: "local_profile_switch_disabled",
+      message: expect.stringContaining("Chart Only"),
     });
-    await emitLatestStreamOpen();
-    await expect(testnetSwitch).resolves.toMatchObject({
-      profileId: "binance-testnet",
-      environment: "testnet",
-      ready: true,
-    });
-
     await expect(profileCoordinator().switchProfile({
-      profileId: "paper",
-      requestId: "local-paper-switch",
-    })).resolves.toMatchObject({
+      profileId: "binance-production",
+      confirmProduction: true,
+      requestId: "local-production-switch",
+    })).rejects.toMatchObject({ code: "local_profile_switch_disabled" });
+
+    expect(http.calls).toHaveLength(0);
+    expect(profileRuntimeStatus()).toMatchObject({
       profileId: null,
-      environment: null,
       phase: "idle",
       ready: false,
-    });
-    expect(profileRuntimeStatus().managerStatus).toBe("idle");
-  });
-
-  test("reports a failed target cleanly when Chart Only has no profile to restore", async () => {
-    const cfg = makeCfg({
-      env: "local",
-      activeProfileId: null,
-      binanceApiKey: null,
-      binanceApiSecret: null,
-      profiles: profileRegistry(),
-    });
-    const http = configure(cfg);
-    http.script("/fapi/v1/exchangeInfo", () => jsonRes({ code: -1000, msg: "metadata unavailable" }, 503));
-
-    await expect(profileCoordinator().switchProfile({
-      profileId: "binance-testnet",
-      requestId: "chart-only-target-failure",
-    })).rejects.toMatchObject({ code: "target_start_failed" });
-
-    expect(profileRuntimeStatus()).toMatchObject({
-      phase: "failed",
-      profileId: null,
-      reasonCode: "target_start_failed",
     });
   });
 
@@ -178,6 +153,47 @@ describe("profile coordinator", () => {
     expect(liveManager().cfg.binanceApiSecret).toBe("production-secret");
     expect(http.calls.some((call) => call.url.startsWith("https://fapi.binance.com"))).toBe(true);
     expect(FakeWs.last().url.startsWith("wss://fstream.binance.com")).toBe(true);
+
+    const backToTestnet = profileCoordinator().switchProfile({
+      profileId: "binance-testnet",
+      requestId: "operator-switch-back-1",
+    });
+    await emitLatestStreamOpen(3);
+    await expect(backToTestnet).resolves.toMatchObject({
+      profileId: "binance-testnet",
+      environment: "testnet",
+      ready: true,
+    });
+  });
+
+  test("refuses Production attachment from Testnet when explicit risk limits are missing", async () => {
+    const missingProductionRiskLimitVariables = [
+      "MAWS_RISK_MAX_ORDER_NOTIONAL",
+      "MAWS_RISK_MAX_GROSS_EXPOSURE",
+      "MAWS_RISK_MAX_OPEN_ORDERS",
+      "MAWS_RISK_MAX_OPEN_POSITIONS",
+      "MAWS_RISK_DAILY_LOSS_PCT",
+      "MAWS_RISK_PRICE_COLLAR_PCT",
+      "MAWS_RISK_MAX_LEVERAGE",
+      "MAWS_RISK_MAX_MARGIN_RATIO",
+      "MAWS_RISK_MIN_LIQ_DISTANCE_PCT",
+    ];
+    const cfg = makeCfg({ profiles: profileRegistry(), missingProductionRiskLimitVariables });
+    const http = configure(cfg);
+    await startCoordinator();
+    const callsBeforeSwitch = http.calls.length;
+
+    await expect(profileCoordinator().switchProfile({
+      profileId: "binance-production",
+      confirmProduction: true,
+      requestId: "production-without-risk-limits",
+    })).rejects.toMatchObject({
+      code: "production_risk_limits_invalid",
+      message: expect.stringContaining(missingProductionRiskLimitVariables.join(", ")),
+    });
+
+    expect(http.calls).toHaveLength(callsBeforeSwitch);
+    expect(profileRuntimeStatus()).toMatchObject({ profileId: "binance-testnet", phase: "ready" });
   });
 
   test("rejects a concurrent switch and blocks exposure without cancellation or flattening", async () => {
@@ -190,7 +206,7 @@ describe("profile coordinator", () => {
     await startCoordinator();
     positionPresent = true;
     const beforeCalls = http.calls.length;
-    const first = profileCoordinator().switchProfile({ profileId: "paper", requestId: "operator-switch-2" });
+    const first = profileCoordinator().detach();
     await expect(profileCoordinator().switchProfile({ profileId: "binance-production", confirmProduction: true })).rejects.toMatchObject({ code: "profile_switch_in_progress" });
     await expect(first).rejects.toMatchObject({ code: "exposure_present" });
     expect(profileRuntimeStatus().profileId).toBe("binance-testnet");
@@ -220,13 +236,7 @@ describe("profile coordinator", () => {
   });
 
   test("connects to testnet despite large clock drift (signing is offset-corrected)", async () => {
-    const cfg = makeCfg({
-      env: "local",
-      activeProfileId: null,
-      binanceApiKey: null,
-      binanceApiSecret: null,
-      profiles: profileRegistry(),
-    });
+    const cfg = makeCfg();
     const http = configure(cfg);
     // Simulate a rebooted Windows clock running ~2s behind the exchange.
     http.route("/fapi/v1/time", () => jsonRes({ serverTime: Date.now() + 2000 }));

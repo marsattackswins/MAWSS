@@ -1,4 +1,5 @@
 import { useAppStore } from "@/lib/store";
+import { useLiveStore } from "@/lib/live/store";
 import { getSymbol } from "@/lib/maws/universe";
 import {
   DEFAULT_SYMBOL_TRADING,
@@ -48,6 +49,13 @@ export function resolveSymbolTrading(symbol: string): SymbolTradingSettings {
     margin: saved.margin ?? DEFAULT_SYMBOL_TRADING.margin,
     marginPercent: saved.marginPercent ?? DEFAULT_SYMBOL_TRADING.marginPercent,
     sizingMode: saved.sizingMode ?? DEFAULT_SYMBOL_TRADING.sizingMode,
+    confirmOrders: saved.confirmOrders ?? DEFAULT_SYMBOL_TRADING.confirmOrders,
+    // No per-symbol override ⇒ the GLOBAL "Order type" row in Settings → Trading
+    // governs, the same way leverage falls back to its global default.
+    defaultOrderType:
+      saved.defaultOrderType ??
+      s.chartSettings.defaultOrderType ??
+      DEFAULT_SYMBOL_TRADING.defaultOrderType,
   };
 }
 
@@ -55,14 +63,23 @@ export function resolveSymbolTrading(symbol: string): SymbolTradingSettings {
 export function resolveMarginAmount(symbol: string): number {
   const t = resolveSymbolTrading(symbol);
   if (t.sizingMode === "percent") {
-    const balance = useAppStore.getState().mockBalance;
+    const account = useLiveStore.getState().account;
+    const balance = account?.balance ?? 0;
     return Math.max(0, balance * (t.marginPercent / 100));
   }
   return Math.max(0, t.margin);
 }
 
+/** Raw per-symbol margin when one was explicitly saved (chartSettings default otherwise). */
+function savedMargin(symbol: string): number | undefined {
+  const saved = normalizeSaved(
+    useAppStore.getState().symbolTrading[symbol] as LegacySymbolTrading | undefined,
+  );
+  return saved.margin;
+}
+
 /** Decimal places implied by a step size (handles exponential notation). */
-function stepDecimals(step: number): number {
+export function stepDecimals(step: number): number {
   const s = String(step);
   if (s.includes("e") || s.includes("E")) {
     const exp = Number(s.split(/e/i)[1]);
@@ -96,7 +113,7 @@ export function quantizeQtyToStep(qty: number, stepSize?: string | number): numb
 }
 
 /** Effective qty step for a symbol: LOT_SIZE stepSize, else its price-tick precision. */
-function qtyStepFor(symbol: string): string {
+export function qtyStepFor(symbol: string): string {
   const info = getSymbol(symbol);
   if (info.stepSize) return info.stepSize;
   // 10 ** -4 evaluates to 0.00009999999999999999, so rebuild the step from a
@@ -108,7 +125,16 @@ function qtyStepFor(symbol: string): string {
 export function resolveOrderQty(symbol: string, price: number): number {
   if (!(price > 0)) return 0;
   const t = resolveSymbolTrading(symbol);
-  const margin = resolveMarginAmount(symbol);
+  // "Default order size" chart setting: in fixed sizing mode with no per-symbol
+  // override, it names an explicit margin (account-currency) amount. Treated as
+  // margin × leverage at price → qty, so it fills the same role as "Buy 10 units".
+  const defaultQty = Number(useAppStore.getState().chartSettings.defaultQty);
+  const useDefaultQtyMargin =
+    t.sizingMode !== "percent" &&
+    savedMargin(symbol) == null &&
+    Number.isFinite(defaultQty) &&
+    defaultQty > 0;
+  const margin = useDefaultQtyMargin ? defaultQty : resolveMarginAmount(symbol);
   const lev = Math.max(1, t.leverage);
   const qty = Number(((margin * lev) / price).toPrecision(8));
   return Math.max(0, quantizeQtyToStep(qty, qtyStepFor(symbol)));
@@ -140,7 +166,7 @@ export function resolvePositionOrderQty(
     drawing.positionRiskUnit != null;
   if (!hasOverride) return resolveOrderQty(symbol, price);
 
-  const balance = useAppStore.getState().mockBalance;
+  const balance = useLiveStore.getState().account?.balance ?? 0;
   const account =
     drawing.positionAccountSizeMode === "custom" &&
     drawing.positionAccountSize != null &&
@@ -168,6 +194,36 @@ export function formatMarginLabel(symbol: string): string {
   }
   const n = t.margin;
   return Number.isInteger(n) ? String(n) : Number(n.toFixed(2)).toString();
+}
+
+/** Stepper bounds for the topbar margin field — USDT-stepped, min 10. */
+const TOPBAR_MARGIN_MIN = 10;
+const TOPBAR_MARGIN_STEP = 10;
+
+/** Seed margin for the topbar stepper: symbol default, snapped onto the grid. */
+export function topbarSeedMargin(symbol: string): number {
+  const t = resolveSymbolTrading(symbol);
+  const margin =
+    t.sizingMode === "percent"
+      ? Math.max(0, useLiveStore.getState().account?.balance ?? 0) * (t.marginPercent / 100)
+      : Math.max(0, t.margin);
+  return Math.max(
+    TOPBAR_MARGIN_MIN,
+    Math.round(margin / TOPBAR_MARGIN_STEP) * TOPBAR_MARGIN_STEP,
+  );
+}
+
+/** Bump a topbar margin value by ±step, never below the 10 USDT floor. */
+export function bumpTopbarMargin(
+  symbol: string,
+  margin: number,
+  dir: 1 | -1,
+): number {
+  void symbol;
+  const next =
+    Math.round((margin + dir * TOPBAR_MARGIN_STEP) / TOPBAR_MARGIN_STEP) *
+    TOPBAR_MARGIN_STEP;
+  return Math.max(TOPBAR_MARGIN_MIN, next);
 }
 
 export function protectFromSettings(

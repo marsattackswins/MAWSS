@@ -1,5 +1,7 @@
 import { create } from "zustand";
 
+import { useAppStore } from "@/lib/store";
+
 import type {
   AccountDto,
   AccountMetricsDto,
@@ -97,7 +99,7 @@ export const useLiveStore = create<LiveStore>()((set) => ({
       managerStatus: status.managerStatus,
       managerError: status.managerError ?? null,
       env: status.environment,
-      envLabel: status.environment === "paper" ? "Paper Trading" : status.environment === "testnet" ? "Binance Testnet" : status.environment === "production" ? "Binance Production" : null,
+      envLabel: status.environment === "testnet" ? "Binance Testnet" : status.environment === "production" ? "Binance Live" : null,
       health: status.phase === "ready" && state.profileId === status.profileId && state.generation === status.generation ? state.health : null,
       stream: status.streamHealthy == null ? null : { connected: status.streamHealthy, leaseOwned: status.streamHealthy, phase: status.streamHealthy ? "live" : "degraded", reconnects: 0 },
     })),
@@ -135,6 +137,12 @@ export const useLiveStore = create<LiveStore>()((set) => ({
   setStream: (s) => set({ stream: s }),
   setMarkPrice: (s) => set({ markPrice: s }),
   notify: (tone, text) =>
-    set((st) => ({ notices: [...st.notices.slice(-4), { id: noticeSeq++, tone, text }] })),
+    set((st) => {
+      // "Show only rejection notifications": drop info/success notices when
+      // enabled, so the feed surfaces only errors (rejections, halts).
+      const onlyRejections = useAppStore.getState().chartSettings.showOnlyRejectionNotifications === true;
+      if (onlyRejections && tone !== "error") return {};
+      return { notices: [...st.notices.slice(-4), { id: noticeSeq++, tone, text }] };
+    }),
   dismissNotice: (id) => set((st) => ({ notices: st.notices.filter((n) => n.id !== id) })),
 }));

@@ -5,7 +5,6 @@ import { aggregateRiskCockpit } from "@/lib/server/risk/cockpit";
 import { serverConfig } from "@/lib/server/env/config";
 import { activeProfileConfig } from "@/lib/server/profile/coordinator";
 import { authenticate, isAuthFailure } from "@/lib/server/http/guards";
-import { compareSecretTokens } from "@/lib/server/auth/token";
 
 export const dynamic = "force-dynamic";
 
@@ -20,9 +19,7 @@ export async function GET(req: NextRequest) {
 
   if (cfg.env !== "local") {
     const ctx = authenticate(req, cfg);
-    const headerToken = req.headers.get("x-maws-health-token");
-    const tokenValid = compareSecretTokens(headerToken, cfg.healthToken);
-    if (isAuthFailure(ctx) && !tokenValid) return ctx.response;
+    if (isAuthFailure(ctx)) return ctx.response;
   }
 
   try {

@@ -12,8 +12,9 @@ import {
   resetLiveStateForTests,
 } from "@/lib/server/binance/state";
 import { accountDto, fillsDto, ordersDto, positionsDto } from "@/lib/server/binance/dto";
+import { getProtectionIntent, saveProtectionIntent, setProtectionStatus } from "@/lib/server/binance/protection";
 import type { AccountUpdateEvent, OrderTradeUpdateEvent } from "@/lib/server/binance/types";
-import { accountFixture, orderEvent, orderFixture } from "./helpers";
+import { accountFixture, freshEnv, makeCfg, orderEvent, orderFixture } from "./helpers";
 import type { BinanceOrder } from "@/lib/server/binance/types";
 
 const otu = (o: Record<string, unknown>) => o as unknown as OrderTradeUpdateEvent;
@@ -82,6 +83,29 @@ describe("order event application and partial fills", () => {
 
     applyAccountEvent({ ...ev, a: { B: ev.a.B, P: [{ ...ev.a.P[0], pa: "-0.005" }] } });
     expect(liveState().positions.get("BTCUSDT")).toMatchObject({ side: "short", qty: "0.005" });
+  });
+
+  test("ACCOUNT_UPDATE flat and side flip delete the symbol protection intent immediately", () => {
+    const event = (positionAmt: string): AccountUpdateEvent => ({
+      e: "ACCOUNT_UPDATE",
+      E: Date.now(),
+      T: Date.now(),
+      a: {
+        B: [],
+        P: [{ s: "BTCUSDT", pa: positionAmt, ep: "50000", cr: "0", up: "0", mt: "cross", iw: "0", ps: "BOTH" }],
+      },
+    });
+
+    applyAccountEvent(event("0.002"));
+    saveProtectionIntent({ symbol: "BTCUSDT", side: "long", tpPrice: "52000", slPrice: "48000" });
+    applyAccountEvent(event("0"));
+    expect(getProtectionIntent("BTCUSDT")).toBeNull();
+
+    applyAccountEvent(event("0.002"));
+    saveProtectionIntent({ symbol: "BTCUSDT", side: "long", tpPrice: "52000", slPrice: "48000" });
+    applyAccountEvent(event("-0.003"));
+    expect(liveState().positions.get("BTCUSDT")?.side).toBe("short");
+    expect(getProtectionIntent("BTCUSDT")).toBeNull();
   });
 
   test("applySymbolLeverage seeds new positions and repairs the 1x placeholder", () => {
@@ -185,6 +209,7 @@ describe("DTO mapping for the UI", () => {
   beforeEach(() => resetLiveStateForTests());
 
   test("positionsDto attaches native TP/SL prices from closePosition orders", () => {
+    freshEnv(makeCfg());
     applyPositionSnapshot([
       { symbol: "BTCUSDT", positionAmt: "0.001", entryPrice: "50000", markPrice: "50500", unRealizedProfit: "0.5", liquidationPrice: "40000", leverage: "3", positionSide: "BOTH", notional: "50.5" },
     ] as never);
@@ -195,6 +220,17 @@ describe("DTO mapping for the UI", () => {
     const [dto] = positionsDto();
     expect(dto).toMatchObject({ id: "BTCUSDT", side: "long", qty: 0.001, tp: 55000, sl: 48000, leverage: 3, mark: 50500 });
     expect(dto.liq).toBe(40000);
+  });
+
+  test("positionsDto exposes persisted UNPROTECTED status to the live UI", () => {
+    freshEnv(makeCfg());
+    applyPositionSnapshot([
+      { symbol: "BTCUSDT", positionAmt: "0.001", entryPrice: "50000", markPrice: "50500", unRealizedProfit: "0.5", liquidationPrice: "40000", leverage: "3", positionSide: "BOTH" },
+    ] as never);
+    saveProtectionIntent({ symbol: "BTCUSDT", side: "long", tpPrice: "55000", slPrice: "48000" });
+    setProtectionStatus("BTCUSDT", "UNPROTECTED", "missing protective order");
+
+    expect(positionsDto()[0].protectionStatus).toBe("UNPROTECTED");
   });
 
   test("ordersDto maps LIMIT and stop types for the UI", () => {

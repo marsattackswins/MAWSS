@@ -62,6 +62,7 @@ export interface AccountResponse {
   totalWalletBalance: string;
   totalUnrealizedProfit: string;
   totalMarginBalance: string;
+  totalMaintMargin?: string;
   availableBalance: string;
   maxWithdrawAmount: string;
   assets: AccountAsset[];
@@ -85,6 +86,9 @@ export interface PositionRiskRow {
 export interface BinanceOrder {
   orderId: number;
   clientOrderId: string;
+  clientAlgoId?: string;
+  algoId?: number;
+  kind?: "order" | "algo";
   symbol: string;
   side: "BUY" | "SELL";
   type: string;
@@ -99,6 +103,93 @@ export interface BinanceOrder {
   closePosition?: boolean;
   updateTime: number;
   time: number;
+}
+
+export type BinanceAlgoOrderType = "STOP_MARKET" | "TAKE_PROFIT_MARKET";
+
+export interface BinanceAlgoOrder {
+  algoId: number;
+  clientAlgoId: string;
+  algoType: string;
+  orderType: BinanceAlgoOrderType;
+  symbol: string;
+  side: "BUY" | "SELL";
+  positionSide?: string;
+  timeInForce?: string;
+  quantity?: string;
+  algoStatus: string;
+  triggerPrice: string;
+  price?: string;
+  workingType?: string;
+  closePosition?: boolean;
+  priceProtect?: boolean;
+  reduceOnly?: boolean;
+  createTime: number;
+  updateTime: number;
+  triggerTime?: number;
+  actualOrderId?: number | string | null;
+  actualPrice?: string;
+  actualType?: string;
+  actualQty?: string;
+}
+
+export interface AlgoUpdateEvent {
+  e: "ALGO_UPDATE";
+  E?: number;
+  T?: number;
+  o: {
+    caid?: string;
+    aid?: number;
+    at?: string;
+    o?: string;
+    s?: string;
+    S?: "BUY" | "SELL";
+    ps?: string;
+    f?: string;
+    q?: string;
+    X?: string;
+    ai?: number | string;
+    rm?: string;
+    tp?: string;
+    cp?: boolean;
+    [key: string]: unknown;
+  };
+}
+
+type AlgoOrderBase = {
+  algoType: "CONDITIONAL";
+  symbol: string;
+  side: "BUY" | "SELL";
+  type: BinanceAlgoOrderType;
+  triggerPrice: string;
+  positionSide?: string;
+  workingType?: "MARK_PRICE" | "CONTRACT_PRICE";
+  priceProtect?: boolean;
+  clientAlgoId?: string;
+  newOrderRespType?: "ACK" | "RESULT";
+};
+
+export type PlaceAlgoOrderParams = AlgoOrderBase &
+  (
+    | { closePosition: true; quantity?: never; reduceOnly?: never }
+    | { closePosition?: false; quantity: string; reduceOnly?: boolean }
+  );
+
+export interface AlgoOrderLookup {
+  algoId?: number;
+  clientAlgoId?: string;
+}
+
+/**
+ * Cancellation acknowledgement from DELETE /fapi/v1/algoOrder (and
+ * /algoOpenOrders). Unlike the query responses this carries no order state,
+ * so callers must not treat it as an updated BinanceAlgoOrder.
+ */
+export interface AlgoCancelAck {
+  algoId: number;
+  clientAlgoId: string;
+  code?: string | number;
+  msg?: string;
 }
 
 export interface ListenKeyResponse {
@@ -162,7 +253,7 @@ export interface AccountUpdateEvent {
   };
 }
 
-export type UserStreamEvent = OrderTradeUpdateEvent | AccountUpdateEvent | { e: string; E?: number };
+export type UserStreamEvent = OrderTradeUpdateEvent | AccountUpdateEvent | AlgoUpdateEvent | { e: string; E?: number };
 
 export const TERMINAL_ORDER_STATUSES = new Set([
   "FILLED",

@@ -2,6 +2,11 @@ import "server-only";
 
 import { serverConfig, type EnvConfig, type MawsEnv } from "../env/config";
 
+/**
+ * The "paper" id is kept as a valid DB key for legacy read-only history rows
+ * written before paper trading was removed. New rows are never written under
+ * this id; the local (disconnected) mode has no server-side profile writes.
+ */
 export type PersistenceProfileId = "paper" | "binance-testnet" | "binance-production" | "shadow";
 
 export interface PersistenceProfile {
@@ -13,6 +18,9 @@ export interface PersistenceProfile {
 export function persistenceProfileFromConfig(config: Pick<EnvConfig, "env">): PersistenceProfile {
   switch (config.env) {
     case "local":
+      // Disconnected/local mode: use the legacy "paper" db key so that any
+      // runtime_config reads/writes in local mode continue to find their rows.
+      // No new trading data is ever written in this mode.
       return { id: "paper", environment: "local" };
     case "testnet":
       return { id: "binance-testnet", environment: "testnet" };

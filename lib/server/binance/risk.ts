@@ -20,8 +20,21 @@ export interface RiskSnapshot {
   /** Exposure from current exchange-derived positions only. */
   grossExposureUsd: number;
   openOrderCount: number;
+  /** Existing positions before the new order is added; normally the same as the after-count. */
   openPositionCount: number;
+  /** Used when evaluating a projected order whose post-order count differs from the base count. */
+  openPositionCountAfterOrder?: number;
   realizedTodayUsd: number;
+  /** Sum of mark-derived unrealized P&L, or null when unavailable/stale. */
+  unrealizedPnlUsd?: number | null;
+  /** False when account/position marks are missing, stale, or not mark-derived. */
+  unrealizedPnlFresh?: boolean;
+  /** Maintenance margin / exchange-reported margin balance. */
+  marginRatio?: number | null;
+  /** False if margin fields or required position marks are missing or stale. */
+  marginDataFresh?: boolean;
+  /** Per-position mark-to-liquidation distances; empty when none apply. */
+  liquidationDistancesPct?: number[] | null;
   /** Working exchange orders reserved against the gross cap. */
   workingOrders?: PendingRiskExposure[];
   /** Intents whose exchange outcome is not yet certain. */
@@ -34,6 +47,9 @@ export interface RiskOrderDraft {
   /** Price driving notional: limit price, stop price, or a mark/last reference. */
   effectivePrice: string;
   reduceOnly: boolean;
+  closePosition?: boolean;
+  emergencyClose?: boolean;
+  isClose?: boolean;
 }
 
 /** Realized P&L booked today (UTC) from the durable fills log. */
@@ -60,6 +76,8 @@ export function checkRisk(
   order: RiskOrderDraft,
   referencePrice: string | null,
 ): string[] {
+  if (order.reduceOnly || order.closePosition || order.emergencyClose || order.isClose) return [];
+
   const errors: string[] = [];
   const risk = cfg.risk;
   const notional = abs(mul(parseDec(order.effectivePrice), parseDec(order.qty)));
@@ -90,11 +108,43 @@ export function checkRisk(
       errors.push(`EXECUTION_UNHEALTHY: daily realized loss limit reached (${snap.realizedTodayUsd.toFixed(2)} USD)`);
     }
   }
+  if (snap.unrealizedPnlFresh !== true || !Number.isFinite(snap.unrealizedPnlUsd)) {
+    errors.push("EXECUTION_UNHEALTHY: unrealized P&L is unavailable or stale; risk-increasing order rejected");
+  } else if (snap.balanceUsd > 0) {
+    const combinedPnl = snap.realizedTodayUsd + snap.unrealizedPnlUsd!;
+    const limit = (snap.balanceUsd * risk.dailyLossPct) / 100;
+    if (combinedPnl < 0 && -combinedPnl >= limit) {
+      errors.push(`EXECUTION_UNHEALTHY: daily realized and unrealized loss limit reached (${combinedPnl.toFixed(2)} USD)`);
+    }
+  }
+  if ((snap.openPositionCountAfterOrder ?? snap.openPositionCount) > 0) {
+    if (
+      snap.marginDataFresh !== true ||
+      !Number.isFinite(snap.marginRatio) ||
+      snap.marginRatio! < 0 ||
+      !Array.isArray(snap.liquidationDistancesPct) ||
+      snap.liquidationDistancesPct.some((distance) => !Number.isFinite(distance))
+    ) {
+      errors.push("EXECUTION_UNHEALTHY: margin or liquidation data is unavailable or stale; risk-increasing order rejected");
+    } else {
+      if (snap.marginRatio! > risk.maxMarginRatio) {
+        errors.push(
+          `RISK_MAX_MARGIN_RATIO: margin ratio ${(snap.marginRatio! * 100).toFixed(2)}% exceeds max ${(risk.maxMarginRatio * 100).toFixed(2)}%`,
+        );
+      }
+      if (snap.liquidationDistancesPct.some((distance) => distance < risk.minLiquidationDistancePct)) {
+        const distance = Math.min(...snap.liquidationDistancesPct);
+        errors.push(
+          `RISK_MIN_LIQ_DISTANCE: liquidation distance ${distance.toFixed(2)}% is below minimum ${risk.minLiquidationDistancePct}%`,
+        );
+      }
+    }
+  }
   if (referencePrice && (order.type === "LIMIT" || order.type === "STOP_MARKET" || order.type === "TAKE_PROFIT_MARKET")) {
     const diff = Math.abs(pctDiff(parseDec(order.effectivePrice), parseDec(referencePrice)));
     if (diff > risk.priceCollarPct) {
       errors.push(
-        `RISK_MAX_ORDER_NOTIONAL: price ${order.effectivePrice} is ${diff.toFixed(2)}% from reference ${referencePrice}; collar is ${risk.priceCollarPct}%`,
+        `RISK_PRICE_COLLAR: price ${order.effectivePrice} is ${diff.toFixed(2)}% from reference ${referencePrice}; collar is ${risk.priceCollarPct}%`,
       );
     }
   }

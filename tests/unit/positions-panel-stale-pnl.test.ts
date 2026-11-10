@@ -77,15 +77,15 @@ describe("existing PnL values are unchanged", () => {
     // Dollar PnL is still re-derived from mark/entry with the side factor.
     expect(rows[0].pnl).toBeCloseTo((83994.3 - 83971.01818181819) * 0.011 * -1, 10);
     expect(rows[1].pnl).toBeCloseTo((2900 - 3000) * 1.5, 10);
-    // Provenance passes through untouched; paper branch never sets it.
+    // Provenance passes through untouched; the non-live branch never sets it.
     expect(rows[0].markPriceStale).toBe(false);
     expect(rows[1].markPriceStale).toBe(true);
     expect(rows[1].markAgeMs).toBe(5000);
 
-    const paperRows = computePosRows([{ ...livePositionBase }], false, () => 2900);
-    expect(paperRows[0].markPriceStale).toBeUndefined();
+    const offlineRows = computePosRows([{ ...livePositionBase }], false, () => 2900);
+    expect(offlineRows[0].markPriceStale).toBeUndefined();
     // Short with last BELOW entry is a positive PnL: (entry − last) × qty.
-    expect(paperRows[0].pnl).toBeCloseTo((83971.01818181819 - 2900) * 0.011, 10);
+    expect(offlineRows[0].pnl).toBeCloseTo((83971.01818181819 - 2900) * 0.011, 10);
   });
 
   test("getBrokerBook keeps live precedence and passes freshness fields through", () => {

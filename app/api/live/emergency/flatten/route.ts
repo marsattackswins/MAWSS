@@ -2,7 +2,8 @@ import { audit } from "@/lib/server/audit/log";
 import { getBroker } from "@/lib/server/broker/factory";
 import { serverConfig } from "@/lib/server/env/config";
 import { authenticate, isAuthFailure, jsonError, jsonOk } from "@/lib/server/http/guards";
-import { compareSecretTokens } from "@/lib/server/auth/token";
+import { clientIp } from "@/lib/server/auth/guard";
+import { verifyRequestToken } from "@/lib/server/auth/token-attempts";
 import { runBrokerMutation } from "@/lib/server/response/broker-mutation";
 import { assertProfileRequest, ProfileCoordinatorError, profileErrorStatus } from "@/lib/server/profile/coordinator";
 
@@ -24,10 +25,17 @@ export async function POST(req: Request): Promise<Response> {
     if (error instanceof ProfileCoordinatorError) return jsonError(profileErrorStatus(error.code), error.code, "Profile runtime changed; retry the request");
     throw error;
   }
-  const healthTokenAuthorized = compareSecretTokens(req.headers.get("x-maws-health-token"), cfg.healthToken);
-  if (isAuthFailure(auth) && !healthTokenAuthorized) return auth.response;
-  const triggeredBy = isAuthFailure(auth) ? "system:health-token" : `operator:${auth.sessionId}`;
-  const auditIp = isAuthFailure(auth) ? "health-token" : auth.ip;
+  const tokenAttempt = verifyRequestToken(req, cfg, "x-maws-emergency-token", cfg.emergencyToken, "emergency");
+  const emergencyTokenAuthorized = tokenAttempt.authorized;
+  if (isAuthFailure(auth)) {
+    if (tokenAttempt.rateLimited) return jsonError(429, "token_rate_limited", "Too many invalid token attempts");
+    if (!emergencyTokenAuthorized) return auth.response;
+  }
+  const authorizedBy = isAuthFailure(auth) ? "emergency_token" : "session";
+  const triggeredBy = isAuthFailure(auth) ? "system:emergency-token" : `operator:${auth.sessionId}`;
+  const auditIp = isAuthFailure(auth) ? clientIp(req, cfg) : auth.ip;
+
+  audit("operator", "emergency.flatten.authorized", { authorizedBy }, auditIp);
 
   let result;
   try {
@@ -44,6 +52,7 @@ export async function POST(req: Request): Promise<Response> {
   if (result instanceof Response) return result;
 
   audit("operator", "emergency.flatten.requested", {
+    authorizedBy,
     triggeredBy,
     canceled: result.canceledOrderIds.length,
     closed: result.closedPositions.length,

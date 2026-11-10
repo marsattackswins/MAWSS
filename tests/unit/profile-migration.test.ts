@@ -27,6 +27,13 @@ function migrateLegacyDatabase(): Database.Database {
   return db;
 }
 
+function applyMigration(db: Database.Database, version: number): void {
+  const migration = MIGRATIONS.find((entry) => entry.version === version);
+  if (!migration || typeof migration.up === "function") throw new Error(`missing SQL migration ${version}`);
+  for (const statement of migration.up) db.exec(statement);
+  db.pragma(`user_version = ${version}`);
+}
+
 function rowCount(db: Database.Database, table: string): number {
   const row = db.prepare(`SELECT COUNT(*) AS count FROM ${table}`).get() as { count: number };
   return row.count;
@@ -82,9 +89,17 @@ describe("profile-scoped database migration", () => {
   test("fresh schema includes profile columns and the migration is idempotent", () => {
     const db = new Database(":memory:");
     runMigrations(db);
-    expect(currentVersion(db)).toBe(8); // M0008 durable historical order log
+    expect(currentVersion(db)).toBe(11); // M0011 canonical exchange order ids
     for (const table of PROFILE_TABLES) expect(columnNames(db, table)).toContain("profile_id");
     expect(columnNames(db, "audit_log")).toContain("profile_id");
+    expect(columnNames(db, "protection_intents")).toContain("profile_id");
+    expect(columnNames(db, "protection_intents")).toEqual(expect.arrayContaining([
+      "intent_status",
+      "previous_tp_price",
+      "previous_sl_price",
+      "created_at",
+    ]));
+    expect(indexNames(db, "protection_intents")).toContain("idx_protection_profile_status");
     expect(indexNames(db, "runtime_config")).toContain("idx_runtime_profile_key");
     expect(indexNames(db, "order_intents")).toEqual(expect.arrayContaining([
       "idx_intents_status_profile",
@@ -103,8 +118,40 @@ describe("profile-scoped database migration", () => {
 
     const countsBefore = Object.fromEntries([...PROFILE_TABLES, "audit_log"].map((table) => [table, rowCount(db, table)]));
     runMigrations(db);
-    expect(currentVersion(db)).toBe(8); // idempotent re-run
+    expect(currentVersion(db)).toBe(11); // idempotent re-run
     expect(Object.fromEntries([...PROFILE_TABLES, "audit_log"].map((table) => [table, rowCount(db, table)]))).toEqual(countsBefore);
+    db.close();
+  });
+
+  test("legacy exchange order ids stored as \"<id>.0\" are canonicalised", () => {
+    const db = new Database(":memory:");
+    runMigrations(db);
+    const insert = db.prepare(
+      `INSERT INTO order_intents
+         (profile_id, client_order_id, exchange_order_id, kind, symbol, side, type, qty, status, created_at, updated_at)
+       VALUES ('binance-testnet', ?, ?, 'order', 'BTCUSDT', 'BUY', 'LIMIT', '1', 'SUBMITTED', 1, 1)`,
+    );
+    insert.run("json-number", 28619061468); // better-sqlite3 binds JS numbers as "28619061468.0"
+    insert.run("real-number", 555);
+    insert.run("canonical", "777");
+    insert.run("fractional", "12.5");
+    insert.run("prefixed", "abc.0");
+
+    applyMigration(db, 11);
+
+    const ids = Object.fromEntries(
+      (db.prepare(`SELECT client_order_id, exchange_order_id FROM order_intents`).all() as Array<{
+        client_order_id: string;
+        exchange_order_id: string;
+      }>).map((row) => [row.client_order_id, row.exchange_order_id]),
+    );
+    expect(ids).toEqual({
+      "json-number": "28619061468",
+      "real-number": "555",
+      canonical: "777",
+      fractional: "12.5",
+      prefixed: "abc.0",
+    });
     db.close();
   });
 

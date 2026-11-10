@@ -6,6 +6,10 @@ import { log } from "../log/logger";
 const RATE_WINDOW_MS = 60_000;
 const lastSent = new Map<string, number>();
 
+export function resetAlertsForTests(): void {
+  lastSent.clear();
+}
+
 export function alert(event: string, detail: Record<string, unknown>): void {
   let url: string | null;
   try {

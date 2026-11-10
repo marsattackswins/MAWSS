@@ -178,6 +178,11 @@ export async function GET(req: NextRequest) {
             : [target.category === "merger" ? "general" : target.category];
 
       const batches = await Promise.all(cats.map((c) => fetchMarketCategory(key, c)));
+      // Commodity ETF proxy (GLD for gold, USO for crude, …): company news on a
+      // US-listed tracker covers a 2-day window, far past the general feed's ~20h.
+      if (target.proxySymbol) {
+        batches.push(await fetchCompanyNews(key, target.proxySymbol));
+      }
       let items = mergeItems(batches.map((b) => b.items));
       if (target.keywords?.length) {
         const narrowed = filterNewsByKeywords(items, target.keywords);

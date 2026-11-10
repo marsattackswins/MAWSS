@@ -27,6 +27,8 @@ export type NewsTarget =
       category: FinnhubNewsCategory;
       filter?: string;
       keywords?: string[];
+      /** US-listed ETF tracking the commodity — its company news is a proxy. */
+      proxySymbol?: string;
       label: string;
     };
 
@@ -80,6 +82,24 @@ const COMMODITY_KEYWORDS: Record<string, string[]> = {
   COPPER: ["copper"],
 };
 
+/**
+ * Commodity base → US-listed ETF ticker. Finnhub's general feed only spans
+ * ~20h, but ETF company news covers a 2-day window, so the proxy widens metal
+ * and energy coverage well past that slice.
+ */
+const COMMODITY_ETF_PROXY: Record<string, string> = {
+  XAU: "GLD",
+  XAG: "SLV",
+  XPT: "PPLT",
+  XPD: "PALL",
+  WTI: "USO",
+  CL: "USO",
+  BZ: "BNO",
+  BRENT: "BNO",
+  NG: "UNG",
+  COPPER: "COPX",
+};
+
 const CRYPTO_ALIASES: Record<string, string[]> = {
   btc: ["btc", "bitcoin"],
   eth: ["eth", "ethereum", "ether"],
@@ -112,6 +132,7 @@ export function resolveNewsTarget(symbol: string): NewsTarget {
       kind: "market",
       category: "general",
       keywords,
+      proxySymbol: COMMODITY_ETF_PROXY[base],
       label: name || base,
     };
   }

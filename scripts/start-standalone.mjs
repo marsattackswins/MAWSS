@@ -2,6 +2,7 @@ import dotenv from "dotenv";
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
+import { APP_PORT } from "./app-port.mjs";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 
@@ -12,12 +13,12 @@ const yellow = "\x1b[33m";
 const reset = "\x1b[0m";
 
 console.log(`
-${cyan}${bold}  ████╗   ████╗   ██████╗   ██╗     ██╗ ███████╗
-  █████╗ █████║  ██╔════██╗ ██║     ██║ ██╔════╝
-  ██╔█████╔██║  ██████████║ ██║  █╗ ██║ ███████╗
-  ██║╚███╔╝██║  ██╔═════██║ ██║ ███╗██║ ╚════██║
-  ██║ ╚═╝  ██║  ██║     ██║ ╚███╔███╔╝  ███████║
-  ╚═╝      ╚═╝  ╚═╝     ╚═╝  ╚══╝╚══╝   ╚══════╝${reset}
+${cyan}${bold}  ███╗   ███╗    █████╗    ██╗    ██╗   ███████╗
+  ████╗ ████║   ██╔══██╗   ██║    ██║   ██╔════╝
+  ██╔████╔██║   ███████║   ██║ █╗ ██║   ███████╗
+  ██║╚██╔╝██║   ██╔══██║   ██║███╗██║   ╚════██║
+  ██║ ╚═╝ ██║   ██║  ██║   ╚███╔███╔╝   ███████║
+  ╚═╝     ╚═╝   ╚═╝  ╚═╝    ╚══╝╚══╝    ╚══════╝${reset}
   ${dim}Market Analysis & Workflow System • Prd Server${reset}
 `);
 
@@ -25,6 +26,12 @@ ${cyan}${bold}  ████╗   ████╗   ██████╗   █�
 // environment variables already supplied by the process take precedence.
 dotenv.config({ path: path.join(root, ".env.local") });
 dotenv.config({ path: path.join(root, ".env") });
+
+// The generated standalone server reads PORT itself; pin the ONE address before it
+// loads, overwriting whatever a launcher passed (PORT=0 would hand out a random
+// port on every start, and the browser stores the whole workspace per origin — a
+// new port opens an empty default workspace; see app-port.mjs).
+process.env.PORT = String(APP_PORT);
 
 // The standalone server changes its working directory to `.next/standalone`.
 // Resolve the database path before it starts so runtime state stays outside

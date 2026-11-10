@@ -6,14 +6,27 @@ import {
   assertPersistenceProfile,
   type PersistenceProfile,
 } from "../profile/context";
-import { add, div, isNegative, isZero, mul, parseDec, toStr, type Dec } from "./decimal";
-import type { AccountResponse, AccountUpdateEvent, BinanceOrder, OrderTradeUpdateEvent, PositionRiskRow } from "./types";
+import { add, div, eq, isNegative, isZero, mul, parseDec, toStr, type Dec } from "./decimal";
+import type {
+  AccountResponse,
+  AccountUpdateEvent,
+  AlgoUpdateEvent,
+  BinanceAlgoOrder,
+  BinanceOrder,
+  OrderTradeUpdateEvent,
+  PositionRiskRow,
+} from "./types";
+import { deleteProtectionIntent } from "./protection";
 
 export interface LiveAccount {
   totalWalletBalance: string;
   availableBalance: string;
   unrealizedProfit: string;
   marginBalance: string;
+  /** Exchange snapshot values used together for margin-health risk checks. */
+  maintenanceMargin: string;
+  marginHealthBalance: string;
+  marginHealthFetchedAt: number;
   /** True while marginBalance still holds the exchange-reported value.
    *  ACCOUNT_UPDATE events recompute it locally, downgrading the source. */
   marginFromExchange: boolean;
@@ -40,12 +53,16 @@ export interface LivePosition {
   marginType?: string;
   isolatedMargin?: string;
   isolatedWallet?: string;
+  /** Last authoritative position-risk snapshot (includes liquidation price). */
+  riskSnapshotFetchedAt?: number;
   updatedAt: number;
 }
 
 export interface LiveOrder {
   clientOrderId: string;
   exchangeOrderId: number | null;
+  algoId?: number | null;
+  kind: "order" | "algo";
   symbol: string;
   side: "BUY" | "SELL";
   type: string;
@@ -90,6 +107,22 @@ export interface LiveState {
 
 const WORKING_STATUSES = new Set(["NEW", "PARTIALLY_FILLED"]);
 
+/**
+ * Conditional-order trust flags per symbol. Algo orders are only visible
+ * through a per-symbol read, so a failed refresh must never leave a position
+ * looking protected (or let its intent be deleted): the symbol stays stale
+ * until a read succeeds.
+ */
+const algoStateStale = new Set<string>();
+
+/**
+ * Conditional orders left behind by a position that went flat. Ids are added
+ * while a cleanup runs and survive a failed attempt so a later position can
+ * never be declared protected by an old exit order.
+ */
+const orphanAlgoOrderIds = new Map<string, Set<string>>();
+const orphanAlgoCleanupPending = new Set<string>();
+
 function createEmpty(): LiveState {
   return {
     account: null,
@@ -111,10 +144,56 @@ export function liveState(): LiveState {
 
 export function clearLiveState(): void {
   state = createEmpty();
+  algoStateStale.clear();
+  orphanAlgoOrderIds.clear();
+  orphanAlgoCleanupPending.clear();
 }
 
 export function resetLiveStateForTests(): void {
   clearLiveState();
+}
+
+export function markAlgoStateStale(symbol: string): void {
+  algoStateStale.add(symbol);
+}
+
+export function markAlgoStateFresh(symbol: string): void {
+  algoStateStale.delete(symbol);
+}
+
+export function isAlgoStateStale(symbol: string): boolean {
+  return algoStateStale.has(symbol);
+}
+
+export function beginAlgoOrphanCleanup(symbol: string, clientAlgoIds: Iterable<string>): void {
+  orphanAlgoCleanupPending.add(symbol);
+  const ids = orphanAlgoOrderIds.get(symbol) ?? new Set<string>();
+  for (const id of clientAlgoIds) ids.add(id);
+  orphanAlgoOrderIds.set(symbol, ids);
+}
+
+export function finishAlgoOrphanCleanup(symbol: string, remainingClientAlgoIds: Iterable<string>): void {
+  orphanAlgoCleanupPending.delete(symbol);
+  const remaining = new Set(remainingClientAlgoIds);
+  if (remaining.size === 0) orphanAlgoOrderIds.delete(symbol);
+  else orphanAlgoOrderIds.set(symbol, remaining);
+}
+
+export function isAlgoOrphanCleanupPending(symbol: string): boolean {
+  return orphanAlgoCleanupPending.has(symbol);
+}
+
+/** A leftover exit order can never count as protection for a later position. */
+export function isOrphanedAlgoOrder(symbol: string, clientOrderId: string): boolean {
+  return orphanAlgoOrderIds.get(symbol)?.has(clientOrderId) ?? false;
+}
+
+/** Marks a locally known order terminal after a confirmed exchange cancel. */
+export function markOrderCanceledLocally(clientOrderId: string): void {
+  const order = state.orders.get(clientOrderId);
+  if (!order) return;
+  state.orders.set(clientOrderId, { ...order, status: "CANCELED", updateTime: Date.now() });
+  state.openOrders.delete(clientOrderId);
 }
 
 export function grossExposureUsd(): number {
@@ -149,6 +228,9 @@ export function applyAccountSnapshot(account: AccountResponse, now = Date.now())
     availableBalance: account.availableBalance,
     unrealizedProfit: account.totalUnrealizedProfit,
     marginBalance: account.totalMarginBalance,
+    maintenanceMargin: account.totalMaintMargin ?? "",
+    marginHealthBalance: account.totalMarginBalance,
+    marginHealthFetchedAt: now,
     marginFromExchange: true,
     fetchedAt: now,
   };
@@ -174,6 +256,7 @@ export function applyPositionSnapshot(rows: PositionRiskRow[], now = Date.now())
       marginType: r.marginType,
       isolatedMargin: r.isolatedMargin,
       isolatedWallet: r.isolatedWallet,
+      riskSnapshotFetchedAt: now,
       updatedAt: now,
     });
   }
@@ -250,18 +333,51 @@ export function applySymbolLeverage(symbol: string, leverage: string): boolean {
   return false;
 }
 
-export function applyOpenOrdersSnapshot(rows: BinanceOrder[], now = Date.now()): void {
+export function applyOpenOrdersSnapshot(
+  rows: BinanceOrder[],
+  algoRows: BinanceAlgoOrder[] = [],
+  now = Date.now(),
+): void {
   state.openOrders.clear();
+  applyOrderRows(rows, algoRows);
+  state.snapshotAt = now;
+}
+
+export function applySymbolOpenOrdersSnapshot(
+  symbol: string,
+  rows: BinanceOrder[],
+  algoRows: BinanceAlgoOrder[],
+  now = Date.now(),
+): void {
+  for (const [clientOrderId, order] of state.openOrders) {
+    if (order.symbol === symbol) state.openOrders.delete(clientOrderId);
+  }
+  applyOrderRows(rows.filter((order) => order.symbol === symbol), algoRows);
+  state.snapshotAt = now;
+}
+
+function applyOrderRows(rows: BinanceOrder[], algoRows: BinanceAlgoOrder[]): void {
   for (const o of rows) {
     const live = normalizeBinanceOrder(o);
     if (WORKING_STATUSES.has(live.status)) state.openOrders.set(live.clientOrderId, live);
     state.orders.set(live.clientOrderId, live);
   }
-  state.snapshotAt = now;
+  for (const o of algoRows) {
+    const live = normalizeBinanceAlgoOrder(o);
+    if (WORKING_STATUSES.has(live.status)) state.openOrders.set(live.clientOrderId, live);
+    state.orders.set(live.clientOrderId, live);
+  }
 }
 
 export function rememberOrder(o: BinanceOrder): void {
   const live = normalizeBinanceOrder(o);
+  state.orders.set(live.clientOrderId, live);
+  if (WORKING_STATUSES.has(live.status)) state.openOrders.set(live.clientOrderId, live);
+  else state.openOrders.delete(live.clientOrderId);
+}
+
+export function rememberAlgoOrder(o: BinanceAlgoOrder): void {
+  const live = normalizeBinanceAlgoOrder(o);
   state.orders.set(live.clientOrderId, live);
   if (WORKING_STATUSES.has(live.status)) state.openOrders.set(live.clientOrderId, live);
   else state.openOrders.delete(live.clientOrderId);
@@ -294,6 +410,7 @@ export function rememberHistoricalOrder(o: {
   state.orders.set(o.clientOrderId, {
     clientOrderId: o.clientOrderId,
     exchangeOrderId: o.exchangeOrderId,
+    kind: "order",
     symbol: o.symbol,
     side: o.side,
     type: o.type,
@@ -315,6 +432,7 @@ export function normalizeBinanceOrder(o: BinanceOrder): LiveOrder {
   return {
     clientOrderId: o.clientOrderId,
     exchangeOrderId: o.orderId,
+    kind: "order",
     symbol: o.symbol,
     side: o.side,
     type: o.type,
@@ -327,6 +445,32 @@ export function normalizeBinanceOrder(o: BinanceOrder): LiveOrder {
     reduceOnly: !!o.reduceOnly,
     closePosition: !!o.closePosition,
     time: o.time,
+    updateTime: o.updateTime,
+  };
+}
+
+export function normalizeBinanceAlgoOrder(o: BinanceAlgoOrder): LiveOrder {
+  const actualOrderId =
+    o.actualOrderId != null && o.actualOrderId !== "" && Number.isFinite(Number(o.actualOrderId))
+      ? Number(o.actualOrderId)
+      : null;
+  return {
+    clientOrderId: o.clientAlgoId,
+    exchangeOrderId: actualOrderId,
+    algoId: o.algoId,
+    kind: "algo",
+    symbol: o.symbol,
+    side: o.side,
+    type: o.orderType,
+    status: o.algoStatus,
+    price: o.price ?? "0",
+    stopPrice: o.triggerPrice,
+    origQty: o.quantity ?? "0",
+    executedQty: o.actualQty ?? "0",
+    avgPrice: o.actualPrice ?? "0",
+    reduceOnly: !!o.reduceOnly,
+    closePosition: !!o.closePosition,
+    time: o.createTime,
     updateTime: o.updateTime,
   };
 }
@@ -419,6 +563,47 @@ export function applyOrderEvent(ev: OrderTradeUpdateEvent, skipTradeIds: Readonl
   return extractFill(o, skipTradeIds);
 }
 
+export function applyAlgoOrderEvent(ev: AlgoUpdateEvent): LiveOrder | null {
+  const o = ev.o;
+  if (!o.caid || !o.s || !o.S || !o.X) return null;
+  const previous = state.orders.get(o.caid);
+  const rawActualOrderId = o.ai;
+  const actualOrderId =
+    rawActualOrderId != null && rawActualOrderId !== "" && Number.isFinite(Number(rawActualOrderId))
+      ? Number(rawActualOrderId)
+      : previous?.exchangeOrderId ?? null;
+  const order: LiveOrder = {
+    clientOrderId: o.caid,
+    exchangeOrderId: actualOrderId,
+    algoId: typeof o.aid === "number" ? o.aid : previous?.algoId ?? null,
+    kind: "algo",
+    symbol: o.s,
+    side: o.S,
+    type: o.o ?? previous?.type ?? "",
+    status: o.X,
+    price: typeof o.p === "string" ? o.p : previous?.price ?? "0",
+    stopPrice:
+      typeof o.triggerPrice === "string"
+        ? o.triggerPrice
+        : typeof o.tp === "string"
+          ? o.tp
+          : previous?.stopPrice ?? "0",
+    origQty: typeof o.q === "string" ? o.q : previous?.origQty ?? "0",
+    executedQty: typeof o.actualQty === "string" ? o.actualQty : previous?.executedQty ?? "0",
+    avgPrice: typeof o.actualPrice === "string" ? o.actualPrice : previous?.avgPrice ?? "0",
+    reduceOnly: typeof o.R === "boolean" ? o.R : previous?.reduceOnly ?? false,
+    closePosition: typeof o.cp === "boolean" ? o.cp : previous?.closePosition ?? false,
+    time: previous?.time ?? ev.T ?? ev.E ?? Date.now(),
+    updateTime: ev.T ?? ev.E ?? Date.now(),
+  };
+  state.orders.set(order.clientOrderId, order);
+  if (order.status !== "NEW" && order.status !== "PARTIALLY_FILLED") {
+    state.openOrders.delete(order.clientOrderId);
+  }
+  state.lastEventTime = Math.max(state.lastEventTime ?? 0, ev.E ?? order.updateTime);
+  return order;
+}
+
 function buildOrderFromEvent(o: OrderTradeUpdateEvent["o"], prev?: LiveOrder): LiveOrder {
   const cumQty = num(o.z);
   let avgPrice = prev?.avgPrice && prev.avgPrice !== "0" ? prev.avgPrice : "0";
@@ -432,6 +617,7 @@ function buildOrderFromEvent(o: OrderTradeUpdateEvent["o"], prev?: LiveOrder): L
   return {
     clientOrderId: o.c,
     exchangeOrderId: o.i,
+    kind: "order",
     symbol: o.s,
     side: o.S,
     type: o.o,
@@ -465,7 +651,8 @@ function extractFill(o: OrderTradeUpdateEvent["o"], skipTradeIds: ReadonlySet<st
   return skipTradeIds.has(fill.tradeId) ? [] : [fill];
 }
 
-export function applyAccountEvent(ev: AccountUpdateEvent): void {
+export function applyAccountEvent(ev: AccountUpdateEvent): boolean {
+  let positionAmountChanged = false;
   const usdt = ev.a.B.find((b) => b.a === "USDT");
   if (usdt && state.account) {
     state.account = {
@@ -483,24 +670,33 @@ export function applyAccountEvent(ev: AccountUpdateEvent): void {
       availableBalance: usdt.cw,
       unrealizedProfit: "0",
       marginBalance: "",
+      maintenanceMargin: "",
+      marginHealthBalance: "",
+      marginHealthFetchedAt: 0,
       marginFromExchange: false,
       fetchedAt: ev.E,
     };
   }
   for (const p of ev.a.P) {
     const amt = num(p.pa);
+    const prev = state.positions.get(p.s);
     if (isZero(amt)) {
+      if (prev) positionAmountChanged = true;
       state.positions.delete(p.s);
+      deleteProtectionIntent(p.s);
       continue;
     }
-    const prev = state.positions.get(p.s);
     const absQty = isNegative(amt) ? toStr({ units: -amt.units, scale: amt.scale }) : toStr(amt);
+    const side = isNegative(amt) ? "short" : "long";
+    const amountChanged = !prev || prev.side !== side || !eq(parseDec(prev.qty), parseDec(absQty));
+    if (prev && prev.side !== side) deleteProtectionIntent(p.s);
+    if (amountChanged) positionAmountChanged = true;
     // ACCOUNT_UPDATE carries no leverage field, so seed from the last
     // ACCOUNT_CONFIG_UPDATE instead of guessing 1x.
     const leverage = state.symbolLeverage.get(p.s) ?? prev?.leverage ?? "1";
     state.positions.set(p.s, {
       symbol: p.s,
-      side: isNegative(amt) ? "short" : "long",
+      side,
       qty: absQty,
       entryPrice: p.ep,
       markPrice: prev?.markPrice ?? p.ep,
@@ -509,8 +705,9 @@ export function applyAccountEvent(ev: AccountUpdateEvent): void {
       unrealizedProfit: p.up,
       markPriceSource: "fill-fallback",
       leverage,
-      liquidationPrice: prev?.liquidationPrice ?? "0",
+      liquidationPrice: amountChanged ? "" : prev?.liquidationPrice ?? "0",
       notional: prev?.notional ?? "",
+      riskSnapshotFetchedAt: amountChanged ? 0 : prev?.riskSnapshotFetchedAt ?? 0,
       updatedAt: ev.E,
     });
   }
@@ -532,4 +729,5 @@ export function applyAccountEvent(ev: AccountUpdateEvent): void {
     };
   }
   state.lastEventTime = Math.max(state.lastEventTime ?? 0, ev.E);
+  return positionAmountChanged;
 }

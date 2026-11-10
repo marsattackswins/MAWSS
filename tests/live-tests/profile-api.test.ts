@@ -1,10 +1,14 @@
-import { afterEach, beforeEach, describe, expect, test } from "@jest/globals";
+import { afterEach, beforeEach, describe, expect, jest, test } from "@jest/globals";
 
 import { GET as getProfiles } from "@/app/api/live/profiles/route";
 import { GET as getProfile } from "@/app/api/live/profile/route";
 import { POST as switchProfile } from "@/app/api/live/profile/switch/route";
 import { createSession, sessionCookieName } from "@/lib/server/auth/session";
-import { resetProfileCoordinatorForTests } from "@/lib/server/profile/coordinator";
+import {
+  ProfileCoordinatorError,
+  profileCoordinator,
+  resetProfileCoordinatorForTests,
+} from "@/lib/server/profile/coordinator";
 import { freshEnv, makeCfg } from "./helpers";
 
 function authenticatedRequest(path: string, init: RequestInit = {}, csrf: string | null = null): Request {
@@ -33,7 +37,7 @@ describe("profile API", () => {
 
     const csrfFailure = await switchProfile(authenticatedRequest("/api/live/profile/switch", {
       method: "POST",
-      body: JSON.stringify({ profileId: "paper" }),
+      body: JSON.stringify({ profileId: "binance-testnet" }),
       headers: { "content-type": "application/json" },
     }));
     expect(csrfFailure.status).toBe(403);
@@ -47,7 +51,7 @@ describe("profile API", () => {
         "x-maws-csrf": session.csrfToken,
         origin: "http://evil.example",
       },
-      body: JSON.stringify({ profileId: "paper" }),
+      body: JSON.stringify({ profileId: "binance-testnet" }),
     }));
     expect(originFailure.status).toBe(403);
   });
@@ -61,6 +65,14 @@ describe("profile API", () => {
     expect(invalid.status).toBe(400);
     expect((await invalid.json()).error.code).toBe("invalid_profile");
 
+    const invalidPaper = await switchProfile(authenticatedRequest("/api/live/profile/switch", {
+      method: "POST",
+      body: JSON.stringify({ profileId: "paper" }),
+      headers: { "content-type": "application/json" },
+    }, session.csrfToken));
+    expect(invalidPaper.status).toBe(400);
+    expect((await invalidPaper.json()).error.code).toBe("invalid_profile");
+
     const confirmation = await switchProfile(authenticatedRequest("/api/live/profile/switch", {
       method: "POST",
       body: JSON.stringify({ profileId: "binance-production", confirmProduction: false }),
@@ -70,22 +82,90 @@ describe("profile API", () => {
     expect((await confirmation.json()).error.code).toBe("production_confirmation_required");
   });
 
-  test("local Chart Only exposes safe metadata and allows authenticated profile detachment", async () => {
+  test("local Chart Only exposes safe metadata", async () => {
     const localCfg = makeCfg({ env: "local", activeProfileId: null, binanceApiKey: null, binanceApiSecret: null });
     freshEnv(localCfg);
 
     const publicMetadata = await getProfiles(new Request("http://localhost:3000/api/live/profiles"));
     expect(publicMetadata.status).toBe(200);
-    expect((await publicMetadata.json()).profiles).toHaveLength(3);
+    expect((await publicMetadata.json()).profiles).toHaveLength(2);
+  });
 
-    session = createSession("local-profile-api-test");
-    const detached = await switchProfile(authenticatedRequest("/api/live/profile/switch", {
+  test.each(["binance-testnet", "binance-production"] as const)(
+    "local Chart Only rejects switching to %s at the route",
+    async (profileId) => {
+      const localCfg = makeCfg({ env: "local", activeProfileId: null, binanceApiKey: null, binanceApiSecret: null });
+      freshEnv(localCfg);
+      session = createSession("profile-api-local-test");
+      const switchSpy = jest.spyOn(profileCoordinator(), "switchProfile");
+
+      const response = await switchProfile(authenticatedRequest("/api/live/profile/switch", {
+        method: "POST",
+        body: JSON.stringify({ profileId, confirmProduction: true }),
+        headers: { "content-type": "application/json" },
+      }, session.csrfToken));
+
+      expect(response.status).toBe(403);
+      expect((await response.json()).error).toMatchObject({
+        code: "local_profile_switch_disabled",
+        message: expect.stringContaining("Chart Only"),
+      });
+      expect(switchSpy).not.toHaveBeenCalled();
+    },
+  );
+
+  test("non-local profile API continues to allow a configured profile switch", async () => {
+    const switchSpy = jest.spyOn(profileCoordinator(), "switchProfile").mockResolvedValue({
+      profileId: "binance-testnet",
+      environment: "testnet",
+      phase: "ready",
+      ready: true,
+      managerStatus: "ready",
+      streamHealthy: true,
+      executionAllowed: false,
+      generation: 1,
+      reasonCode: null,
+    });
+
+    const response = await switchProfile(authenticatedRequest("/api/live/profile/switch", {
       method: "POST",
-      body: JSON.stringify({ profileId: "paper", requestId: "local-paper-switch" }),
+      body: JSON.stringify({ profileId: "binance-testnet" }),
       headers: { "content-type": "application/json" },
     }, session.csrfToken));
-    expect(detached.status).toBe(200);
-    expect((await detached.json()).profileId).toBeNull();
+
+    expect(response.status).toBe(200);
+    expect(switchSpy).toHaveBeenCalledWith({ profileId: "binance-testnet" });
+  });
+
+  test("returns missing Production risk variable names from profile attachment errors", async () => {
+    const names = [
+      "MAWS_RISK_MAX_ORDER_NOTIONAL",
+      "MAWS_RISK_MAX_GROSS_EXPOSURE",
+      "MAWS_RISK_MAX_OPEN_ORDERS",
+      "MAWS_RISK_MAX_OPEN_POSITIONS",
+      "MAWS_RISK_DAILY_LOSS_PCT",
+      "MAWS_RISK_PRICE_COLLAR_PCT",
+      "MAWS_RISK_MAX_LEVERAGE",
+      "MAWS_RISK_MAX_MARGIN_RATIO",
+      "MAWS_RISK_MIN_LIQ_DISTANCE_PCT",
+    ];
+    jest.spyOn(profileCoordinator(), "switchProfile").mockRejectedValue(
+      new ProfileCoordinatorError(
+        "production_risk_limits_invalid",
+        `Production risk limits must be explicitly configured; missing: ${names.join(", ")}`,
+      ),
+    );
+
+    const response = await switchProfile(authenticatedRequest("/api/live/profile/switch", {
+      method: "POST",
+      body: JSON.stringify({ profileId: "binance-production", confirmProduction: true }),
+      headers: { "content-type": "application/json" },
+    }, session.csrfToken));
+
+    expect(response.status).toBe(503);
+    const body = await response.json();
+    expect(body.error.code).toBe("production_risk_limits_invalid");
+    for (const name of names) expect(body.error.message).toContain(name);
   });
 
   test("returns no-store safe metadata and excludes internal profiles and secrets", async () => {
@@ -93,7 +173,6 @@ describe("profile API", () => {
     expect(profiles.headers.get("cache-control")).toBe("no-store");
     const profileBody = (await profiles.json()) as { profiles: Array<Record<string, unknown>> };
     expect(profileBody.profiles.map((profile) => profile.profileId)).toEqual([
-      "paper",
       "binance-testnet",
       "binance-production",
     ]);

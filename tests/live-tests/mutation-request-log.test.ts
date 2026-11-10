@@ -22,7 +22,10 @@ import { POST as POST_orders } from "@/app/api/live/orders/route";
 import { POST as POST_cancel } from "@/app/api/live/orders/cancel/route";
 import { POST as POST_close } from "@/app/api/live/positions/close/route";
 import { POST as POST_protect } from "@/app/api/live/protect/route";
+import { POST as POST_removeProtection } from "@/app/api/live/protect/remove/route";
 import { REQUEST_ID_HEADER } from "@/lib/server/http/request-id";
+import { recentAudit } from "@/lib/server/audit/log";
+import { saveProtectionIntent, getProtectionIntent } from "@/lib/server/binance/protection";
 import type { EnvConfig } from "@/lib/server/env/config";
 import {
   BTCUSDT_INFO,
@@ -115,6 +118,7 @@ function standardFakes(http: FakeHttp, opts: { withPosition?: boolean } = {}): v
   http.route("/fapi/v1/time", () => jsonRes({ serverTime: Date.now() }));
   http.route("/fapi/v1/exchangeInfo", () => jsonRes({ symbols: [BTCUSDT_INFO] }));
   http.route("/fapi/v1/ticker/price", () => jsonRes({ symbol: "BTCUSDT", price: "50000" }));
+  http.route("/fapi/v1/premiumIndex", () => jsonRes({ symbol: "BTCUSDT", markPrice: "50000", time: Date.now() }));
   http.route("/fapi/v2/account", () => jsonRes(accountFixture()));
   http.route("/fapi/v2/positionRisk", () =>
     jsonRes(
@@ -138,6 +142,7 @@ function standardFakes(http: FakeHttp, opts: { withPosition?: boolean } = {}): v
   http.route("/fapi/v1/allOpenOrders", () => jsonRes([]));
   http.route("/fapi/v1/listenKey", () => jsonRes({ listenKey: "LK-LOGTEST" }));
   http.route("/fapi/v1/leverageBracket", () => jsonRes([]));
+  http.route("/fapi/v1/leverage", () => jsonRes({ leverage: 1, maxNotionalValue: "1000000" }));
   http.route("/fapi/v1/userTrades", () => jsonRes([]));
 }
 
@@ -253,6 +258,7 @@ describe("POST /api/live/orders logs structured request lines", () => {
           side: "BUY",
           type: "LIMIT",
           qty: "0.001",
+          leverage: 1,
           price: "50000",
           clientOrderId: "cid-orders-ok",
         },
@@ -360,8 +366,32 @@ describe("POST /api/live/positions/close logs structured request lines", () => {
 describe("POST /api/live/protect logs structured request lines", () => {
   test("logs ok with symbol after placing a take-profit", async () => {
     const http = new FakeHttp();
-    http.route("/fapi/v1/order", () => jsonRes(orderFixture({ type: "TAKE_PROFIT_MARKET", status: "NEW" })));
+    const algoOrders: Array<Record<string, unknown>> = [];
     await bootBroker(http, { withPosition: true });
+    http.route("/fapi/v1/openOrders", () => jsonRes([]));
+    http.route("/fapi/v1/openAlgoOrders", () => jsonRes(algoOrders));
+    http.route("/fapi/v1/algoOrder", () => {
+      const request = http.calls[http.calls.length - 1];
+      const query = new URL(request.url).searchParams;
+      if (request.method === "POST") {
+        const order = {
+          algoId: algoOrders.length + 1,
+          clientAlgoId: query.get("clientAlgoId") ?? "generated",
+          algoType: "CONDITIONAL",
+          orderType: query.get("type") ?? "TAKE_PROFIT_MARKET",
+          symbol: query.get("symbol") ?? "BTCUSDT",
+          side: query.get("side") ?? "SELL",
+          algoStatus: "NEW",
+          triggerPrice: query.get("triggerPrice") ?? "0",
+          closePosition: query.get("closePosition") === "true",
+          createTime: Date.now(),
+          updateTime: Date.now(),
+        };
+        algoOrders.push(order);
+        return jsonRes(order);
+      }
+      return jsonRes({ code: -2013, msg: "Algo order does not exist." }, 404);
+    });
     const { sessionId, csrfToken } = newSession();
     const res = await POST_protect(
       liveRequest({
@@ -377,6 +407,128 @@ describe("POST /api/live/protect logs structured request lines", () => {
     expect(fields.path).toBe("/api/live/protect");
     expect(fields.symbol).toBe("BTCUSDT");
     expect(fields.clientOrderId).toBeUndefined();
+  });
+});
+
+describe("POST /api/live/protect/remove", () => {
+  test("requires a CSRF token before calling the broker", async () => {
+    freshEnv(makeCfg());
+    const { sessionId } = newSession();
+    const res = await POST_removeProtection(liveRequest({
+      path: "/api/live/protect/remove",
+      sessionId,
+      body: { symbol: "BTCUSDT" },
+    }));
+
+    expect(res.status).toBe(403);
+    expect(getProtectionIntent("BTCUSDT")).toBeNull();
+  });
+
+  test("cancels TP/SL, deletes the intent, audits removal, and reconciliation does not restore", async () => {
+    const http = new FakeHttp();
+    const exchangeOrders = [
+      orderFixture({
+        clientOrderId: "remove-protection-tp",
+        type: "TAKE_PROFIT_MARKET",
+        side: "SELL",
+        stopPrice: "52000",
+        closePosition: true,
+      }),
+      orderFixture({
+        clientOrderId: "remove-protection-sl",
+        type: "STOP_MARKET",
+        side: "SELL",
+        stopPrice: "48000",
+        closePosition: true,
+      }),
+    ];
+    await bootBroker(http, { withPosition: true });
+    http.route("/fapi/v1/openOrders", () => jsonRes(exchangeOrders));
+    http.route("/fapi/v1/order", () => {
+      const request = http.calls[http.calls.length - 1];
+      const query = new URL(request.url).searchParams;
+      if (request.method !== "DELETE") return jsonRes({ code: -2013, msg: "Order does not exist." }, 404);
+      const index = exchangeOrders.findIndex((order) => order.clientOrderId === query.get("origClientOrderId"));
+      if (index < 0) return jsonRes({ code: -2011, msg: "Unknown order sent." }, 400);
+      const [canceled] = exchangeOrders.splice(index, 1);
+      return jsonRes({ ...canceled, status: "CANCELED" });
+    });
+    saveProtectionIntent({ symbol: "BTCUSDT", side: "long", tpPrice: "52000", slPrice: "48000" });
+    const { sessionId, csrfToken } = newSession();
+
+    const res = await POST_removeProtection(liveRequest({
+      path: "/api/live/protect/remove",
+      sessionId,
+      csrfToken,
+      body: { symbol: "BTCUSDT" },
+    }));
+
+    expect(res.status).toBe(200);
+    expect(exchangeOrders).toHaveLength(0);
+    expect(getProtectionIntent("BTCUSDT")).toBeNull();
+    expect(recentAudit(20).some((entry) => entry.action === "position.ui.protection_removed")).toBe(true);
+    await getBroker().reconcile("after-protection-removal");
+    expect(http.callsTo("/fapi/v1/order").filter((call) => call.method === "POST")).toHaveLength(0);
+  });
+
+  test("partial removal reports canceled and remaining orders and preserves UNPROTECTED intent", async () => {
+    const http = new FakeHttp();
+    const exchangeOrders = [
+      orderFixture({
+        clientOrderId: "partial-remove-tp",
+        type: "TAKE_PROFIT_MARKET",
+        side: "SELL",
+        stopPrice: "52000",
+        closePosition: true,
+      }),
+      orderFixture({
+        clientOrderId: "partial-remove-sl",
+        type: "STOP_MARKET",
+        side: "SELL",
+        stopPrice: "48000",
+        closePosition: true,
+      }),
+    ];
+    await bootBroker(http, { withPosition: true });
+    http.route("/fapi/v1/openOrders", () => jsonRes(exchangeOrders));
+    let cancelCount = 0;
+    http.route("/fapi/v1/order", () => {
+      const request = http.calls[http.calls.length - 1];
+      const query = new URL(request.url).searchParams;
+      if (request.method !== "DELETE") return jsonRes({ code: -2013, msg: "Order does not exist." }, 404);
+      cancelCount += 1;
+      if (cancelCount === 2) return jsonRes({ code: -1000, msg: "simulated cancellation failure" }, 400);
+      const index = exchangeOrders.findIndex((order) => order.clientOrderId === query.get("origClientOrderId"));
+      if (index < 0) return jsonRes({ code: -2011, msg: "Unknown order sent." }, 400);
+      const [canceled] = exchangeOrders.splice(index, 1);
+      return jsonRes({ ...canceled, status: "CANCELED" });
+    });
+    saveProtectionIntent({ symbol: "BTCUSDT", side: "long", tpPrice: "52000", slPrice: "48000" });
+    const { sessionId, csrfToken } = newSession();
+
+    const res = await POST_removeProtection(liveRequest({
+      path: "/api/live/protect/remove",
+      sessionId,
+      csrfToken,
+      body: { symbol: "BTCUSDT" },
+    }));
+
+    expect(res.status).toBe(422);
+    const payload = await res.json() as { error?: string };
+    expect(payload.error).toContain("partial-remove-tp");
+    expect(payload.error).toContain("partial-remove-sl");
+    expect(exchangeOrders.map((order) => order.clientOrderId)).toEqual(["partial-remove-sl"]);
+    expect(getProtectionIntent("BTCUSDT")).toMatchObject({
+      status: "CONFIRMED",
+      protectionStatus: "UNPROTECTED",
+    });
+    expect(getProtectionIntent("BTCUSDT")?.failureReason).toContain("Protection removal incomplete:");
+    expect(recentAudit(20).some((entry) => entry.action === "position.ui.protection_remove_failed")).toBe(true);
+
+    await getBroker().reconcile("after-partial-protection-removal");
+
+    expect(getProtectionIntent("BTCUSDT")?.protectionStatus).toBe("UNPROTECTED");
+    expect(http.callsTo("/fapi/v1/order").filter((call) => call.method === "POST")).toHaveLength(0);
   });
 });
 
@@ -403,6 +555,7 @@ describe("request ID correlation on live mutations", () => {
       },
       { post: POST_close, path: "/api/live/positions/close", body: { symbol: "BTCUSDT" } },
       { post: POST_protect, path: "/api/live/protect", body: { symbol: "BTCUSDT", tpPrice: "51000" } },
+      { post: POST_removeProtection, path: "/api/live/protect/remove", body: { symbol: "BTCUSDT" } },
     ];
 
     freshEnv(makeCfg());
@@ -461,6 +614,7 @@ describe("request ID correlation on live mutations", () => {
         side: "BUY",
         type: "LIMIT",
         qty: "0.001",
+        leverage: 1,
         price: "50000",
         clientOrderId: "cid-rid-ok",
       },

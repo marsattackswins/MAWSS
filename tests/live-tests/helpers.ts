@@ -29,31 +29,20 @@ export function tempDbPath(): string {
 }
 
 const TEST_PROFILES: ProfileRegistry = {
-  paper: {
-    profileId: "paper",
-    label: "Paper",
-    environment: "paper",
-    configured: false,
-    executionEnabled: false,
-    apiKey: null,
-    apiSecret: null,
-    restEndpoint: "https://fapi.binance.com",
-    webSocketEndpoint: "wss://fstream.binance.com",
-  },
   "binance-testnet": {
     profileId: "binance-testnet",
-    label: "Binance Testnet",
+    label: "Binance Demo Trading",
     environment: "testnet",
     configured: true,
     executionEnabled: true,
     apiKey: "test-api-key",
     apiSecret: "test-api-secret",
-    restEndpoint: "https://testnet.binancefuture.com",
-    webSocketEndpoint: "wss://fstream.binancefuture.com",
+    restEndpoint: "https://demo-fapi.binance.com",
+    webSocketEndpoint: "wss://demo-fstream.binance.com",
   },
   "binance-production": {
     profileId: "binance-production",
-    label: "Binance Production",
+    label: "Binance Live",
     environment: "production",
     configured: false,
     executionEnabled: true,
@@ -68,7 +57,7 @@ export function makeCfg(overrides: Partial<EnvConfig> = {}): EnvConfig {
   return {
     env: "testnet",
     brokerType: "binance",
-    defaultProfile: "paper",
+    defaultProfile: "binance-testnet",
     activeProfileId: "binance-testnet",
     profiles: TEST_PROFILES,
     dbPath: tempDbPath(),
@@ -77,6 +66,8 @@ export function makeCfg(overrides: Partial<EnvConfig> = {}): EnvConfig {
     trustProxy: false,
     backupKey: null,
     healthToken: null,
+    emergencyToken: null,
+    reverseEnabled: false,
     binanceApiKey: "test-api-key",
     binanceApiSecret: "test-api-secret",
     recvWindowMs: 5000,
@@ -86,7 +77,9 @@ export function makeCfg(overrides: Partial<EnvConfig> = {}): EnvConfig {
     historyBackfillMs: 3 * 24 * 60 * 60 * 1000,
     leaseTtlMs: 60_000,
     snapshotMaxAgeMs: 5 * 60_000,
+    protectionPendingMaxAgeMs: 2 * 60_000,
     alertWebhookUrl: null,
+    missingProductionRiskLimitVariables: [],
     risk: {
       maxOrderNotionalUsd: 50,
       maxGrossExposureUsd: 100,
@@ -94,6 +87,9 @@ export function makeCfg(overrides: Partial<EnvConfig> = {}): EnvConfig {
       maxOpenPositions: 3,
       dailyLossPct: 50,
       priceCollarPct: 5,
+      maxLeverage: 10,
+      maxMarginRatio: 0.5,
+      minLiquidationDistancePct: 5,
     },
     circuitBreaker: {
       restFailureThreshold: 5,
@@ -259,6 +255,7 @@ export function installFakes(http: FakeHttp): { http: FakeHttp; ws: { connect(ur
   // route with a one-shot script when exercising hedge-mode handling.
   http.route("/fapi/v1/positionSide/dual", () => jsonRes({ dualSidePosition: false }));
   installBrokerClients({ http, ws });
+  http.route("/fapi/v1/openAlgoOrders", () => jsonRes([]));
   return { http, ws };
 }
 
@@ -310,6 +307,7 @@ export const BTCUSDT_INFO = {
   filters: [
     { filterType: "PRICE_FILTER", minPrice: "0.1", maxPrice: "1000000", tickSize: "0.1" },
     { filterType: "LOT_SIZE", minQty: "0.001", maxQty: "100", stepSize: "0.001" },
+    { filterType: "MARKET_LOT_SIZE", minQty: "0.001", maxQty: "100", stepSize: "0.001" },
     { filterType: "MIN_NOTIONAL", notional: "5" },
     { filterType: "MAX_NUM_ORDERS", maxNumberOrders: 200 },
   ],
@@ -320,6 +318,7 @@ export function accountFixture(overrides: Partial<Record<string, string>> = {}):
     totalWalletBalance: overrides.totalWalletBalance ?? "1000",
     totalUnrealizedProfit: overrides.totalUnrealizedProfit ?? "0",
     totalMarginBalance: overrides.totalMarginBalance ?? "1000",
+    totalMaintMargin: overrides.totalMaintMargin ?? "0",
     availableBalance: overrides.availableBalance ?? "1000",
     maxWithdrawAmount: "1000",
     assets: [

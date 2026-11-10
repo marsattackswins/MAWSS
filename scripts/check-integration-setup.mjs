@@ -52,13 +52,13 @@ if (envExists) {
   check(
     "MAWS_BINANCE_API_KEY is set",
     apiKey && apiKey !== "your-testnet-api-key-here",
-    "Get testnet credentials from https://testnet.binancefuture.com"
+    "Get testnet credentials from https://demo-fapi.binance.com"
   );
 
   check(
     "MAWS_BINANCE_API_SECRET is set",
     apiSecret && apiSecret !== "your-testnet-secret-here",
-    "Get testnet credentials from https://testnet.binancefuture.com"
+    "Get testnet credentials from https://demo-fapi.binance.com"
   );
 
   check(
@@ -115,7 +115,7 @@ if (apiKey && apiKey !== "your-testnet-api-key-here") {
   console.log("\n🌐 Testing Binance testnet connectivity...");
 
   try {
-    const testnetUrl = "https://testnet.binancefuture.com/fapi/v1/time";
+    const testnetUrl = "https://demo-fapi.binance.com/fapi/v1/time";
     const response = await fetch(testnetUrl);
     
     if (response.ok) {
@@ -135,7 +135,7 @@ if (apiKey && apiKey !== "your-testnet-api-key-here") {
   
   try {
     const timestamp = Date.now();
-    const accountUrl = `https://testnet.binancefuture.com/fapi/v2/account?timestamp=${timestamp}`;
+    const accountUrl = `https://demo-fapi.binance.com/fapi/v2/account?timestamp=${timestamp}`;
     
     const response = await fetch(accountUrl, {
       headers: {
@@ -145,7 +145,7 @@ if (apiKey && apiKey !== "your-testnet-api-key-here") {
 
     if (response.status === 401) {
       console.log("❌ API credentials are invalid");
-      console.log("   Verify your API key and secret from testnet.binancefuture.com");
+      console.log("   Verify your API key and secret from demo-fapi.binance.com");
       failed++;
     } else if (response.status === 400) {
       // Expected without signature, but key is recognized

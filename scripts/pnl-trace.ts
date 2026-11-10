@@ -34,8 +34,8 @@ import dotenv from "dotenv";
 dotenv.config({ path: ".env.local" });
 dotenv.config({ path: ".env" });
 
-const REST = "https://testnet.binancefuture.com";
-const UDS = "wss://fstream.binancefuture.com";
+const REST = "https://demo-fapi.binance.com";
+const UDS = "wss://demo-fstream.binance.com";
 const KEY = process.env.MAWS_BINANCE_TESTNET_API_KEY ?? process.env.MAWS_BINANCE_API_KEY ?? "";
 const SECRET = process.env.MAWS_BINANCE_TESTNET_API_SECRET ?? process.env.MAWS_BINANCE_API_SECRET ?? "";
 if (!KEY || !SECRET) {

@@ -18,8 +18,8 @@ import { createDrawingSlice, normalizeDrawingRehydrate } from "@/lib/slices/draw
 import type { DrawingSlice } from "@/lib/slices/drawing-slice";
 import { createMarketDataSlice } from "@/lib/slices/market-data-slice";
 import type { MarketDataSlice } from "@/lib/slices/market-data-slice";
-import { createPaperTradingSlice, normalizePaperTradingRehydrate } from "@/lib/slices/paper-trading-slice";
-import type { PaperTradingSlice } from "@/lib/slices/paper-trading-slice";
+import { createConnectionSlice, normalizeConnectionRehydrate } from "@/lib/slices/connection-slice";
+import type { ConnectionSlice } from "@/lib/slices/connection-slice";
 import { templateToStudies } from "@/lib/studies";
 import type { ChartPaneState, IndicatorInstance, IndicatorTemplate } from "@/types";
 
@@ -47,9 +47,15 @@ export type Store = UiSlice &
   ChartSlice &
   DrawingSlice &
   MarketDataSlice &
-  PaperTradingSlice;
+  ConnectionSlice;
 
-/** Exact persisted field set for maws.workspace.v6 — 50 keys, shape frozen by tests/persistence-compat.test.ts. */
+/**
+ * Persisted field set for maws.workspace.v6.
+ * Paper trading fields (orders, positions, orderHistory, balanceHistory,
+ * journal, mockBalance, mockRealized, paperAccount, connectedBroker) were
+ * removed when paper trading was removed. Legacy browser storage may still
+ * contain those keys; they are ignored on rehydration.
+ */
 export const workspacePartialize = (state: Store) => ({
   layoutCount: state.layoutCount,
   orientation: state.orientation,
@@ -57,6 +63,11 @@ export const workspacePartialize = (state: Store) => ({
   layoutSync: state.layoutSync,
   activePaneId: state.activePaneId,
   panes: state.panes,
+  panesVelaState: Object.fromEntries(
+    (state.panes ?? [])
+      .filter((p) => p.velaState != null)
+      .map((p) => [p.id, p.velaState]),
+  ),
   watchlist: state.watchlist,
   watchlistGroups: state.watchlistGroups,
   drawingTool: state.drawingTool,
@@ -69,6 +80,7 @@ export const workspacePartialize = (state: Store) => ({
   bottomOpen: state.bottomOpen,
   bottomTab: state.bottomTab,
   rightDock: state.rightDock,
+  rightDockOrder: state.rightDockOrder,
   rightWidth: state.rightWidth,
   calendarNewsSplit: state.calendarNewsSplit,
   bottomHeight: state.bottomHeight,
@@ -83,11 +95,6 @@ export const workspacePartialize = (state: Store) => ({
   appSettings: state.appSettings,
   indicatorSettings: state.indicatorSettings,
   alerts: state.alerts,
-  orders: state.orders,
-  positions: state.positions,
-  orderHistory: state.orderHistory,
-  balanceHistory: state.balanceHistory,
-  journal: state.journal,
   watchlistHeight: state.watchlistHeight,
   strategyCardsHeight: state.strategyCardsHeight,
   autoScaleByPane: state.autoScaleByPane,
@@ -96,17 +103,11 @@ export const workspacePartialize = (state: Store) => ({
   chartTemplates: state.chartTemplates,
   indicatorTemplates: state.indicatorTemplates,
   activeIndicatorTemplateId: state.activeIndicatorTemplateId,
-  // Live attachment is confirmed by the server and must never survive a
-  // reload as an unverified browser claim.
-  connectedBroker: state.connectedBroker === "mock" ? "mock" : null,
-  mockBalance: state.mockBalance,
-  mockRealized: state.mockRealized,
-  paperAccount: state.paperAccount,
   symbolTrading: state.symbolTrading,
 });
 
-export const useAppStore = create<Store>()(
-  persist(
+function createAppStore() {
+  return create<Store>()(persist(
     (set, get) => ({
       ...createUiSlice(set, get),
       ...createWatchlistSlice(set, get),
@@ -115,7 +116,7 @@ export const useAppStore = create<Store>()(
       ...createChartSlice(set, get),
       ...createDrawingSlice(set, get),
       ...createMarketDataSlice(set, get),
-      ...createPaperTradingSlice(set, get),
+      ...createConnectionSlice(set),
     }),
     {
       name: MAWS_WORKSPACE_KEY,
@@ -161,11 +162,56 @@ export const useAppStore = create<Store>()(
         normalizeSymbolSettingsRehydrate(state);
         normalizeWatchlistRehydrate(state);
         normalizeNewsRehydrate(state);
-        normalizePaperTradingRehydrate(state);
+        normalizeConnectionRehydrate(state);
       },
     },
-  ),
-);
+  ));
+}
+
+type AppStore = ReturnType<typeof createAppStore>;
+
+/**
+ * One store per PAGE, not per module evaluation.
+ *
+ * `next dev` re-evaluates a module when it (or something it imports) changes. A fresh
+ * `create()` then handed the new module copy an EMPTY store, while already-mounted
+ * consumers kept the instance they captured — the Vela workspace host, which
+ * subscribes once in a `[]` effect and pushes pane symbol/timeframe edits into the
+ * cells, went on watching the OLD store. The shell (watchlist selection, timeframe
+ * buttons) moved; the candles did not. Reusing the instance across evaluations keeps
+ * one source of truth; in production the module is evaluated once, so this is a no-op.
+ */
+const storeHost = globalThis as typeof globalThis & { __mawsAppStore?: AppStore };
+// `development` only: a production build evaluates modules once, and tests rely on
+// `jest.isolateModules` handing them a FRESH store per case.
+const shareAcrossEvaluations = process.env.NODE_ENV === "development";
+const previousStore = shareAcrossEvaluations ? storeHost.__mawsAppStore : undefined;
+
+export const useAppStore: AppStore =
+  previousStore ?? createAppStore();
+if (shareAcrossEvaluations) {
+  if (previousStore) {
+    const refreshedWatchlistActions = createWatchlistSlice(
+      (partial) => useAppStore.setState(partial),
+      () => useAppStore.getState(),
+    );
+    useAppStore.setState({
+      toggleWatchlistCollapsed: refreshedWatchlistActions.toggleWatchlistCollapsed,
+      toggleWatchlistGroup: refreshedWatchlistActions.toggleWatchlistGroup,
+      renameWatchlist: refreshedWatchlistActions.renameWatchlist,
+      createWatchlist: refreshedWatchlistActions.createWatchlist,
+      activateWatchlist: refreshedWatchlistActions.activateWatchlist,
+      deleteWatchlist: refreshedWatchlistActions.deleteWatchlist,
+      addToWatchlist: refreshedWatchlistActions.addToWatchlist,
+      removeFromWatchlist: refreshedWatchlistActions.removeFromWatchlist,
+      moveWatchlistSymbol: refreshedWatchlistActions.moveWatchlistSymbol,
+      reorderWatchlist: refreshedWatchlistActions.reorderWatchlist,
+      setWatchlistOrder: refreshedWatchlistActions.setWatchlistOrder,
+      setWatchlistHeight: refreshedWatchlistActions.setWatchlistHeight,
+    });
+  }
+  storeHost.__mawsAppStore = useAppStore;
+}
 
 export function useActivePane(): ChartPaneState {
   return useAppStore((s) => {

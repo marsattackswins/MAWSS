@@ -6,11 +6,11 @@ MAWS is a local multi-chart terminal for market analysis and trading workflows w
 
 ## Overview
 
-MAWS provides a secure, browser-based interface for cryptocurrency futures trading with real-time market data, order management, position tracking, and risk controls. It supports multiple deployment modes from local paper trading to production execution.
+MAWS provides a secure, browser-based interface for cryptocurrency futures trading with real-time market data, order management, position tracking, and risk controls. It supports multiple deployment modes from local chart-only mode to production execution.
 
 ### Key Features
 
-- **Multi-Chart Terminal**: Simultaneous chart analysis with custom indicators and drawings
+- **Multi-Chart Terminal**: Simultaneous chart analysis with custom indicators and drawings (powered by LuxAlgo's Vela charting engine)
 - **Live Trading**: Direct integration with Binance USD-M Futures (testnet and production)
 - **Broker Abstraction**: Extensible interface for multi-broker support (currently Binance)
 - **Risk Management**: Configurable risk limits, price collars, and execution gates
@@ -25,7 +25,7 @@ MAWS provides a secure, browser-based interface for cryptocurrency futures tradi
 graph TB
     subgraph "Client Layer"
         UI[Next.js Frontend]
-        Charts[Lightweight Charts]
+        Charts[Vela Charting Engine]
     end
 
     subgraph "API Layer"
@@ -85,7 +85,7 @@ graph TB
 
 MAWS supports four environment modes with progressively stricter requirements:
 
-- **local**: Chart Only startup with no attached trading account or server trading manager; public Binance market data remains available, and Paper, Testnet, and Production can be attached from the UI
+- **local**: Chart Only startup with no attached trading account or server trading manager; public Binance market data remains available, and Testnet and Production can be attached from the UI
 - **testnet**: Binance USD-M Futures Testnet startup context, requiring authentication and Testnet credentials
 - **shadow**: Production market data with read-only account, zero order submissions
 - **production**: Real trading startup context, requiring all risk limits and execution gates enabled
@@ -100,6 +100,20 @@ The system uses a broker-agnostic interface (`IBroker`) that normalizes operatio
 - Event-driven updates via SSE instead of polling
 - Async initialization with connection lifecycle management
 - Stateless operations with external state authority
+
+### Charting Engine
+
+MAWS uses LuxAlgo's Vela charting library (Apache-2.0) as its primary charting engine. The vendored source lives in `lib/charting/` and is consumed directly by the app:
+
+- **Multi-cell workspace**: Grid layout with synchronized crosshair, viewport, symbol, and timeframe
+- **Native indicators**: Bollinger Bands, MACD, RSI, order blocks, PMO, volume profiles, and more
+- **Drawing tools**: Trend lines, horizontal lines, rectangles, fib retracements, and custom drawings
+- **Event marks**: Economic calendar releases and news headlines on the timeline
+- **Replay mode**: Historical playback with seek controls and bar-by-bar stepping
+- **Layout persistence**: Save and restore workspace layouts with drawings and settings
+- **Pine Script support**: Execute TradingView-style Pine indicators via @luxalgo/vela-pinets
+
+The Vela integration is documented in `docs/vela-integration-audit.md` and `lib/charting/README.md`. The engine's own test suite runs via `npm run test:charting` (vitest), while the app's jest suite mocks the engine via `__mocks__/vela.js`.
 
 ### Circuit Breakers
 
@@ -180,7 +194,7 @@ npm run dev
 ```
 
 - Runs on http://localhost:3000
-- Starts in Chart Only; Paper Trading needs no credentials
+- Starts in Chart Only (disconnected)
 - Testnet or Production can be attached from the Trade screen after server-side setup and operator login
 - SQLite database in `.maws/maws.db`
 
@@ -302,7 +316,7 @@ sudo systemctl stop maws
 Critical environment variables (see `.env.example` for complete list):
 
 - `MAWS_ENV`: Deployment mode (local|testnet|shadow|production)
-- `MAWS_DEFAULT_PROFILE`: Safe profile metadata default (paper unless explicitly set)
+- `MAWS_DEFAULT_PROFILE`: Safe profile metadata default (binance-testnet unless explicitly set)
 - `MAWS_OPERATOR_AUTH`: Operator credential hash
 - `MAWS_BINANCE_TESTNET_API_KEY/SECRET`: Separate testnet credentials
 
@@ -500,6 +514,7 @@ node scripts/restore-backup.mjs .maws/backups/<file>.db.enc
 - [Security Model](SECURITY.md) - Authentication, secrets, and security practices
 - [Architecture Decisions](DECISIONS/) - ADRs for major technical choices
 - [Runbooks](runbooks/) - Operational runbooks for common procedures
+- [Vela Integration Audit](vela-integration-audit.md) - Detailed audit of the Vela charting engine integration
 
 ## See Also
 

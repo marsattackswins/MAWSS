@@ -22,6 +22,9 @@ export interface SymbolConstraints {
   stepSize: Dec;
   minQty: Dec;
   maxQty: Dec;
+  marketStepSize: Dec;
+  marketMinQty: Dec;
+  marketMaxQty: Dec;
   minNotional: Dec | null;
   maxNumOrders: number | null;
 }
@@ -36,6 +39,9 @@ export function extractConstraints(info: ExchangeSymbolInfo): SymbolConstraints 
     stepSize: parseDec("0.00000001"),
     minQty: parseDec("0"),
     maxQty: parseDec("1000000000"),
+    marketStepSize: parseDec("0.00000001"),
+    marketMinQty: parseDec("0"),
+    marketMaxQty: parseDec("1000000000"),
     minNotional: null,
     maxNumOrders: null,
   };
@@ -50,6 +56,11 @@ export function extractConstraints(info: ExchangeSymbolInfo): SymbolConstraints 
         if (f.stepSize) c.stepSize = parseDec(f.stepSize);
         if (f.minQty) c.minQty = parseDec(f.minQty);
         if (f.maxQty) c.maxQty = parseDec(f.maxQty);
+        break;
+      case "MARKET_LOT_SIZE":
+        if (f.stepSize) c.marketStepSize = parseDec(f.stepSize);
+        if (f.minQty) c.marketMinQty = parseDec(f.minQty);
+        if (f.maxQty) c.marketMaxQty = parseDec(f.maxQty);
         break;
       case "MIN_NOTIONAL":
         if (f.notional) c.minNotional = parseDec(f.notional);
@@ -135,4 +146,28 @@ export function validateAgainstConstraints(c: SymbolConstraints, input: Validati
 /** Notional computed exactly as price * qty. */
 export function orderNotional(price: string, qty: string): Dec {
   return abs(mul(parseDec(price), parseDec(qty)));
+}
+
+export function validateMarketQty(
+  constraints: SymbolConstraints,
+  qty: string,
+  price: string,
+): string[] {
+  const errors: string[] = [];
+  let quantity: Dec;
+  try {
+    quantity = parseDec(qty);
+  } catch {
+    return ["market qty is not a valid decimal"];
+  }
+  if (!matchesStep(quantity, constraints.marketStepSize)) {
+    errors.push(`market qty ${qty} must be a multiple of stepSize ${toStr(constraints.marketStepSize)}`);
+  }
+  if (lte(quantity, parseDec("0"))) errors.push("market qty must be positive");
+  if (lt(quantity, constraints.marketMinQty)) errors.push(`market qty below minQty ${toStr(constraints.marketMinQty)}`);
+  if (gt(quantity, constraints.marketMaxQty)) errors.push(`market qty above maxQty ${toStr(constraints.marketMaxQty)}`);
+  if (constraints.minNotional && lt(orderNotional(price, qty), constraints.minNotional)) {
+    errors.push(`market order notional below minNotional ${toStr(constraints.minNotional)}`);
+  }
+  return errors;
 }

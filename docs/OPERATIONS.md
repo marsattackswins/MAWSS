@@ -2,6 +2,60 @@
 
 This document covers environment variables, configuration schema, secrets handling, circuit breakers, rate limits, logging/metrics, backup/restore, and incident response procedures.
 
+## Production first-start checklist
+
+Complete every item before the first production start. The database migration
+is one-way and the key permissions are set outside this repository, so a missed
+step is expensive to undo once the server has started.
+
+### Required environment
+
+- `MAWS_ENV=production`; `MAWS_ENABLE_REVERSE` must be unset or `false`.
+- `MAWS_OPERATOR_AUTH` in `<hex salt>:<hex scrypt hash>` format, generated with
+  `npm run gen-operator-auth`.
+- `MAWS_BINANCE_PRODUCTION_API_KEY` and `MAWS_BINANCE_PRODUCTION_API_SECRET`.
+  Do not also set a conflicting legacy `MAWS_BINANCE_API_KEY`/
+  `MAWS_BINANCE_API_SECRET` pair: startup fails closed with
+  `MAWS_PROFILE_CONFIGURATION_INVALID`.
+- All nine risk limits, explicitly, as positive finite numbers; production
+  startup names any that are missing:
+  - `MAWS_RISK_MAX_ORDER_NOTIONAL`
+  - `MAWS_RISK_MAX_GROSS_EXPOSURE`
+  - `MAWS_RISK_MAX_OPEN_ORDERS`
+  - `MAWS_RISK_MAX_OPEN_POSITIONS`
+  - `MAWS_RISK_DAILY_LOSS_PCT`
+  - `MAWS_RISK_PRICE_COLLAR_PCT`
+  - `MAWS_RISK_MAX_LEVERAGE`
+  - `MAWS_RISK_MAX_MARGIN_RATIO`
+  - `MAWS_RISK_MIN_LIQ_DISTANCE_PCT`
+
+### Optional
+
+- `MAWS_HEALTH_TOKEN`: read-only token for `/api/health`, `/api/health/broker`,
+  `/api/admin/health`, and `/api/admin/metrics`.
+- `MAWS_EMERGENCY_TOKEN`: separate token that can only authorize emergency
+  flatten. Both tokens must be at least 32 characters and differ from each
+  other and from the operator password.
+
+### Network and exchange
+
+- Behind nginx, set `MAWS_TRUST_PROXY=true`. The proxy must overwrite
+  `X-Forwarded-For` with `$remote_addr` and must be the only ingress; otherwise
+  every client shares the same login rate-limit key.
+- Bind Node to loopback and let nginx own the public interface: `HOSTNAME=127.0.0.1`
+  for the standalone server and `MAWS_SUPERVISOR_BIND=127.0.0.1` so the
+  supervisor's port takeover is not exposed. Do not bind `0.0.0.0` on a public host.
+- Restrict the Binance API key to the server's egress IP and disable withdrawals
+  on that key.
+
+### Data safety
+
+- Back up `.maws/` (the database plus its `-wal`/`-shm` sidecars) before the
+  first start. Migrations are one-way: there is no down migration, and rollback
+  means restoring that backup.
+- Do not run two AI tools on this repository at the same time. Concurrent agents
+  can interleave file writes, commits, and database migrations.
+
 ## Environment Variables
 
 ### Required Variables
@@ -12,15 +66,15 @@ This document covers environment variables, configuration schema, secrets handli
 **Default**: `local`
 **Purpose**: Selects the server deployment context and risk enforcement. The active trading profile is selected from the UI.
 
-- `local`: Chart Only startup; Paper, Testnet, and Production can be attached from the UI when configured and authenticated
-- `testnet`: Binance USD-M Futures Testnet startup context, requires auth and testnet credentials
+- `local`: Chart Only startup; Testnet and Production can be attached from the UI when configured and authenticated
+- `testnet`: Binance USD-M Futures Demo Trading startup context (REST `demo-fapi.binance.com`, WebSocket `demo-fstream.binance.com`), requires auth and demo credentials. Demo and live keys are separate; algo-order and margin-field behavior on demo is unverified until the integration smoke test runs.
 - `shadow`: Production market data with read-only account, zero submissions
 - `production`: Real trading, requires all risk limits and execution gates
 
 #### MAWS_DEFAULT_PROFILE
 **Description**: Optional preferred profile metadata
-**Values**: `paper` | `binance-testnet` | `binance-production`
-**Default**: `paper`
+**Values**: `binance-testnet` | `binance-production`
+**Default**: `binance-testnet`
 **Purpose**: Optional metadata for deployments that want to label a preferred profile. It does not select or switch the active runtime; the UI profile chooser is authoritative after startup.
 
 #### MAWS_OPERATOR_AUTH
@@ -82,6 +136,14 @@ Binance credentials; use the separate profile-specific variables instead.
 **Default**: `false`
 **Purpose**: Enable when reverse proxy strips forwarding headers
 
+Set `MAWS_TRUST_PROXY=true` when MAWS is behind the provided nginx reverse
+proxy. That configuration overwrites `X-Forwarded-For` with `$remote_addr`
+before forwarding requests to MAWS. Without trusted proxy configuration,
+MAWS uses the shared IP key `direct`; consequently, failed logins from one
+client can consume the same five-attempt login limit used by every client for
+up to 15 minutes. Do not enable proxy trust unless the proxy is the sole
+ingress and overwrites inbound forwarding headers.
+
 #### MAWS_BACKUP_KEY
 **Description**: AES-256 key for encrypted backups
 **Format**: 64 hex characters (32 bytes)
@@ -94,11 +156,18 @@ node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"
 
 
 #### MAWS_HEALTH_TOKEN
-**Description**: Shared token for health endpoints
-**Format**: String
+**Description**: Read-only token for monitoring endpoints
+**Format**: At least 32 characters; must differ from the emergency token and operator password
 **Purpose**: External monitoring without session authentication
 
-**Usage**: Send via `x-maws-health-token` header (never in URLs)
+**Usage**: Send via `x-maws-health-token` header (never in URLs). It is accepted only by `/api/health`, `/api/health/broker`, `/api/admin/health`, and `/api/admin/metrics`; token-authorized responses contain health status or non-trading process metrics only. It cannot access trading/account details or authorize any mutation.
+
+#### MAWS_EMERGENCY_TOKEN
+**Description**: Optional alternative credential for emergency flatten only
+**Format**: At least 32 characters; must differ from the health token and operator password
+**Purpose**: Authorize `POST /api/live/emergency/flatten` when an operator session is unavailable
+
+**Usage**: Send via `x-maws-emergency-token`. It grants no access to health, account, position, order, admin, or other mutation endpoints. Failed token attempts are rate-limited per client IP. Never put either token in URLs or logs.
 
 #### MAWS_ALERT_WEBHOOK_URL
 **Description**: Out-of-band webhook alert URL
@@ -106,6 +175,11 @@ node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"
 **Purpose**: Alerts on fills, freezes, stream failures
 
 ### Tuning Variables
+
+#### MAWS_PROTECTION_PENDING_MAX_AGE_MS
+**Description**: Maximum age of an interrupted protective-order replacement eligible for automatic recovery
+**Default**: `120000` (2 minutes)
+**Purpose**: Reconciliation restores only recent `PENDING_REPLACE` protection intents. Older pending intents are left unprotected and alerted; they are never automatically restored.
 
 #### MAWS_RECV_WINDOW_MS
 **Description**: Binance API receive window
@@ -129,41 +203,125 @@ node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"
 
 ### Risk Limit Variables
 
+All nine variables below must be explicitly configured with positive finite
+values when `MAWS_ENV=production` or when attaching the Production profile.
+Production startup or profile attachment fails with the names of any missing
+variables. Testnet and local modes continue to use the documented defaults
+when these values are omitted.
+
 #### MAWS_RISK_MAX_ORDER_NOTIONAL
 **Description**: Maximum order notional value (USD)
 **Default**: `50`
-**Production**: Must be positive finite number
+**Production**: Required explicitly; must be positive finite number
 **Purpose**: Reject orders exceeding this notional
 
 #### MAWS_RISK_MAX_GROSS_EXPOSURE
 **Description**: Maximum gross exposure (USD)
 **Default**: `100`
-**Production**: Must be positive finite number
+**Production**: Required explicitly; must be positive finite number
 **Purpose**: Limit total position exposure
 
 #### MAWS_RISK_MAX_OPEN_ORDERS
 **Description**: Maximum open orders count
 **Default**: `10`
-**Production**: Must be positive finite number
+**Production**: Required explicitly; must be positive finite number
 **Purpose**: Limit concurrent open orders
 
 #### MAWS_RISK_MAX_OPEN_POSITIONS
 **Description**: Maximum open positions count
 **Default**: `3`
-**Production**: Must be positive finite number
+**Production**: Required explicitly; must be positive finite number
 **Purpose**: Limit concurrent open positions
 
 #### MAWS_RISK_DAILY_LOSS_PCT
 **Description**: Daily loss limit percentage
 **Default**: `50`
-**Production**: Must be positive finite number
+**Production**: Required explicitly; must be positive finite number
 **Purpose**: Stop trading after daily loss percentage
 
 #### MAWS_RISK_PRICE_COLLAR_PCT
 **Description**: Price collar percentage
 **Default**: `5`
-**Production**: Must be positive finite number
+**Production**: Required explicitly; must be positive finite number
 **Purpose**: Reject orders with prices outside collar
+
+#### MAWS_RISK_MAX_LEVERAGE
+**Description**: Maximum leverage allowed for risk-increasing orders
+**Default**: `10`
+**Production**: Required explicitly; must be positive finite number
+**Purpose**: Reject orders or leverage changes above this cap. Reduce-only, close,
+and emergency-close paths do not change leverage and are exempt from risk checks.
+Risk-increasing orders must provide a leverage at or below this cap or have a
+known, cached per-symbol leverage that is within the cap; unknown leverage is
+rejected rather than assumed.
+
+#### MAWS_RISK_MAX_MARGIN_RATIO
+**Description**: Maximum maintenance-margin / margin-balance ratio (decimal ratio, not percentage)
+**Default**: `0.5` (50%)
+**Production**: Required explicitly; must be positive finite number
+**Purpose**: Reject new risk-increasing orders when maintenance margin divided
+by margin balance exceeds this threshold. Equality passes; values above it fail.
+
+#### MAWS_RISK_MIN_LIQ_DISTANCE_PCT
+**Description**: Minimum mark-price distance from liquidation price (percentage)
+**Default**: `5`
+**Production**: Required explicitly; must be positive finite number
+**Purpose**: Reject new risk-increasing orders if any open position is closer
+than this percentage to liquidation. Equality passes; values below it fail.
+Choose a wider buffer when appropriate for the instrument, leverage, and
+strategy; the default is not a guarantee against liquidation.
+
+Choose `MAWS_RISK_MAX_LEVERAGE` and `MAWS_RISK_MIN_LIQ_DISTANCE_PCT` together.
+Higher leverage generally reduces the distance to liquidation, so an otherwise
+valid position at the leverage cap can be rejected by the minimum-distance
+guard. Calibrate both values for the symbols and maintenance-margin tiers you
+trade; neither setting guarantees that liquidation cannot occur.
+
+The daily loss guard uses realized P&L from the durable fills log since UTC
+midnight plus the sum of open-position unrealized P&L from mark-derived
+positions. The manager treats unrealized P&L as fresh only when the account
+snapshot is within `MAWS_SNAPSHOT_MAX_AGE_MS` and every open position has
+exchange-mark-derived P&L updated within 10 seconds. Fill-time fallback,
+missing, non-finite, or stale data rejects risk-increasing orders; reduce-only,
+close, and emergency-close orders remain available. The existing realized-only
+daily-loss limit remains independently enforced in addition to the combined
+realized-plus-unrealized loss limit.
+
+Margin health uses `totalMaintMargin` and `totalMarginBalance` from the existing
+account snapshot; no additional exchange request is made. Position mark and
+liquidation prices come from the existing position-risk snapshot and mark-price
+updates. The margin snapshot must be within `MAWS_SNAPSHOT_MAX_AGE_MS`; open
+position marks must be exchange-derived and no more than 10 seconds old. Missing
+or stale data fails closed for risk-increasing orders while positions are open.
+Zero or missing liquidation prices are treated as not applicable. With no open
+positions, both margin-health checks pass without requiring those values.
+Reduce-only, close-position, `isClose`, and emergency-close orders remain
+exempt so they can reduce risk.
+
+### Binance Conditional Algo Orders
+
+`STOP_MARKET` and `TAKE_PROFIT_MARKET` orders use Binance's USDⓈ-M Algo Order
+API (`POST/DELETE /fapi/v1/algoOrder`, `GET /fapi/v1/openAlgoOrders`, and
+`DELETE /fapi/v1/algoOpenOrders`). They are not submitted or discovered through
+the standard `/fapi/v1/order` and `/fapi/v1/openOrders` endpoints. The server
+maps `triggerPrice` and `clientAlgoId` into its normalized live-order state;
+`ALGO_UPDATE` events are followed by REST refreshes before protection decisions.
+
+Close-position TP/SL algo orders do not add gross exposure and bypass the
+risk-increasing-order checks, so they cannot block their own placement. They do
+count toward the open-order count used to gate later risk-increasing orders.
+Standalone quantity-based conditional orders are risk-checked and count toward
+that cap.
+
+HTTP 429 responses are returned to the operation only after one bounded wait
+using `Retry-After` (maximum 30 seconds); the order service then follows its
+normal definite-rejection/rollback path without a blind retry. HTTP 418 pauses
+all Binance REST requests until the supplied `Retry-After` period expires. If a
+418 response has no usable `Retry-After`, the pause remains latched; confirm the
+exchange ban has expired before restarting MAWS. The service marks affected
+protection UNPROTECTED and emits a high-severity alert rather than retrying.
+Binance error `-4120` is surfaced as a high-severity Algo API configuration
+error.
 
 ### Circuit Breaker Variables
 
@@ -767,7 +925,7 @@ node scripts/restore-backup.mjs .maws/backups/<file>.db.enc
 ### Profile-Scoped Database Migration
 
 The browser profile selector is enabled for authenticated operators. Server-side profile switching is protected by the live profile API and coordinator. The profile-scoped schema migration separates
-paper, Binance Testnet, Binance Production, and shadow persistence. Existing rows without
+Binance Testnet, Binance Live, and shadow persistence (the `paper` key remains as a legacy DB key for historical data only). Existing rows without
 provenance are preserved under `profile_id = 'legacy-unknown'`; MAWS never classifies them
 from the current environment, credentials, symbols, timestamps, or IDs. Quarantined rows
 are excluded from active live queries, risk checks, P&L, reconciliation, health, selected
@@ -1039,13 +1197,14 @@ The admin dashboard is available at `http://localhost:3000/admin` and refreshes 
 
 ### Authentication and environment behavior
 
-- In `MAWS_ENV=local` (the default), `/api/health` and `/api/admin/health` allow anonymous access. Local startup is Chart Only; charting and browser-local Paper Trading remain available without credentials.
+- In `MAWS_ENV=local` (the default), `/api/health` and `/api/admin/health` allow anonymous access. Local startup is Chart Only; charting remains available without credentials.
 - When Binance profile credentials are configured, attaching Testnet or Production from Chart Only requires `MAWS_OPERATOR_AUTH` and an authenticated operator session. The profile chooser exposes only safe metadata.
-- Outside local mode, health and admin endpoints require either a valid operator session or the `x-maws-health-token` header when `MAWS_HEALTH_TOKEN` is configured. Keep the token out of URLs, query parameters, browser history, logs, and source control.
+- Outside local mode, `/api/health`, `/api/health/broker`, `/api/admin/health`, and `/api/admin/metrics` allow a valid operator session or the read-only `x-maws-health-token`. Admin configuration, logs, risk, performance, and `/api/status/trading-health` require an operator session. Health-token responses are sanitized and never include account, position, or order data.
+- `MAWS_HEALTH_TOKEN` no longer authorizes emergency flatten. To migrate, configure a distinct `MAWS_EMERGENCY_TOKEN` if token-based flatten is required; otherwise flatten requires an operator session. Both configured tokens must be at least 32 characters and differ from each other and the operator password.
 - To use a session, sign in at `/login` and then return to `/admin`.
 
 ```bash
-# Session-independent access for monitoring (non-local modes)
+# Session-independent, read-only monitoring access (non-local modes)
 curl -H "x-maws-health-token: <token>" \
   http://localhost:3000/api/health
 
@@ -1060,7 +1219,7 @@ A `401` response in a non-local environment means that neither authentication me
 | Symptom | Likely cause | Action |
 |---|---|---|
 | `Failed to fetch metrics` or a network error | The development server is stopped, the port is wrong, or the request failed before reaching the API | Run `npm run dev`, confirm the port in the terminal, then retry `/admin` |
-| `Not authenticated` or `401` | Missing/expired operator session or invalid health-token header | Log in at `/login`, or send `x-maws-health-token` to the endpoint; do not put the token in the URL |
+| `Not authenticated` or `401` | Missing/expired operator session, or a health token used outside its read-only monitoring endpoints | Log in at `/login`; use `x-maws-health-token` only on the documented monitoring endpoints and never put it in a URL |
 | `Local mode` or empty/zero live metrics | `MAWS_ENV=local` with no active profile, or no live manager/broker is configured | This is expected for Chart Only. Attach a configured Testnet or Production profile from the UI after authenticating; no restart is required for switching |
 | `500` from a health endpoint | Server-side configuration or health-check failure | Inspect the server terminal logs and validate environment configuration |
 | `Connection refused` | No process is listening on the configured port | Start MAWS with `npm run dev` and use the displayed URL |

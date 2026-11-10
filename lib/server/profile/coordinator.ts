@@ -11,6 +11,7 @@ import { getBroker, replaceBrokerForCoordinator, clearBrokerForCoordinator } fro
 import {
   PROFILE_IDS,
   serverConfig,
+  productionRiskConfigurationError,
   type EnvConfig,
   type ProfileId,
   type SafeProfileMetadata,
@@ -29,7 +30,7 @@ export type ProfilePhase = "idle" | "switching" | "ready" | "degraded" | "detach
 
 export type ProfileRuntimeStatus = {
   profileId: ProfileId | null;
-  environment: "paper" | "testnet" | "production" | null;
+  environment: "testnet" | "production" | null;
   phase: ProfilePhase;
   ready: boolean;
   managerStatus: string;
@@ -43,6 +44,8 @@ export type ProfileRuntimeStatus = {
 export type ProfileErrorCode =
   | "invalid_profile"
   | "production_confirmation_required"
+  | "local_profile_switch_disabled"
+  | "production_risk_limits_invalid"
   | "profile_switch_in_progress"
   | "exposure_present"
   | "exposure_unknown"
@@ -54,7 +57,7 @@ export type ProfileErrorCode =
   | "stale_profile";
 
 export class ProfileCoordinatorError extends Error {
-  constructor(readonly code: ProfileErrorCode, message = code) {
+  constructor(readonly code: ProfileErrorCode, message: string = code) {
     super(message);
     this.name = "ProfileCoordinatorError";
   }
@@ -76,7 +79,6 @@ function isProfileId(value: unknown): value is ProfileId {
 }
 
 function environmentForProfile(profileId: ProfileId): EnvConfig["env"] {
-  if (profileId === "paper") return "local";
   if (profileId === "binance-testnet") return "testnet";
   return "production";
 }
@@ -94,8 +96,12 @@ function safeEnvironment(config: EnvConfig): ProfileRuntimeStatus["environment"]
 
 function profileConfig(base: EnvConfig, profileId: ProfileId): EnvConfig {
   const profile = base.profiles[profileId];
-  if (profileId !== "paper" && !profile.configured) {
+  if (!profile.configured) {
     throw new ProfileCoordinatorError("configuration_unavailable");
+  }
+  if (profileId === "binance-production") {
+    const riskError = productionRiskConfigurationError(base);
+    if (riskError) throw new ProfileCoordinatorError("production_risk_limits_invalid", riskError);
   }
   return {
     ...base,
@@ -174,6 +180,7 @@ function reasonForHealth(config: EnvConfig, manager: BinanceLiveManager | null):
 
 export function profileErrorStatus(code: ProfileErrorCode): number {
   if (code === "invalid_profile" || code === "production_confirmation_required") return 400;
+  if (code === "local_profile_switch_disabled") return 403;
   if (code === "target_start_failed") return 502;
   if (code === "rollback_failed" || code === "configuration_unavailable") return 503;
   return 409;
@@ -299,12 +306,32 @@ export class ProfileCoordinator {
   async switchProfile(request: ProfileSwitchRequest): Promise<ProfileRuntimeStatus> {
     if (this.switchPromise) throw new ProfileCoordinatorError("profile_switch_in_progress");
     if (!isProfileId(request.profileId)) throw new ProfileCoordinatorError("invalid_profile");
+    if (serverConfig().env === "local") {
+      throw new ProfileCoordinatorError(
+        "local_profile_switch_disabled",
+        "MAWS_ENV=local is Chart Only; set MAWS_ENV=testnet or MAWS_ENV=production to attach a Binance profile",
+      );
+    }
     if (request.profileId === "binance-production" && request.confirmProduction !== true) {
       throw new ProfileCoordinatorError("production_confirmation_required");
     }
     if (!safeRequestId(request.requestId)) throw new ProfileCoordinatorError("invalid_profile");
     const target = request.profileId;
-    const pending = target === "paper" ? this.detachProfile() : this.performSwitch(target);
+    const pending = this.performSwitch(target);
+    const tracked = pending.finally(() => {
+      if (this.switchPromise === tracked) this.switchPromise = null;
+    });
+    this.switchPromise = tracked;
+    return tracked;
+  }
+
+  /**
+   * Detaches the server from any active live profile and returns to the idle
+   * (disconnected) state. Used by the disconnect endpoint.
+   */
+  async detach(): Promise<ProfileRuntimeStatus> {
+    if (this.switchPromise) throw new ProfileCoordinatorError("profile_switch_in_progress");
+    const pending = this.detachProfile();
     const tracked = pending.finally(() => {
       if (this.switchPromise === tracked) this.switchPromise = null;
     });

@@ -23,6 +23,33 @@ export function defaultProtect(entry: number, side: "long" | "short") {
  * is matched by its stop price equaling the position's TP (or SL) value —
  * both figures come from the same server snapshot.
  */
+/**
+ * True when a TP/SL price sits on the correct side of the entry: a take profit
+ * must be in profit (above a long / below a short), a stop loss in loss. A drag
+ * that crosses the entry would silently invert the bracket, so callers reject it
+ * instead of sending it to the broker.
+ */
+export function validExitPrice(
+  side: "long" | "short",
+  entry: number,
+  leg: "tp" | "sl",
+  price: number,
+): boolean {
+  if (!Number.isFinite(entry) || !Number.isFinite(price) || price <= 0) return false;
+  const profit = side === "long" ? price > entry : price < entry;
+  const loss = side === "long" ? price < entry : price > entry;
+  return leg === "tp" ? profit : loss;
+}
+
+/** Fractions offered by the chart's close menu, in the order they are shown. */
+export const CLOSE_FRACTIONS = [0.25, 0.5, 0.75] as const;
+
+/** Fraction of a position a close action removes (clamped to (0, 1]). */
+export function clampCloseFraction(fraction: number): number {
+  if (!Number.isFinite(fraction)) return 0;
+  return Math.min(1, Math.max(0, fraction));
+}
+
 export function findProtectiveOrderId(
   orders: Array<{ id: string; symbol: string; closePosition: boolean; price: number }>,
   symbol: string,

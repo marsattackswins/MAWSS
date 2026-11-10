@@ -228,6 +228,50 @@ export const MIGRATIONS: Migration[] = [
       `CREATE INDEX IF NOT EXISTS idx_orders_profile_client ON orders_log(profile_id, client_order_id)`,
     ],
   },
+  {
+    version: 9,
+    name: "M0009 durable protective order intents",
+    up: [
+      `CREATE TABLE IF NOT EXISTS protection_intents (
+         profile_id TEXT NOT NULL CHECK (profile_id IN ('paper', 'binance-testnet', 'binance-production', 'shadow', 'legacy-unknown')),
+         symbol TEXT NOT NULL,
+         side TEXT NOT NULL CHECK (side IN ('long', 'short')),
+         tp_price TEXT,
+         sl_price TEXT,
+         updated_at INTEGER NOT NULL,
+         status TEXT NOT NULL CHECK (status IN ('PROTECTED', 'UNPROTECTED')),
+         failure_reason TEXT,
+         restore_attempted_at INTEGER NOT NULL DEFAULT 0,
+         PRIMARY KEY (profile_id, symbol)
+       )`,
+      `CREATE INDEX IF NOT EXISTS idx_protection_profile_status ON protection_intents(profile_id, status)`,
+    ],
+  },
+  {
+    version: 10,
+    name: "M0010 protection intent lifecycle and rollback prices",
+    up: [
+      `ALTER TABLE protection_intents
+         ADD COLUMN intent_status TEXT NOT NULL DEFAULT 'CONFIRMED'
+         CHECK (intent_status IN ('PENDING_REPLACE', 'CONFIRMED'))`,
+      `ALTER TABLE protection_intents ADD COLUMN previous_tp_price TEXT`,
+      `ALTER TABLE protection_intents ADD COLUMN previous_sl_price TEXT`,
+      `ALTER TABLE protection_intents ADD COLUMN created_at INTEGER NOT NULL DEFAULT 0`,
+      `UPDATE protection_intents SET created_at = updated_at WHERE created_at = 0`,
+    ],
+  },
+  {
+    version: 11,
+    name: "M0011 canonical exchange order ids",
+    up: [
+      // JSON numbers bound through better-sqlite3 reach TEXT columns as "123.0",
+      // which never matches the integer ids the REST lookups send.
+      `UPDATE order_intents
+          SET exchange_order_id = CAST(CAST(exchange_order_id AS INTEGER) AS TEXT)
+        WHERE exchange_order_id GLOB '*[0-9].0'
+          AND CAST(CAST(exchange_order_id AS INTEGER) AS TEXT) || '.0' = exchange_order_id`,
+    ],
+  },
 ];
 
 const PROFILE_CHECK =

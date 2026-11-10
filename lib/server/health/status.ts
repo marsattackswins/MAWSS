@@ -11,6 +11,7 @@ import { getDb } from "../db/connection";
 
 import { healthSignals, type HealthSignals } from "./state";
 import { circuitRegistry } from "../resilience/circuit-registry";
+import { unprotectedProtectionSymbols } from "../binance/protection";
 
 export interface HealthStatus {
   env: string;
@@ -26,6 +27,8 @@ export interface HealthStatus {
   circuitBreakerStates: Record<string, string>;
   submissionsFrozen: boolean;
   frozenReasons: string[];
+  protectionHealthy: boolean;
+  unprotectedPositions: string[];
   healthy: boolean;
 }
 
@@ -55,6 +58,8 @@ export interface AdminHealthStatus {
     balanceUsd: number;
     frozen: boolean;
     executionEnabled: boolean;
+    unprotectedPositions: string[];
+    protectionHealthy: boolean;
   };
   uptime: {
     seconds: number;
@@ -76,6 +81,10 @@ export interface AdminHealthStatus {
 export function buildHealthStatus(cfg: EnvConfig): HealthStatus {
   const signals = healthSignals();
   const execution = executionDecision(cfg);
+  const openSymbols = new Set(liveState().positions.keys());
+  const unprotectedPositions = unprotectedProtectionSymbols(persistenceProfileFromConfig(cfg))
+    .filter((symbol) => openSymbols.has(symbol));
+  const protectionHealthy = unprotectedPositions.length === 0;
 
   const now = Date.now();
   const circuitStats = circuitRegistry.getAllStats();
@@ -104,6 +113,7 @@ export function buildHealthStatus(cfg: EnvConfig): HealthStatus {
 
     const openCircuits = circuitRegistry.getOpenCircuits();
     const frozenReasons = [...execution.reasons];
+    if (!protectionHealthy) frozenReasons.push(`Unprotected positions: ${unprotectedPositions.join(", ")}`);
     if (!circuitBreakersHealthy) {
       frozenReasons.push(`Circuit breakers degraded: ${unhealthyCircuits.join(", ")}`);
     }
@@ -125,12 +135,14 @@ export function buildHealthStatus(cfg: EnvConfig): HealthStatus {
       circuitBreakerStates,
       submissionsFrozen,
       frozenReasons,
+      protectionHealthy,
+      unprotectedPositions,
       // Chart-only local mode intentionally has no server trading manager,
       // private stream, or exchange clock signal. Those are unavailable rather
       // than failed; circuit-breaker state is the only server health concern.
       healthy: chartOnlyLocal
         ? circuitBreakersHealthy
-        : managerHealthy && clockHealthy && streamHealthy && reconHealthy && circuitBreakersHealthy,
+        : managerHealthy && clockHealthy && streamHealthy && reconHealthy && circuitBreakersHealthy && protectionHealthy,
     };
   }
 
@@ -156,6 +168,7 @@ export function buildHealthStatus(cfg: EnvConfig): HealthStatus {
   const reconHealthy = signals.recon.lastResult !== "drift" && signals.recon.lastResult !== "error" && !reconCircuitOpen;
 
   const frozenReasons = [...execution.reasons];
+  if (!protectionHealthy) frozenReasons.push(`Unprotected positions: ${unprotectedPositions.join(", ")}`);
   if (!circuitBreakersHealthy) {
     frozenReasons.push(`Circuit breakers degraded: ${unhealthyCircuits.join(", ")}`);
   }
@@ -175,7 +188,9 @@ export function buildHealthStatus(cfg: EnvConfig): HealthStatus {
     circuitBreakerStates,
     submissionsFrozen,
     frozenReasons,
-    healthy: signals.managerRunning && signals.brokerStatus === "ready" && clockHealthy && streamHealthy && reconHealthy && positionModeHealthy && circuitBreakersHealthy && !submissionsFrozen,
+    protectionHealthy,
+    unprotectedPositions,
+    healthy: signals.managerRunning && signals.brokerStatus === "ready" && clockHealthy && streamHealthy && reconHealthy && positionModeHealthy && circuitBreakersHealthy && protectionHealthy && !submissionsFrozen,
   };
 }
 
@@ -242,7 +257,7 @@ export function buildAdminHealthStatus(cfg: EnvConfig): AdminHealthStatus {
     clock.status,
     database.status,
   ];
-  if (!operational.reconHealthy || (cfg.env !== "local" && !operational.positionModeHealthy)) {
+  if (!operational.reconHealthy || !operational.protectionHealthy || (cfg.env !== "local" && !operational.positionModeHealthy)) {
     componentStatuses.push("degraded");
   }
 
@@ -263,6 +278,8 @@ export function buildAdminHealthStatus(cfg: EnvConfig): AdminHealthStatus {
       balanceUsd: metrics.getGauge(METRICS.BALANCE_USD),
       frozen,
       executionEnabled,
+      unprotectedPositions: operational.unprotectedPositions,
+      protectionHealthy: operational.protectionHealthy,
     },
     uptime: {
       seconds: uptimeSeconds,

@@ -2,6 +2,7 @@
 
 export type ShortcutId =
   | "openSearch"
+  | "toggleJournal"
   | "fitChart"
   | "addAlert"
   | "buyLimit"
@@ -29,6 +30,7 @@ export const SHORTCUT_DEFS: {
   group: string;
 }[] = [
   { id: "openSearch", label: "Symbol search", group: "Navigation" },
+  { id: "toggleJournal", label: "Toggle journal", group: "Navigation" },
   { id: "fitChart", label: "Fit chart / reset scale", group: "Chart" },
   { id: "openChartSettings", label: "Chart settings", group: "Chart" },
   { id: "cursorTool", label: "Select cursor tool", group: "Drawings" },
@@ -43,6 +45,7 @@ export const SHORTCUT_DEFS: {
 
 export const DEFAULT_SHORTCUTS: ShortcutMap = {
   openSearch: { key: "/", ctrl: false, alt: false, shift: false },
+  toggleJournal: { key: "z", ctrl: false, alt: true, shift: false },
   fitChart: { key: "r", ctrl: false, alt: true, shift: false },
   addAlert: { key: "a", ctrl: false, alt: true, shift: false },
   buyLimit: { key: "t", ctrl: false, alt: false, shift: true },

@@ -4,16 +4,14 @@
  * When the live health payload reports that execution is not allowed
  * (kill switch, frozen, gates off, open circuit breakers), the dispatcher
  * must NOT reach the broker and must surface a "Trading halted: <reason>"
- * notice. Healthy health — and no live session at all (paper trading) —
- * must never block. The feed-not-live gate and business-error paths are
- * covered by their own suites; here only the execution gate is exercised.
+ * notice. When no broker is connected the dispatcher rejects up front with
+ * a "not_connected" error. The feed-not-live gate and business-error paths
+ * are covered by their own suites; here only the execution gate is exercised.
  */
 
 import { describe, test, expect, jest, beforeEach } from "@jest/globals";
 
 // The feed gate must pass so the execution gate is what gets exercised.
-// getQuote/getCandles keep the real paper engine (mock.ts) working in the
-// paper-path control test.
 jest.mock("@/lib/maws/feed", () => ({
   mawsFeed: {
     getKlineStatus: jest.fn(() => "live" as const),
@@ -241,13 +239,13 @@ describe("dispatchSubmitOrder execution gate (live broker)", () => {
     expect(submitOrderMock).toHaveBeenCalledTimes(1);
   });
 
-  test("paper trading path: unaffected by the live gate and never hits the broker", async () => {
-    useAppStore.setState({ connectedBroker: "mock" });
+  test("disconnected broker: submission is rejected and never hits the broker", async () => {
+    useAppStore.setState({ connectedBroker: null });
     useLiveStore.setState({ health: null });
 
     const res = await dispatchSubmitOrder(INPUT);
 
-    expect(res).toEqual({ ok: true });
+    expect(res).toEqual({ ok: false, error: "not_connected" });
     expect(submitOrderMock).not.toHaveBeenCalled();
   });
 });

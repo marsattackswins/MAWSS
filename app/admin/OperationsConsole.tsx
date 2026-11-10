@@ -267,7 +267,7 @@ function buildTradingBlocks({ health, tradingHealth }: ConsoleProps): Block[] {
 function envLabel(health: HealthSnapshot | null): string {
   if (health?.env === "local") return "Chart Only";
   if (health?.env === "testnet") return "Binance Testnet";
-  if (health?.env === "production") return "Binance Production";
+  if (health?.env === "production") return "Binance Live";
   return health?.env ?? "Waiting";
 }
 
@@ -416,7 +416,7 @@ function EnvironmentPanel({ health }: { health: HealthSnapshot | null }) {
       </Panel>
       <Panel title="What this means">
         <p className="text-sm text-[#787b86]">
-          Chart Only never submits server-side orders. Binance Testnet trades against the test exchange. Binance Production places real orders — treat every warning on this page as actionable.
+          Chart Only never submits server-side orders. Binance Testnet trades against the test exchange. Binance Live places real orders — treat every warning on this page as actionable.
         </p>
       </Panel>
     </PanelGrid>

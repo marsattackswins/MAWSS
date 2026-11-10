@@ -1,4 +1,4 @@
-# Integration Tests Against Binance Testnet
+# Integration Tests Against Binance Demo Trading
 
 This directory contains **real end-to-end integration tests** that submit orders to Binance's testnet and validate the complete order lifecycle, position synchronization, and stream recovery.
 
@@ -8,14 +8,25 @@ Unlike the unit tests in `tests/live-tests/`, these tests make **actual HTTP req
 
 ## Prerequisites
 
-### 1. Get Binance Testnet Credentials
+### 1. Get Binance Demo Trading Credentials
 
-1. Visit [https://testnet.binancefuture.com](https://testnet.binancefuture.com)
+1. Visit [https://demo-fapi.binance.com](https://demo-fapi.binance.com)
 2. Create an account (separate from your main Binance account)
 3. Navigate to API Management
 4. Generate a new API key pair
 5. **Important**: Enable futures trading permissions
 6. Copy your API key and secret
+
+> **Demo and live keys are separate.** Never reuse your production API key
+> for demo trading or vice versa. The server keeps them in distinct profiles
+> (`binance-testnet` / `binance-production`) and denies startup if any profile
+> resolves to a legacy host.
+>
+> **Algo-order and margin-field behavior on Demo Trading is unverified until
+> the integration smoke test runs.** Binance's Demo Trading environment may
+> not support all USDⓈ-M Algo Order endpoints or return the same margin
+> fields as production. Verify with the smoke test before relying on
+> conditional-order or margin-ratio behavior.
 
 ### 2. Configure Environment
 
@@ -35,7 +46,7 @@ MAWS_BINANCE_TESTNET_API_SECRET=your-testnet-secret-here
 ### 3. Fund Your Testnet Account
 
 Testnet accounts need USDT balance:
-1. Login to testnet.binancefuture.com
+1. Login to demo-fapi.binance.com
 2. Use the built-in "Get Testnet Funds" feature
 3. Verify you have at least 1000 USDT available
 
@@ -145,13 +156,13 @@ jobs:
 
 ### 1. Check Testnet API Status
 ```bash
-curl https://testnet.binancefuture.com/fapi/v1/ping
+curl https://demo-fapi.binance.com/fapi/v1/ping
 ```
 
 ### 2. Verify Credentials
 ```bash
 # Should return account info
-curl -X GET "https://testnet.binancefuture.com/fapi/v2/account" \
+curl -X GET "https://demo-fapi.binance.com/fapi/v2/account" \
   -H "X-MBX-APIKEY: your-key-here"
 ```
 

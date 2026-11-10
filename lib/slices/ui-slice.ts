@@ -1,6 +1,8 @@
 import {
   applyAppTheme,
   DEFAULT_APP_SETTINGS,
+  migrateLegacyAppSettings,
+  migrateMutedPanelColor,
   normalizeAppSettings,
   type AppSettings,
 } from "@/lib/app-theme";
@@ -19,14 +21,92 @@ export type BottomTab =
   | "orders"
   | "orderHistory"
   | "balanceHistory"
+  | "performance"
   | "journal";
+
+/** The three fold-out blocks of the symbol card, addressed by the dock. */
+export type SymbolPanelBlock = "news" | "sessions" | "technicals";
+
+/** The right-rail entries, in their default order (drag to rearrange). */
+export const RIGHT_DOCK_IDS: DockId[] = [
+  "strategy",
+  "calendar",
+  "objects",
+  "scripts",
+  "alerts",
+];
+
+/**
+ * Sanitize a persisted/contributed dock order: unknown ids are dropped, duplicates
+ * collapse, and any entry missing from the list is appended in its canonical place.
+ * A rail must never lose a button because a document was written by another build.
+ */
+export function normalizeDockOrder(raw: unknown): DockId[] {
+  const candidates = Array.isArray(raw) ? raw : [];
+  const seen = new Set<DockId>();
+  const order: DockId[] = [];
+  for (const value of candidates) {
+    const id = RIGHT_DOCK_IDS.find((known) => known === value);
+    if (!id || seen.has(id)) continue;
+    seen.add(id);
+    order.push(id);
+  }
+  for (const id of RIGHT_DOCK_IDS) {
+    if (!seen.has(id)) order.push(id);
+  }
+  return order;
+}
+
+/**
+ * Live drag-reorder step for the rail — the array twin of the drawing toolbar's
+ * `insertBefore(dragged, target)` / `insertBefore(dragged, target.nextSibling)`:
+ * drop `dragId` immediately before or after `targetId`. Unknown ids return the
+ * input untouched, so a stale/idless target can never scramble the rail.
+ */
+export function moveDockId(
+  ids: readonly DockId[],
+  dragId: DockId,
+  targetId: DockId,
+  after: boolean,
+): DockId[] {
+  if (dragId === targetId) return [...ids];
+  const next = ids.filter((id) => id !== dragId);
+  const at = next.indexOf(targetId);
+  if (at < 0) return [...ids];
+  next.splice(after ? at + 1 : at, 0, dragId);
+  return next;
+}
+
+/** One-slot move for the keyboard path (Alt+Up/Down); out-of-range is a no-op. */
+export function shiftDockId(ids: readonly DockId[], id: DockId, delta: number): DockId[] {
+  const next = [...ids];
+  const from = next.indexOf(id);
+  const to = from + delta;
+  if (from < 0 || to < 0 || to >= next.length) return next;
+  const [moved] = next.splice(from, 1);
+  if (moved === undefined) return next;
+  next.splice(to, 0, moved);
+  return next;
+}
+
+/** Do two rail orders describe the same arrangement? */
+export function sameDockOrder(a: readonly DockId[], b: readonly DockId[]): boolean {
+  return a.length === b.length && a.every((id, i) => id === b[i]);
+}
 
 export type UiSliceState = {
   shortcuts: ShortcutMap;
+  /** Whole-side switch kept for persisted documents and API compat — the shell
+   *  never folds the rail itself, so this only ever governs the initial body state. */
   rightOpen: boolean;
+  /** The panel body beside the rail is showing. BOTH the top-bar arrow and a
+   *  rail icon fold this — session-local, never persisted. */
+  rightPanelOpen: boolean;
   bottomOpen: boolean;
   bottomTab: BottomTab;
   rightDock: DockId;
+  /** Drag-rearranged order of the right rail (persisted). */
+  rightDockOrder: DockId[];
   rightWidth: number;
   bottomHeight: number;
   searchOpen: boolean;
@@ -35,8 +115,16 @@ export type UiSliceState = {
   settingsOpen: boolean;
   brokerDialogOpen: boolean;
   accountSettingsOpen: boolean;
+  /** Full-screen overlay hosting the vendored LuxAlgo Trade Journal (/journal). */
+  journalOverlayOpen: boolean;
+  /** Watchlist symbol-detail panel docked to the bottom strip instead of the right rail. */
+  symbolPanelDocked: boolean;
+  /** Which symbol-card blocks are expanded. Store-owned so a dock click can open one
+   *  block and fold the others, and so the states survive a dock/undock round-trip. */
+  symbolPanelNewsOpen: boolean;
+  symbolPanelSessionsOpen: boolean;
+  symbolPanelTechnicalsOpen: boolean;
   buySellMenu: BuySellMenuState;
-  tradingSettingsSymbol: string | null;
   contextMenu: ContextMenuState;
   appSettings: AppSettings;
   columnWidths: Record<string, number[]>;
@@ -47,11 +135,13 @@ export type UiSliceActions = {
   setShortcut: (id: ShortcutId, chord: ShortcutChord | null) => void;
   resetShortcuts: () => void;
   setRightOpen: (value: boolean) => void;
+  setRightPanelOpen: (value: boolean) => void;
   setBottomOpen: (value: boolean) => void;
   setBottomTab: (tab: BottomTab) => void;
   setBottomTabCollapsed: (tab: BottomTab) => void;
   toggleBottomTab: (tab: BottomTab) => void;
   setRightDock: (dock: DockId) => void;
+  setRightDockOrder: (order: DockId[]) => void;
   setRightWidth: (width: number) => void;
   setBottomHeight: (height: number) => void;
   setSearchOpen: (value: boolean) => void;
@@ -60,8 +150,15 @@ export type UiSliceActions = {
   setSettingsOpen: (value: boolean) => void;
   setBrokerDialogOpen: (value: boolean) => void;
   setAccountSettingsOpen: (value: boolean) => void;
+  setJournalOverlayOpen: (value: boolean) => void;
+  setSymbolPanelDocked: (value: boolean) => void;
+  setSymbolPanelBlock: (block: SymbolPanelBlock, open: boolean) => void;
+  toggleSymbolPanelBlock: (block: SymbolPanelBlock) => void;
+  /** Undock and expand just this block, folding the other two (a dock readout click). */
+  focusSymbolPanelBlock: (block: SymbolPanelBlock) => void;
+  /** Undock and leave every block in its current state (the price/logo click). */
+  undockSymbolPanel: () => void;
   setBuySellMenu: (menu: BuySellMenuState) => void;
-  setTradingSettingsSymbol: (symbol: string | null) => void;
   setContextMenu: (menu: ContextMenuState) => void;
   closeMenus: () => void;
   setColumnWidths: (tableId: string, widths: number[]) => void;
@@ -81,9 +178,11 @@ export function createUiSlice(set: RootSet, get: RootGet): UiSlice {
   return {
     shortcuts: { ...DEFAULT_SHORTCUTS },
     rightOpen: true,
+    rightPanelOpen: true,
     bottomOpen: false,
     bottomTab: "positions",
     rightDock: "strategy",
+    rightDockOrder: [...RIGHT_DOCK_IDS],
     rightWidth: 360,
     bottomHeight: 220,
     searchOpen: false,
@@ -92,8 +191,12 @@ export function createUiSlice(set: RootSet, get: RootGet): UiSlice {
     settingsOpen: false,
     brokerDialogOpen: false,
     accountSettingsOpen: false,
+    journalOverlayOpen: false,
+    symbolPanelDocked: false,
+    symbolPanelNewsOpen: false,
+    symbolPanelSessionsOpen: true,
+    symbolPanelTechnicalsOpen: true,
     buySellMenu: null,
-    tradingSettingsSymbol: null,
     contextMenu: null,
     appSettings: { ...DEFAULT_APP_SETTINGS },
     columnWidths: {},
@@ -102,7 +205,11 @@ export function createUiSlice(set: RootSet, get: RootGet): UiSlice {
     setShortcut: (id, chord) =>
       set({ shortcuts: { ...get().shortcuts, [id]: chord } }),
     resetShortcuts: () => set({ shortcuts: { ...DEFAULT_SHORTCUTS } }),
-    setRightOpen: (value) => set({ rightOpen: value }),
+    // Compat path: on “show”, restore the panel body as well, so old collapsed documents
+    // open with a full right side; on “hide” only the side flag moves — the rail stays.
+    setRightOpen: (value) =>
+      set(value ? { rightOpen: true, rightPanelOpen: true } : { rightOpen: false }),
+    setRightPanelOpen: (value) => set({ rightPanelOpen: value }),
     setBottomOpen: (value) => set({ bottomOpen: value }),
     setBottomTab: (tab) => set({ bottomTab: tab, bottomOpen: true }),
     setBottomTabCollapsed: (tab) => set({ bottomTab: tab, bottomOpen: false }),
@@ -115,7 +222,9 @@ export function createUiSlice(set: RootSet, get: RootGet): UiSlice {
       set({
         rightDock: dock,
         rightOpen: true,
+        rightPanelOpen: true,
       }),
+    setRightDockOrder: (order) => set({ rightDockOrder: normalizeDockOrder(order) }),
     setRightWidth: (width) => set({ rightWidth: width }),
     setBottomHeight: (height) => set({ bottomHeight: height }),
     setSearchOpen: (value) =>
@@ -155,10 +264,47 @@ export function createUiSlice(set: RootSet, get: RootGet): UiSlice {
       set({ brokerDialogOpen: value, contextMenu: null }),
     setAccountSettingsOpen: (value) =>
       set({ accountSettingsOpen: value, contextMenu: null }),
+    setJournalOverlayOpen: (value) =>
+      set(value
+        ? {
+            journalOverlayOpen: true,
+            settingsOpen: false,
+            indicatorMenuOpen: false,
+            searchOpen: false,
+            layoutMenuOpen: false,
+            contextMenu: null,
+            buySellMenu: null,
+          }
+        : { journalOverlayOpen: false }),
+    setSymbolPanelDocked: (value) => set({ symbolPanelDocked: value }),
+    setSymbolPanelBlock: (block, open) =>
+      set(
+        block === "news"
+          ? { symbolPanelNewsOpen: open }
+          : block === "sessions"
+            ? { symbolPanelSessionsOpen: open }
+            : { symbolPanelTechnicalsOpen: open },
+      ),
+    toggleSymbolPanelBlock: (block) => {
+      const s = get();
+      const open =
+        block === "news"
+          ? !s.symbolPanelNewsOpen
+          : block === "sessions"
+            ? !s.symbolPanelSessionsOpen
+            : !s.symbolPanelTechnicalsOpen;
+      get().setSymbolPanelBlock(block, open);
+    },
+    focusSymbolPanelBlock: (block) =>
+      set({
+        symbolPanelDocked: false,
+        symbolPanelNewsOpen: block === "news",
+        symbolPanelSessionsOpen: block === "sessions",
+        symbolPanelTechnicalsOpen: block === "technicals",
+      }),
+    undockSymbolPanel: () => set({ symbolPanelDocked: false }),
     setBuySellMenu: (menu) =>
       set({ buySellMenu: menu, contextMenu: menu ? null : get().contextMenu }),
-    setTradingSettingsSymbol: (symbol) =>
-      set({ tradingSettingsSymbol: symbol, buySellMenu: null, contextMenu: null }),
     setContextMenu: (menu) =>
       set({ contextMenu: menu, buySellMenu: menu ? null : get().buySellMenu }),
     closeMenus: () =>
@@ -193,7 +339,9 @@ export function createUiSlice(set: RootSet, get: RootGet): UiSlice {
  * bottomTab validation lives here and ONLY here.
  */
 export function normalizeUiRehydrate(state: Store): void {
-  state.appSettings = normalizeAppSettings(state.appSettings);
+  state.appSettings = migrateMutedPanelColor(
+    migrateLegacyAppSettings(normalizeAppSettings(state.appSettings)),
+  );
   applyAppTheme(state.appSettings);
   state.shortcuts = mergeShortcuts(state.shortcuts);
   if (
@@ -205,8 +353,11 @@ export function normalizeUiRehydrate(state: Store): void {
   if ((state.rightDock as string) === "news") {
     state.rightDock = "calendar";
   }
+  // The rail never folds anymore: any persisted "whole side hidden" from an older
+  // build is healed so the body/arrow state can't be born inconsistent.
+  state.rightOpen = true;
+  state.rightDockOrder = normalizeDockOrder(state.rightDockOrder);
   state.buySellMenu = null;
-  state.tradingSettingsSymbol = null;
   state.accountSettingsOpen = false;
   state.brokerDialogOpen = false;
   if (
@@ -214,6 +365,7 @@ export function normalizeUiRehydrate(state: Store): void {
     state.bottomTab !== "orders" &&
     state.bottomTab !== "orderHistory" &&
     state.bottomTab !== "balanceHistory" &&
+    state.bottomTab !== "performance" &&
     state.bottomTab !== "journal"
   ) {
     state.bottomTab = "positions";

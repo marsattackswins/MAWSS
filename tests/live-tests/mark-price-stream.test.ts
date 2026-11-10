@@ -223,7 +223,7 @@ describe("mark-price stream: endpoint and privacy", () => {
   test("public testnet URL with no credentials or listen key", () => {
     const stream = setupStream(["BTCUSDT"]);
     const url = wsLast().url;
-    expect(url).toContain("wss://fstream.binancefuture.com/stream?streams=");
+    expect(url).toContain("wss://demo-fstream.binance.com/stream?streams=");
     expect(url).toContain("btcusdt@markPrice@1s");
     expect(url).not.toContain("listenKey");
     expect(url).not.toContain("api_key");

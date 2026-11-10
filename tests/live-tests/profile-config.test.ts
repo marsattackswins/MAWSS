@@ -5,12 +5,28 @@ import {
 } from "@/lib/server/env/config";
 
 const AUTH = "0123456789abcdef:fedcba9876543210";
+const RISK_CAPS = {
+  MAWS_RISK_MAX_ORDER_NOTIONAL: "50",
+  MAWS_RISK_MAX_GROSS_EXPOSURE: "100",
+  MAWS_RISK_MAX_OPEN_ORDERS: "10",
+  MAWS_RISK_MAX_OPEN_POSITIONS: "3",
+  MAWS_RISK_DAILY_LOSS_PCT: "50",
+  MAWS_RISK_PRICE_COLLAR_PCT: "5",
+  MAWS_RISK_MAX_LEVERAGE: "10",
+  MAWS_RISK_MAX_MARGIN_RATIO: "0.5",
+  MAWS_RISK_MIN_LIQ_DISTANCE_PCT: "10",
+};
 
 function env(values: Record<string, string> = {}): NodeJS.ProcessEnv {
   return values as NodeJS.ProcessEnv;
 }
 
 describe("server profile configuration", () => {
+  test("protection recovery age defaults to two minutes and is configurable", () => {
+    expect(loadEnvConfig(env({})).protectionPendingMaxAgeMs).toBe(120_000);
+    expect(loadEnvConfig(env({ MAWS_PROTECTION_PENDING_MAX_AGE_MS: "45000" })).protectionPendingMaxAgeMs).toBe(45_000);
+  });
+
   test("parses separate testnet and production credentials", () => {
     const cfg = loadEnvConfig(env({
       MAWS_ENV: "testnet",
@@ -63,7 +79,6 @@ describe("server profile configuration", () => {
   test("maps legacy MAWS_ENV values to safe profile identity", () => {
     const local = loadEnvConfig(env({}));
     expect(local.activeProfileId).toBeNull();
-    expect(local.profiles.paper.environment).toBe("paper");
 
     const testnet = loadEnvConfig(env({
       MAWS_ENV: "testnet",
@@ -79,6 +94,7 @@ describe("server profile configuration", () => {
       MAWS_OPERATOR_AUTH: AUTH,
       MAWS_BINANCE_API_KEY: "legacy-production-key",
       MAWS_BINANCE_API_SECRET: "legacy-production-secret",
+      ...RISK_CAPS,
     }));
     expect(production.activeProfileId).toBe("binance-production");
 
@@ -148,6 +164,7 @@ describe("server profile configuration", () => {
       MAWS_OPERATOR_AUTH: AUTH,
       MAWS_BINANCE_PRODUCTION_API_KEY: "production-key",
       MAWS_BINANCE_PRODUCTION_API_SECRET: "production-secret",
+      ...RISK_CAPS,
     }));
     expect(disabled.profiles["binance-production"].executionEnabled).toBe(true);
 
@@ -156,6 +173,7 @@ describe("server profile configuration", () => {
       MAWS_OPERATOR_AUTH: AUTH,
       MAWS_BINANCE_PRODUCTION_API_KEY: "production-key",
       MAWS_BINANCE_PRODUCTION_API_SECRET: "production-secret",
+      ...RISK_CAPS,
     }));
     expect(enabled.profiles["binance-production"].executionEnabled).toBe(true);
 
@@ -173,7 +191,7 @@ describe("server profile configuration", () => {
 
     const metadata = safeProfileMetadata(cfg.profiles);
     const serialized = JSON.stringify(metadata);
-    const profileIds: ProfileId[] = ["paper", "binance-testnet", "binance-production"];
+    const profileIds: ProfileId[] = ["binance-testnet", "binance-production"];
 
     expect(serialized).not.toContain(sentinelKey);
     expect(serialized).not.toContain(sentinelSecret);
@@ -186,10 +204,11 @@ describe("server profile configuration", () => {
       "configured",
       "requiresProductionConfirmation",
       "executionEnabled",
+      "confirmOrders",
     ]);
   });
 
-  test("default profile is paper unless explicitly configured and does not switch startup mode", () => {
+  test("default profile is binance-testnet unless explicitly configured and does not switch startup mode", () => {
     const cfg = loadEnvConfig(env({
       MAWS_ENV: "testnet",
       MAWS_DEFAULT_PROFILE: "binance-production",
@@ -198,7 +217,7 @@ describe("server profile configuration", () => {
       MAWS_BINANCE_TESTNET_API_SECRET: "testnet-secret",
     }));
 
-    expect(loadEnvConfig(env({})).defaultProfile).toBe("paper");
+    expect(loadEnvConfig(env({})).defaultProfile).toBe("binance-testnet");
     expect(cfg.defaultProfile).toBe("binance-production");
     expect(cfg.env).toBe("testnet");
     expect(cfg.activeProfileId).toBe("binance-testnet");

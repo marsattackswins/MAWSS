@@ -15,6 +15,7 @@ export const PANEL_TABS = [
   { id: "orders", label: "Orders" },
   { id: "orderHistory", label: "Order History" },
   { id: "balanceHistory", label: "Balance History" },
+  { id: "performance", label: "Performance" },
   { id: "journal", label: "Trading Journal" },
 ] as const;
 
@@ -82,7 +83,7 @@ function PanelDateTime() {
 
   return (
     <time
-      className="ml-2 shrink-0 whitespace-nowrap border-l border-[var(--maws-border)] pl-2 text-[11px] text-[#787b86]"
+      className="ml-2 shrink-0 whitespace-nowrap border-l border-[var(--maws-border)] pl-2 text-[11px] text-(--app-muted)"
       dateTime={value || undefined}
       aria-label="Current date and time"
     >
@@ -106,7 +107,6 @@ export function hasConfirmedBroker(
   connected: BrokerId | null,
   live: LiveAttachmentSnapshot,
 ): boolean {
-  if (connected === "mock") return true;
   if (connected !== "binance" || !live.attached) return false;
   return (live.phase === "ready" && live.ready) || live.phase === "switching";
 }
@@ -332,8 +332,8 @@ export function BottomPanel() {
                 key={item.id}
                 type="button"
                 onClick={() => toggleBottomTab(item.id)}
-                className={`${PANEL_TAB_CLASS} ${on ? "after:bg-white" : ""}`}
-                style={on ? { color: "#ffffff" } : { color: "var(--maws-text)" }}
+                className={`${PANEL_TAB_CLASS} ${on ? "after:bg-(--app-text)" : ""}`}
+                style={on ? { color: "var(--app-text)" } : { color: "var(--app-muted)" }}
               >
                 {item.label}
               </button>

@@ -2,7 +2,7 @@ import "server-only";
 
 import crypto from "node:crypto";
 
-import { abs, isNegative, isZero, parseDec, roundDownToStep, toStr } from "./decimal";
+import { abs, add, eq, gt, isNegative, isZero, lt, parseDec, roundDownToStep, toStr } from "./decimal";
 import { applySymbolLeverage } from "./state";
 import { audit } from "../audit/log";
 import { requireEmergencyActionAllowed, requireSubmissionAllowed, SubmissionBlockedError } from "../gates/execution";
@@ -18,13 +18,15 @@ import {
   BinanceRestClient,
   classifyBinanceError,
   ERR_INVALID_API_KEY,
+  ERR_ALGO_ORDER_REQUIRED,
   ERR_REDUCE_ONLY_REJECT,
   ERR_UNKNOWN_CANCEL,
+  ERR_UNKNOWN_ORDER,
 } from "./rest";
 import { TransportTimeoutError } from "./transport";
 import { CircuitBreakerOpenError } from "../resilience/circuit-breaker";
 import type { SymbolConstraints } from "./filters";
-import { validateAgainstConstraints } from "./filters";
+import { validateAgainstConstraints, validateMarketQty } from "./filters";
 import { checkRisk, type RiskSnapshot } from "./risk";
 import { withRiskMutation } from "./mutation-queue";
 import {
@@ -34,10 +36,23 @@ import {
   updateIntent as updateIntentRecord,
   type OrderIntent,
 } from "./intents";
-import { liveState, rememberOrder } from "./state";
-import type { BinanceOrder } from "./types";
+import { liveState, rememberAlgoOrder, rememberOrder } from "./state";
+import type { AlgoCancelAck, BinanceAlgoOrder, BinanceOrder, PlaceAlgoOrderParams, PositionRiskRow } from "./types";
 import { trackOrderCanceled, trackOrderRejected, trackOrderSubmitted, trackOrderSubmissionDuration } from "../metrics/instrument";
 import { normalMutationBlock } from "../profile/admission";
+import { alert } from "../alerts/dispatch";
+import {
+  confirmProtectionIntent,
+  deleteProtectionIntent,
+  getProtectionIntent,
+  markProtectionRestoreAttempted,
+  revertProtectionIntent,
+  savePendingProtectionIntent,
+  saveProtectionIntent,
+  setProtectionStatus,
+  withProtectionIntentLock,
+  type ProtectionIntent,
+} from "./protection";
 
 export interface SubmitOrderInput {
   symbol: string;
@@ -66,6 +81,38 @@ export interface SubmitOrderInput {
   leverage?: number;
 }
 
+export interface ReversePositionInput {
+  symbol: string;
+  newQty: string;
+  expectedPositionQty: string;
+  expectedPositionSide: "long" | "short";
+  clientOrderId: string;
+}
+
+export interface ReversePositionResult extends OrderResult {
+  resultingPosition?: { side: "long" | "short"; qty: string } | null;
+}
+
+interface ReverseRiskEvaluation {
+  snapshot: RiskSnapshot;
+  qty: string;
+  effectivePrice: string;
+}
+
+interface ReverseMarketContext {
+  position: PositionRiskRow;
+  currentSide: "long" | "short";
+  currentQty: string;
+  newQty: string;
+  combinedQty: string;
+  markPrice: string;
+}
+
+type ReversePreparation<T> = { ok: true; value: T } | { ok: false; error: string };
+type ReverseSubmitAttempt =
+  | { submitted: true; orderResult: OrderResult }
+  | { submitted: false; result: ReversePositionResult };
+
 export interface ReferencePrice {
   price: string;
   /** Wall-clock ms when this quote was observed. */
@@ -74,6 +121,13 @@ export interface ReferencePrice {
 
 /** Fail closed: refuse submissions when the best available quote is older than this. */
 export const STALE_REFERENCE_MS = 30_000;
+export const PROTECTION_MARK_MAX_AGE_MS = 10_000;
+
+type ProtectionReplaceResult = OrderResult & {
+  rollbackRestored?: boolean;
+  rollbackInvalid?: boolean;
+  rollbackError?: string;
+};
 
 /**
  * Binance testnet occasionally rejects fully valid reduce-only closes with
@@ -114,9 +168,12 @@ export interface OrderResult {
   clientOrderId: string;
   status?: string;
   exchangeOrderId?: number | null;
+  algoId?: number;
   error?: string;
   /** Binance rejection code when the exchange refused the order (e.g. -2022). */
   errorCode?: number;
+  failureKind?: "definite_rejection" | "transient_or_uncertain";
+  rollbackError?: string;
   duplicate?: boolean;
 }
 
@@ -129,6 +186,19 @@ export interface OrderServiceDeps {
   /** Optional uncached mark-price fetch for protective-order validation. */
   getMarkPrice?(symbol: string): Promise<ReferencePrice | null>;
   getRiskSnapshot(): RiskSnapshot;
+  /**
+   * Must return an authoritative hypothetical post-flip risk snapshot.
+   * `grossExposureUsd` and `openPositionCount` represent existing exposure
+   * after removing the old position but before adding the new one;
+   * unrealized P&L, margin ratio, and liquidation distances represent the
+   * hypothetical resulting position. Missing means reverse is fail-closed.
+   */
+  projectReverseRisk?(input: {
+    position: PositionRiskRow;
+    newQty: string;
+    price: string;
+    current: RiskSnapshot;
+  }): Promise<RiskSnapshot | null> | RiskSnapshot | null;
   freeze(reason: string): void;
   unfreeze?: () => void;
   emit(event: string, data: unknown): void;
@@ -153,6 +223,88 @@ export class OrderService {
     return (this.deps.sleep ?? defaultSleep)(ms);
   }
 
+  private async getOpenOrdersIncludingAlgos(symbol: string): Promise<BinanceOrder[]> {
+    const [orders, algoOrders] = await Promise.all([
+      this.deps.rest.getOpenOrders(symbol),
+      this.deps.rest.getOpenAlgoOrders(symbol),
+    ]);
+    return [...orders, ...algoOrders.map(algoOrderAsBinanceOrder)];
+  }
+
+  private async cancelAlgoOrdersForClose(symbol: string, emergency: boolean): Promise<string | null> {
+    const list = emergency
+      ? this.deps.rest.getOpenAlgoOrdersEmergency.bind(this.deps.rest)
+      : this.deps.rest.getOpenAlgoOrders.bind(this.deps.rest);
+    const cancelAll = emergency
+      ? this.deps.rest.cancelAllAlgoOrdersEmergency.bind(this.deps.rest)
+      : this.deps.rest.cancelAllAlgoOrders.bind(this.deps.rest);
+    const existing = await list(symbol);
+    if (existing.length === 0) return null;
+    await cancelAll(symbol);
+    const remaining = await list(symbol);
+    if (remaining.length > 0) {
+      return `Conditional orders remain open for ${symbol}: ${remaining.map((order) => order.clientAlgoId).join(", ")}`;
+    }
+    for (const order of existing) {
+      const intent = this.findIntent(order.clientAlgoId);
+      const canceled = { ...order, algoStatus: "CANCELED" };
+      if (intent) await this.syncIntentFromAlgoOrder(order.clientAlgoId, canceled);
+      else rememberAlgoOrder(canceled);
+      this.deps.emit("order-update", { clientOrderId: order.clientAlgoId, status: "CANCELED", kind: "algo" });
+    }
+    deleteProtectionIntent(symbol, this.persistenceProfile);
+    this.deps.emit("order-update", { symbol, status: "CANCELED", kind: "algo", source: emergency ? "emergency_close" : "close" });
+    return null;
+  }
+
+  private async getFreshProtectionMark(symbol: string): Promise<ReferencePrice> {
+    let reference: ReferencePrice | null = null;
+    try {
+      reference = this.deps.getMarkPrice
+        ? await this.deps.getMarkPrice(symbol)
+        : await this.deps.getReferencePrice(symbol);
+    } catch {
+      // Fall through to an uncached REST mark-price request.
+    }
+    if (
+      reference &&
+      Number.isFinite(Number(reference.price)) &&
+      Number(reference.price) > 0 &&
+      Date.now() - reference.at <= PROTECTION_MARK_MAX_AGE_MS
+    ) {
+      return reference;
+    }
+
+    const mark = await this.deps.rest.getMarkPrice(symbol);
+    return { price: mark.markPrice, at: mark.time ?? Date.now() };
+  }
+
+  private protectionPriceError(
+    side: "long" | "short",
+    type: "TAKE_PROFIT_MARKET" | "STOP_MARKET",
+    price: string,
+    reference: ReferencePrice,
+  ): string | null {
+    try {
+      const trigger = parseDec(price);
+      const mark = parseDec(reference.price);
+      if (isNegative(trigger) || isZero(trigger)) return "Trigger price must be greater than zero";
+      if (eq(trigger, mark)) return `Trigger is immediately-triggering at mark ${reference.price}`;
+      const isTakeProfit = type === "TAKE_PROFIT_MARKET";
+      const beyond = isTakeProfit
+        ? (side === "long" ? gt(trigger, mark) : lt(trigger, mark))
+        : (side === "long" ? lt(trigger, mark) : gt(trigger, mark));
+      if (beyond) return null;
+      const label = type === "TAKE_PROFIT_MARKET" ? "TP" : "SL";
+      const direction = isTakeProfit
+        ? (side === "long" ? "above" : "below")
+        : (side === "long" ? "below" : "above");
+      return `${side === "long" ? "Long" : "Short"} ${label} must be strictly ${direction} the current mark ${reference.price}`;
+    } catch {
+      return "Trigger price must be a positive decimal";
+    }
+  }
+
   private findIntent(clientOrderId: string) {
     return findIntentByClientOrderId(clientOrderId, this.persistenceProfile);
   }
@@ -172,13 +324,352 @@ export class OrderService {
     return withRiskMutation(() => this.submitOrderSerialized(input));
   }
 
+  async reversePosition(input: ReversePositionInput): Promise<ReversePositionResult> {
+    return withRiskMutation(() =>
+      withProtectionIntentLock(
+        input.symbol,
+        () => this.reversePositionSerialized(input),
+        this.persistenceProfile,
+      ),
+    );
+  }
+
+  private async reversePositionSerialized(input: ReversePositionInput): Promise<ReversePositionResult> {
+    const reject = (error: string, extra: Partial<ReversePositionResult> = {}): ReversePositionResult => ({
+      ok: false,
+      clientOrderId: input.clientOrderId,
+      error,
+      ...extra,
+    });
+    if (this.findIntent(input.clientOrderId)) {
+      return reject(`Duplicate clientOrderId ${input.clientOrderId}`, { duplicate: true });
+    }
+    const requestError = this.reverseRequestError(input);
+    if (requestError) return reject(requestError);
+    try {
+      try {
+        requireSubmissionAllowed(this.deps.cfg);
+      } catch (error) {
+        if (error instanceof SubmissionBlockedError) return reject(error.message);
+        throw error;
+      }
+      const positionMode = await this.deps.rest.getPositionMode();
+      if (positionMode.dualSidePosition) return reject("Reverse is supported only in verified one-way position mode");
+
+      const market = await this.prepareReverseMarketContext(input);
+      if (!market.ok) return reject(market.error, { resultingPosition: market.resultingPosition });
+      const projection = await this.prepareReverseRisk(market.value);
+      if (!projection.ok) return reject(projection.error);
+      const submission = await this.submitReverseMarketOrder(input, market.value, projection.value);
+      if (!submission.submitted) return submission.result;
+      const reconciliation = await this.reconcileReversePosition(input, market.value, submission.orderResult);
+      if (!reconciliation.ok) return reconciliation.result;
+      return this.finishConfirmedReverse(input, market.value.currentSide, submission.orderResult, reconciliation.position);
+    } catch (error) {
+      if (error instanceof CircuitBreakerOpenError) {
+        return reject("Reverse could not be verified because the exchange circuit breaker is open; no order was submitted");
+      }
+      throw error;
+    }
+  }
+
+  private reverseRequestError(input: ReversePositionInput): string | null {
+    if (!input.clientOrderId || input.clientOrderId.length > 36 || !/^[a-zA-Z0-9_-]+$/.test(input.clientOrderId)) {
+      return "A valid clientOrderId (1-36 Binance-safe characters) is required";
+    }
+    if (this.uncertainIntents().some((intent) => intent.symbol === input.symbol)) {
+      return `Reverse for ${input.symbol} is blocked while an order outcome remains uncertain`;
+    }
+    if (!this.deps.cfg.reverseEnabled) {
+      return "Reverse is disabled. Close the position, then open the opposite side.";
+    }
+    return null;
+  }
+
+  private async prepareReverseMarketContext(
+    input: ReversePositionInput,
+  ): Promise<ReversePreparation<ReverseMarketContext> & { resultingPosition?: null }> {
+    const rows = await this.deps.rest.getPositionRisk(input.symbol);
+    const position = rows.find((row) => row.symbol === input.symbol && !isZero(parseDec(row.positionAmt)));
+    if (!position) {
+      return { ok: false, error: `No open position for ${input.symbol}`, resultingPosition: null };
+    }
+    const amount = parseDec(position.positionAmt);
+    const currentSide = isNegative(amount) ? "short" : "long";
+    const currentQty = toStr(abs(amount));
+    let expectedQty: string;
+    let newQty: string;
+    try {
+      expectedQty = toStr(abs(parseDec(input.expectedPositionQty)));
+      newQty = toStr(parseDec(input.newQty));
+    } catch {
+      return { ok: false, error: "Position and new quantity must be valid decimals" };
+    }
+    if (
+      currentSide !== input.expectedPositionSide ||
+      !eq(amount, parseDec(input.expectedPositionSide === "short" ? `-${expectedQty}` : expectedQty))
+    ) {
+      return { ok: false, error: `Position changed since it was displayed (now ${currentSide} ${currentQty}); refresh and retry` };
+    }
+    if (isNegative(parseDec(newQty)) || isZero(parseDec(newQty))) {
+      return { ok: false, error: "New position quantity must be greater than zero" };
+    }
+
+    const mark = await this.deps.rest.getMarkPrice(input.symbol);
+    const markAge = Date.now() - (mark.time ?? 0);
+    if (!Number.isFinite(Number(mark.markPrice)) || Number(mark.markPrice) <= 0 || markAge < 0 || markAge > 10_000) {
+      return { ok: false, error: "Fresh mark price unavailable; reverse rejected before submission" };
+    }
+    const constraints = this.deps.getConstraints(input.symbol);
+    if (!constraints) return { ok: false, error: `No exchange filter data for ${input.symbol}; metadata not ready` };
+    const combinedQty = toStr(add(abs(amount), parseDec(newQty)));
+    const filterErrors = [
+      ...validateMarketQty(constraints, combinedQty, mark.markPrice),
+      ...validateAgainstConstraints(constraints, { symbol: input.symbol, type: "MARKET", qty: combinedQty }),
+    ];
+    if (filterErrors.length > 0) return { ok: false, error: filterErrors.join("; ") };
+
+    const leverage = Number(position.leverage);
+    if (!Number.isFinite(leverage) || leverage < 1 || leverage > this.deps.cfg.risk.maxLeverage) {
+      return {
+        ok: false,
+        error: `RISK_MAX_LEVERAGE: current leverage is unknown or exceeds the configured maximum (${this.deps.cfg.risk.maxLeverage}x)`,
+      };
+    }
+    return {
+      ok: true,
+      value: { position, currentSide, currentQty, newQty, combinedQty, markPrice: mark.markPrice },
+    };
+  }
+
+  private async prepareReverseRisk(
+    market: ReverseMarketContext,
+  ): Promise<ReversePreparation<RiskSnapshot>> {
+    const projectReverseRisk = this.deps.projectReverseRisk;
+    if (!projectReverseRisk) {
+      return {
+        ok: false,
+        error: "Reverse is disabled: authoritative hypothetical post-flip margin and liquidation risk data is unavailable; close the position normally",
+      };
+    }
+    const projection = await projectReverseRisk({
+      position: market.position,
+      newQty: market.newQty,
+      price: market.markPrice,
+      current: this.deps.getRiskSnapshot(),
+    });
+    if (!projection) {
+      return {
+        ok: false,
+        error: "Reverse is disabled: authoritative hypothetical post-flip margin and liquidation risk data is unavailable; close the position normally",
+      };
+    }
+    if (
+      !Number.isFinite(projection.balanceUsd) ||
+      projection.balanceUsd <= 0 ||
+      !Number.isFinite(projection.grossExposureUsd) ||
+      projection.grossExposureUsd < 0 ||
+      !Number.isFinite(projection.openOrderCount) ||
+      !Number.isInteger(projection.openOrderCount) ||
+      projection.openOrderCount < 0 ||
+      !Number.isFinite(projection.openPositionCount) ||
+      !Number.isInteger(projection.openPositionCount) ||
+      projection.openPositionCount < 0 ||
+      !Number.isFinite(projection.openPositionCountAfterOrder) ||
+      projection.openPositionCountAfterOrder == null ||
+      !Number.isInteger(projection.openPositionCountAfterOrder) ||
+      projection.openPositionCountAfterOrder < 1 ||
+      !Number.isFinite(projection.realizedTodayUsd)
+    ) {
+      return { ok: false, error: "Reverse is disabled: hypothetical risk projection is incomplete; close the position normally" };
+    }
+    const errors = checkRisk(
+      this.deps.cfg,
+      projection,
+      { type: "MARKET", qty: market.newQty, effectivePrice: market.markPrice, reduceOnly: false },
+      market.markPrice,
+    );
+    if (errors.length > 0) return { ok: false, error: `${errors.join("; ")}. You can still close the position normally` };
+    return { ok: true, value: projection };
+  }
+
+  private async submitReverseMarketOrder(
+    input: ReversePositionInput,
+    market: ReverseMarketContext,
+    projection: RiskSnapshot,
+  ): Promise<ReverseSubmitAttempt> {
+    try {
+      // This success path is tested with exchange fakes only. Keep the feature
+      // disabled by default and unavailable in production until Testnet validation.
+      const orderResult = await this.submitOrderSerialized({
+        symbol: input.symbol,
+        side: market.currentSide === "long" ? "SELL" : "BUY",
+        type: "MARKET",
+        qty: market.combinedQty,
+        clientOrderId: input.clientOrderId,
+      }, false, { snapshot: projection, qty: market.newQty, effectivePrice: market.markPrice }, true);
+      return { submitted: true, orderResult };
+    } catch (error) {
+      if (!(error instanceof CircuitBreakerOpenError)) throw error;
+      if (!this.findIntent(input.clientOrderId)) {
+        return {
+          submitted: false,
+          result: {
+            ok: false,
+            clientOrderId: input.clientOrderId,
+            error: "Reverse could not be submitted because the exchange circuit breaker is open",
+          },
+        };
+      }
+      this.markReverseUncertain(input.symbol, input.clientOrderId, "Circuit breaker opened during reverse submission; verify the exchange position before retrying");
+      return {
+        submitted: false,
+        result: {
+          ok: false,
+          clientOrderId: input.clientOrderId,
+          error: "Reverse outcome is uncertain because the exchange circuit breaker opened; submissions are frozen pending reconciliation",
+        },
+      };
+    }
+  }
+
+  private async reconcileReversePosition(
+    input: ReversePositionInput,
+    market: ReverseMarketContext,
+    orderResult: OrderResult,
+  ): Promise<
+    | { ok: true; position: { side: "long" | "short"; qty: string } }
+    | { ok: false; result: ReversePositionResult }
+  > {
+    let after: PositionRiskRow | undefined;
+    try {
+      after = (await this.deps.rest.getPositionRisk(input.symbol)).find((row) => row.symbol === input.symbol);
+    } catch (error) {
+      this.markReverseUncertain(input.symbol, input.clientOrderId, `Unable to verify resulting position: ${String(error)}`);
+      return {
+        ok: false,
+        result: {
+          ...orderResult,
+          ok: false,
+          error: "Reverse submitted but the resulting position could not be verified; submissions are frozen pending reconciliation",
+        },
+      };
+    }
+    const afterAmount = after ? parseDec(after.positionAmt) : parseDec("0");
+    const resultingPosition = !isZero(afterAmount)
+      ? { side: isNegative(afterAmount) ? "short" as const : "long" as const, qty: toStr(abs(afterAmount)) }
+      : null;
+    if (
+      orderResult.ok &&
+      resultingPosition &&
+      resultingPosition.side === (market.currentSide === "long" ? "short" : "long") &&
+      eq(parseDec(resultingPosition.qty), parseDec(market.newQty))
+    ) {
+      return { ok: true, position: resultingPosition };
+    }
+    const unchanged = resultingPosition?.side === market.currentSide &&
+      !!resultingPosition &&
+      eq(parseDec(resultingPosition.qty), parseDec(market.currentQty));
+    const uncertain = orderResult.failureKind === "transient_or_uncertain" || orderResult.ok || !unchanged;
+    if (uncertain) {
+      this.markReverseUncertain(input.symbol, input.clientOrderId, "Exchange result did not produce the requested exact reverse position");
+    }
+    audit("operator", "position.reverse.incomplete", {
+      symbol: input.symbol,
+      clientOrderId: input.clientOrderId,
+      requested: { side: market.currentSide === "long" ? "short" : "long", qty: market.newQty },
+      resultingPosition,
+      error: orderResult.error,
+    }, undefined, this.persistenceProfile);
+    if (uncertain) {
+      alert(`position_reverse_incomplete:${input.symbol}`, {
+        symbol: input.symbol,
+        clientOrderId: input.clientOrderId,
+        resultingPosition,
+        severity: "high",
+      });
+    }
+    return {
+      ok: false,
+      result: {
+        ...orderResult,
+        ok: false,
+        resultingPosition,
+        error: orderResult.error ?? "Reverse did not produce the requested position; actual position is shown",
+      },
+    };
+  }
+
+  private async finishConfirmedReverse(
+    input: ReversePositionInput,
+    oldSide: "long" | "short",
+    orderResult: OrderResult,
+    resultingPosition: { side: "long" | "short"; qty: string },
+  ): Promise<ReversePositionResult> {
+    const closeSide = oldSide === "long" ? "SELL" : "BUY";
+    let openOrders: BinanceOrder[];
+    try {
+      openOrders = await this.getOpenOrdersIncludingAlgos(input.symbol);
+    } catch (error) {
+      this.resetProtectionForReversedPosition(input.symbol, resultingPosition.side);
+      const reason = `Reverse confirmed, but old protection could not be listed or canceled: ${String(error)}`;
+      this.markProtectionUnprotected(input.symbol, reason);
+      return { ...orderResult, ok: true, resultingPosition, error: reason };
+    }
+    const oldProtection = openOrders.filter((order) =>
+      order.side === closeSide &&
+      order.closePosition &&
+      (order.type === "TAKE_PROFIT_MARKET" || order.type === "STOP_MARKET"),
+    );
+    const cancelFailures: string[] = [];
+    for (const type of ["TAKE_PROFIT_MARKET", "STOP_MARKET"] as const) {
+      const matching = oldProtection.filter((order) => order.type === type);
+      if (matching.length === 0) continue;
+      try {
+        const error = await this.cancelProtectiveOrders(input.symbol, type, closeSide, matching);
+        if (error) cancelFailures.push(error);
+      } catch (error) {
+        cancelFailures.push(String(error));
+      }
+    }
+    this.resetProtectionForReversedPosition(input.symbol, resultingPosition.side);
+    const reason = cancelFailures.length > 0
+      ? `Reverse confirmed, but old protection cancellation was incomplete: ${cancelFailures.join("; ")}`
+      : "Reverse confirmed; the new position needs TP/SL protection";
+    this.markProtectionUnprotected(input.symbol, reason);
+    return { ...orderResult, ok: true, resultingPosition, error: reason };
+  }
+
+  private resetProtectionForReversedPosition(symbol: string, side: "long" | "short"): void {
+    deleteProtectionIntent(symbol, this.persistenceProfile);
+    saveProtectionIntent({ symbol, side, tpPrice: null, slPrice: null }, Date.now(), this.persistenceProfile);
+  }
+
+  private markReverseUncertain(symbol: string, clientOrderId: string, reason: string): void {
+    if (this.findIntent(clientOrderId)) this.updateIntent(clientOrderId, { status: "UNCERTAIN", lastState: uncertainState(clientOrderId, { reason }, this.persistenceProfile) });
+    this.deps.freeze(`reverse position outcome uncertain for ${symbol}`);
+    audit("operator", "position.reverse.uncertain", { symbol, clientOrderId, reason }, undefined, this.persistenceProfile);
+    alert(`position_reverse_uncertain:${symbol}`, { symbol, clientOrderId, reason, severity: "high" });
+  }
+
   /**
    * Returns a user-facing rejection when the optional leverage sync fails as
    * a definite business rejection; returns null when nothing needed syncing.
    * Transport/breaker failures propagate so timeouts surface as uncertain.
    */
   private async syncLeverage(input: SubmitOrderInput): Promise<string | null> {
+    if (input.reduceOnly || input.closePosition || input.emergencyClose || input.isClose) return null;
     const leverage = normalizeLeverage(input.leverage);
+    const currentLeverageValue =
+      liveState().symbolLeverage.get(input.symbol) ??
+      liveState().positions.get(input.symbol)?.leverage;
+    const targetLeverage = leverage ?? (currentLeverageValue === undefined ? null : Number(currentLeverageValue));
+    if (targetLeverage === null || !Number.isFinite(targetLeverage) || targetLeverage < 1) {
+      return "RISK_MAX_LEVERAGE: current leverage is unknown; provide a leverage at or below the configured maximum";
+    }
+    if (targetLeverage > this.deps.cfg.risk.maxLeverage) {
+      return `RISK_MAX_LEVERAGE: leverage ${targetLeverage}x exceeds max ${this.deps.cfg.risk.maxLeverage}x`;
+    }
     // Only an absent value skips the sync. An explicit 1 must still be sent:
     // the exchange-side per-symbol setting persists whatever was last set, so
     // skipping 1x would margin the order at the stale value (the drift this
@@ -187,7 +678,12 @@ export class OrderService {
     return syncLeverageToExchange(this.deps.rest, input.symbol, leverage);
   }
 
-  private async submitOrderSerialized(input: SubmitOrderInput): Promise<OrderResult> {
+  private async submitOrderSerialized(
+    input: SubmitOrderInput,
+    protectionRecovery = false,
+    reverseRisk?: ReverseRiskEvaluation,
+    leverageAlreadyVerified = false,
+  ): Promise<OrderResult> {
     const { cfg } = this.deps;
     const clientOrderId = input.clientOrderId ?? newServerClientOrderId(input.kind === "algo" ? "alg" : "ord");
     const blocked = normalMutationBlock();
@@ -195,6 +691,10 @@ export class OrderService {
 
     try {
       if (input.emergencyClose) requireEmergencyActionAllowed(cfg);
+      else if (protectionRecovery) {
+        const recoveryBlock = this.protectionRecoveryBlock(cfg, input.symbol);
+        if (recoveryBlock) return { ok: false, clientOrderId, error: recoveryBlock };
+      }
       else requireSubmissionAllowed(cfg);
     } catch (err) {
       if (err instanceof SubmissionBlockedError) {
@@ -212,7 +712,7 @@ export class OrderService {
 
     alignQtyToStep(input, constraints);
 
-    const leverageError = await this.syncLeverage(input);
+    const leverageError = leverageAlreadyVerified ? null : await this.syncLeverage(input);
     if (leverageError) {
       audit("operator", "order.rejected.leverage", { symbol: input.symbol, clientOrderId, error: leverageError });
       return { ok: false, clientOrderId, error: leverageError };
@@ -242,8 +742,13 @@ export class OrderService {
     if (!input.closePosition && !input.emergencyClose && !input.reduceOnly && !input.isClose) {
       const riskErrors = checkRisk(
         cfg,
-        this.deps.getRiskSnapshot(),
-        { type: input.type, qty: input.qty ?? "0", effectivePrice, reduceOnly: !!input.reduceOnly },
+        reverseRisk?.snapshot ?? this.deps.getRiskSnapshot(),
+        {
+          type: input.type,
+          qty: reverseRisk?.qty ?? input.qty ?? "0",
+          effectivePrice: reverseRisk?.effectivePrice ?? effectivePrice,
+          reduceOnly: !!input.reduceOnly,
+        },
         reference!.price,
       );
       if (riskErrors.length > 0) {
@@ -252,10 +757,11 @@ export class OrderService {
       }
     }
 
+    const isAlgo = isConditionalOrder(input);
     const { intent, duplicate } = createIntentRecord({
       clientOrderId,
-      clientAlgoId: input.kind === "algo" ? clientOrderId : undefined,
-      kind: input.kind ?? "order",
+      clientAlgoId: isAlgo ? clientOrderId : undefined,
+      kind: isAlgo ? "algo" : "order",
       symbol: input.symbol,
       side: input.side,
       type: input.type,
@@ -278,6 +784,29 @@ export class OrderService {
     const submissionStartedAt = Date.now();
 
     try {
+      if (isAlgo) {
+        const order = await this.deps.rest.placeAlgoOrder(buildAlgoOrderParams(input, clientOrderId));
+        await this.syncIntentFromAlgoOrder(clientOrderId, order);
+        trackOrderSubmissionDuration(Date.now() - submissionStartedAt);
+        trackOrderSubmitted(clientOrderId, input.symbol, input.side, input.type);
+        audit("operator", "order.submitted", {
+          symbol: input.symbol,
+          clientOrderId,
+          clientAlgoId: order.clientAlgoId,
+          algoId: order.algoId,
+          status: order.algoStatus,
+          kind: "algo",
+        });
+        this.deps.emit("order-update", { clientOrderId, status: order.algoStatus, kind: "algo" });
+        return {
+          ok: true,
+          clientOrderId,
+          status: order.algoStatus,
+          exchangeOrderId: numericExchangeOrderId(order.actualOrderId),
+          algoId: order.algoId,
+        };
+      }
+
       const params = buildOrderParams(input, clientOrderId);
       const order = input.emergencyClose
         ? await this.deps.rest.placeOrderEmergency(params)
@@ -296,6 +825,27 @@ export class OrderService {
   }
 
   private async handleSubmissionFailure(clientOrderId: string, symbol: string, err: unknown): Promise<OrderResult> {
+    if (err instanceof BinanceApiError && err.httpStatus === 418) {
+      const message = "Binance returned HTTP 418 and may have IP-banned this client; all Binance requests are paused until the ban expires";
+      this.deps.freeze(message);
+      this.updateIntent(clientOrderId, {
+        status: "REJECTED",
+        lastState: JSON.stringify({ code: err.code, httpStatus: err.httpStatus, retryAfterMs: err.retryAfterMs }),
+      });
+      // Requests are paused, so no protective order can be verified or
+      // restored until the ban ends: treat the symbol as unprotected.
+      this.markIpBanUnprotected(symbol, message);
+      audit("operator", "order.rejected.ip_ban", { symbol, clientOrderId, httpStatus: err.httpStatus, retryAfterMs: err.retryAfterMs, severity: "high" });
+      alert("binance_ip_ban", { symbol, clientOrderId, httpStatus: err.httpStatus, retryAfterMs: err.retryAfterMs, severity: "high" });
+      this.deps.emit("order-update", { clientOrderId, status: "REJECTED", error: message, severity: "high" });
+      return {
+        ok: false,
+        clientOrderId,
+        error: message,
+        errorCode: err.code,
+        failureKind: "transient_or_uncertain",
+      };
+    }
     if (classifyBinanceError(err) === "unknown_outcome") {
       this.updateIntent(clientOrderId, {
         status: "UNCERTAIN",
@@ -304,21 +854,63 @@ export class OrderService {
       this.deps.freeze("order submission returned HTTP 5xx; outcome must be verified");
       audit("operator", "order.unknown_outcome", { symbol, clientOrderId, httpStatus: (err as BinanceApiError).httpStatus });
       void this.resolveUnknownOutcome(clientOrderId);
-      return { ok: false, clientOrderId, error: "Order submission returned an uncertain exchange response; outcome is being resolved" };
+      return {
+        ok: false,
+        clientOrderId,
+        error: "Order submission returned an uncertain exchange response; outcome is being resolved",
+        failureKind: "transient_or_uncertain",
+      };
     }
     if (err instanceof BinanceApiError) {
+      if (err.code === ERR_ALGO_ORDER_REQUIRED) {
+        const message = "Binance rejected a conditional order with -4120; conditional orders must use the Algo Order API. Verify the configured endpoint and API permissions.";
+        this.updateIntent(clientOrderId, { status: "REJECTED", lastState: JSON.stringify({ code: err.code, msg: err.exchangeMsg }) });
+        trackOrderRejected(clientOrderId, symbol, message);
+        audit("operator", "order.rejected.algo_api_configuration", {
+          symbol,
+          clientOrderId,
+          code: err.code,
+          severity: "high",
+        });
+        alert("binance_conditional_algo_api_rejected", {
+          symbol,
+          clientOrderId,
+          code: err.code,
+          severity: "high",
+        });
+        this.deps.emit("order-update", { clientOrderId, status: "REJECTED", error: message, severity: "high" });
+        return {
+          ok: false,
+          clientOrderId,
+          error: message,
+          errorCode: err.code,
+          failureKind: "definite_rejection",
+        };
+      }
       if (err.code === ERR_INVALID_API_KEY) {
         // Fail closed: a rejected key usually means wrong environment scope.
         this.deps.freeze("Binance rejected the API key (-2015); check environment/key scope");
         this.updateIntent(clientOrderId, { status: "REJECTED", lastState: JSON.stringify({ code: err.code }) });
         audit("operator", "order.rejected.key", { symbol, clientOrderId, code: err.code });
-        return { ok: false, clientOrderId, error: "Exchange rejected the API key; submissions frozen" };
+        return {
+          ok: false,
+          clientOrderId,
+          error: "Exchange rejected the API key; submissions frozen",
+          errorCode: err.code,
+          failureKind: "definite_rejection",
+        };
       }
       this.updateIntent(clientOrderId, { status: "REJECTED", lastState: JSON.stringify({ code: err.code, msg: err.exchangeMsg }) });
       trackOrderRejected(clientOrderId, symbol, err.exchangeMsg);
       audit("operator", "order.rejected.exchange", { symbol, clientOrderId, code: err.code, msg: err.exchangeMsg });
       this.deps.emit("order-update", { clientOrderId, status: "REJECTED", error: err.exchangeMsg });
-      return { ok: false, clientOrderId, error: `Exchange rejected the order: ${err.exchangeMsg}`, errorCode: err.code };
+      return {
+        ok: false,
+        clientOrderId,
+        error: `Exchange rejected the order: ${err.exchangeMsg}`,
+        errorCode: err.code,
+        failureKind: "definite_rejection",
+      };
     }
     if (err instanceof TransportTimeoutError) {
       // Unknown outcome: never retry blindly. Persist uncertainty, freeze, resolve.
@@ -326,15 +918,26 @@ export class OrderService {
       this.deps.freeze("submission timeout: order outcome unknown until resolved");
       audit("operator", "order.timeout_unknown", { symbol, clientOrderId });
       void this.resolveUnknownOutcome(clientOrderId);
-      return { ok: false, clientOrderId, error: "Submission timed out; outcome is being resolved against the exchange" };
+      return {
+        ok: false,
+        clientOrderId,
+        error: "Submission timed out; outcome is being resolved against the exchange",
+        failureKind: "transient_or_uncertain",
+      };
     }
-    // Infrastructure failure, not a business rejection: rethrow untouched so
-    // runBrokerMutation can answer 503 circuit_open. Never recorded as REJECTED.
+    // Breaker state is propagated to the caller; all other transport failures
+    // remain uncertain until a later exchange query proves the order absent.
     if (err instanceof CircuitBreakerOpenError) throw err;
-    this.updateIntent(clientOrderId, { status: "REJECTED", lastState: JSON.stringify({ error: String(err) }) });
-    trackOrderRejected(clientOrderId, symbol, String(err));
-    audit("operator", "order.rejected.transport", { symbol, clientOrderId, error: String(err) });
-    return { ok: false, clientOrderId, error: `Order submission failed: ${String(err)}` };
+    this.updateIntent(clientOrderId, { status: "UNCERTAIN", lastState: uncertainState(clientOrderId, { error: String(err) }, this.persistenceProfile) });
+    this.deps.freeze("order submission transport failed; outcome must be verified");
+    audit("operator", "order.unknown_outcome", { symbol, clientOrderId, error: String(err) });
+    void this.resolveUnknownOutcome(clientOrderId);
+    return {
+      ok: false,
+      clientOrderId,
+      error: `Order submission outcome is uncertain: ${String(err)}`,
+      failureKind: "transient_or_uncertain",
+    };
   }
 
   /** Resolves TIMEOUT_UNKNOWN/CANCEL_UNKNOWN intents by querying exchange truth. */
@@ -343,6 +946,44 @@ export class OrderService {
     if (!intent) return;
     for (let i = 0; i < attempts; i++) {
       try {
+        if (intent.kind === "algo") {
+          try {
+            const order = await this.deps.rest.getAlgoOrder({
+              clientAlgoId: intent.clientAlgoId ?? clientOrderId,
+            });
+            const resolved = await this.syncIntentFromAlgoOrder(clientOrderId, order);
+            audit("operator", "order.resolved", { clientOrderId, status: order.algoStatus, resolved, attempt: i + 1, kind: "algo" });
+            this.deps.emit("order-update", { clientOrderId, status: order.algoStatus, resolved: resolved != null, kind: "algo" });
+            if (resolved == null) {
+              // The trigger fired but its actual order is not readable yet: the
+              // intent stays UNCERTAIN and submissions stay frozen.
+              audit("operator", "order.resolve.actual_pending", { clientOrderId, algoStatus: order.algoStatus, kind: "algo" });
+              return;
+            }
+            this.maybeUnfreeze();
+            return;
+          } catch (err) {
+            if (!(err instanceof BinanceApiError) || err.code !== ERR_UNKNOWN_ORDER) throw err;
+            const openOrders = await this.deps.rest.getOpenAlgoOrders(intent.symbol);
+            const openOrder = openOrders.find((order) => order.clientAlgoId === (intent.clientAlgoId ?? clientOrderId));
+            if (openOrder) {
+              const resolved = await this.syncIntentFromAlgoOrder(clientOrderId, openOrder);
+              if (resolved == null) {
+                audit("operator", "order.resolve.actual_pending", { clientOrderId, algoStatus: openOrder.algoStatus, kind: "algo" });
+                return;
+              }
+              this.maybeUnfreeze();
+              return;
+            }
+            if (i === attempts - 1) {
+              this.updateIntent(clientOrderId, { status: "REJECTED", lastState: JSON.stringify({ resolved: "algo_not_found_on_exchange" }) });
+              this.maybeUnfreeze();
+              return;
+            }
+            await this.sleep(400 * (i + 1));
+            continue;
+          }
+        }
         const order = await this.deps.rest.getOrder(intent.symbol, undefined, clientOrderId);
         if (order) {
           this.syncIntentFromOrder(clientOrderId, order);
@@ -414,6 +1055,79 @@ export class OrderService {
     });
   }
 
+  /**
+   * DELETE /fapi/v1/algoOrder answers with an acknowledgement only. The order
+   * is gone by definition, so record terminal state locally instead of reading
+   * fields (algoStatus/triggerPrice) that the response does not contain.
+   */
+  private syncAlgoCancel(ack: AlgoCancelAck): void {
+    const clientAlgoId = ack.clientAlgoId;
+    if (!clientAlgoId) return;
+    if (this.findIntent(clientAlgoId)) {
+      this.updateIntent(clientAlgoId, {
+        status: "CANCELED",
+        lastState: JSON.stringify({
+          kind: "algo",
+          algoId: ack.algoId ?? null,
+          clientAlgoId,
+          canceled: true,
+          code: ack.code ?? null,
+          msg: ack.msg ?? null,
+        }),
+      });
+    }
+    const current = liveState().orders.get(clientAlgoId);
+    if (current) {
+      liveState().orders.set(clientAlgoId, { ...current, status: "CANCELED", updateTime: Date.now() });
+    }
+    liveState().openOrders.delete(clientAlgoId);
+  }
+
+  /**
+   * Records an algo query result. TRIGGERED/FINISHED only say the conditional
+   * order fired; the outcome is the actual order it created. Returns null and
+   * leaves the intent status untouched when that outcome is not available yet.
+   */
+  private async syncIntentFromAlgoOrder(
+    clientOrderId: string,
+    order: BinanceAlgoOrder,
+  ): Promise<OrderIntent["status"] | null> {
+    rememberAlgoOrder(order);
+    const status = await this.resolveAlgoIntentStatus(order);
+    const state = {
+      kind: "algo",
+      algoId: order.algoId,
+      clientAlgoId: order.clientAlgoId,
+      status: order.algoStatus,
+      triggerPrice: order.triggerPrice,
+      actualOrderId: order.actualOrderId ?? null,
+      actualQty: order.actualQty ?? null,
+      updateTime: order.updateTime,
+    };
+    if (status == null) {
+      this.updateIntent(clientOrderId, { lastState: JSON.stringify({ ...state, outcome: "pending" }) });
+      return null;
+    }
+    this.updateIntent(clientOrderId, { status, lastState: JSON.stringify(state) });
+    return status;
+  }
+
+  private async resolveAlgoIntentStatus(order: BinanceAlgoOrder): Promise<OrderIntent["status"] | null> {
+    if (order.algoStatus !== "TRIGGERED" && order.algoStatus !== "FINISHED") {
+      return normalizeAlgoStatus(order.algoStatus);
+    }
+    const actualOrderId = numericExchangeOrderId(order.actualOrderId);
+    if (actualOrderId == null) return null;
+    let actual: BinanceOrder | null;
+    try {
+      actual = await this.deps.rest.getOrder(order.symbol, actualOrderId);
+    } catch {
+      // Outcome still unknown: leave it unresolved for reconciliation.
+      return null;
+    }
+    return actual ? normalizeAlgoStatus(actual.status) : null;
+  }
+
   async cancelOrder(clientOrderId: string, symbol: string): Promise<OrderResult> {
     return withRiskMutation(() => this.cancelOrderSerialized(clientOrderId, symbol));
   }
@@ -431,6 +1145,16 @@ export class OrderService {
     this.updateIntent(clientOrderId, { status: "CANCEL_REQUESTED" });
     audit("operator", "order.cancelling", { symbol, clientOrderId });
     try {
+      if (intent.kind === "algo") {
+        const ack = await this.deps.rest.cancelAlgoOrder({
+          clientAlgoId: intent.clientAlgoId ?? clientOrderId,
+        });
+        this.syncAlgoCancel(ack);
+        trackOrderCanceled(clientOrderId, symbol);
+        audit("operator", "order.cancelled", { symbol, clientOrderId, status: "CANCELED", kind: "algo", algoId: ack.algoId });
+        this.deps.emit("order-update", { clientOrderId, status: "CANCELED", kind: "algo" });
+        return { ok: true, clientOrderId, status: "CANCELED", algoId: ack.algoId };
+      }
       const order = await this.deps.rest.cancelOrder(symbol, undefined, clientOrderId);
       this.syncIntentFromOrder(clientOrderId, order);
       trackOrderCanceled(clientOrderId, symbol);
@@ -438,6 +1162,18 @@ export class OrderService {
       this.deps.emit("order-update", { clientOrderId, status: order.status });
       return { ok: true, clientOrderId, status: order.status, exchangeOrderId: order.orderId };
     } catch (err) {
+      if (err instanceof BinanceApiError && err.httpStatus === 418) {
+        const message = "Binance returned HTTP 418 and may have IP-banned this client; all Binance requests are paused until the ban expires";
+        this.deps.freeze(message);
+        this.updateIntent(clientOrderId, {
+          status: "SUBMITTED",
+          lastState: JSON.stringify({ code: err.code, httpStatus: err.httpStatus, retryAfterMs: err.retryAfterMs, cancelBlocked: true }),
+        });
+        this.markIpBanUnprotected(symbol, message);
+        audit("operator", "order.cancel.ip_ban", { symbol, clientOrderId, httpStatus: err.httpStatus, retryAfterMs: err.retryAfterMs, severity: "high" });
+        alert("binance_ip_ban", { symbol, clientOrderId, httpStatus: err.httpStatus, retryAfterMs: err.retryAfterMs, severity: "high" });
+        return { ok: false, clientOrderId, error: message, errorCode: err.code };
+      }
       if (classifyBinanceError(err) === "unknown_outcome") {
         this.updateIntent(clientOrderId, {
           status: "CANCEL_UNKNOWN",
@@ -451,6 +1187,33 @@ export class OrderService {
       if (err instanceof BinanceApiError && err.code === ERR_UNKNOWN_CANCEL) {
         // The order vanished before our cancel: determine what actually happened.
         try {
+          if (intent.kind === "algo") {
+            try {
+              const algoOrder = await this.deps.rest.getAlgoOrder({
+                clientAlgoId: intent.clientAlgoId ?? clientOrderId,
+              });
+              const resolved = await this.syncIntentFromAlgoOrder(clientOrderId, algoOrder);
+              const status = resolved ?? "SUBMITTED";
+              audit("operator", "order.cancel.race_resolved", {
+                symbol,
+                clientOrderId,
+                status: algoOrder.algoStatus,
+                resolved: resolved != null,
+                kind: "algo",
+              });
+              this.deps.emit("order-update", { clientOrderId, status, kind: "algo" });
+              return { ok: true, clientOrderId, status, algoId: algoOrder.algoId };
+            } catch (lookupError) {
+              if (!(lookupError instanceof BinanceApiError) || lookupError.code !== ERR_UNKNOWN_ORDER) throw lookupError;
+            }
+            const openAlgoOrders = await this.deps.rest.getOpenAlgoOrders(symbol);
+            if (openAlgoOrders.some((order) => order.clientAlgoId === (intent.clientAlgoId ?? clientOrderId))) {
+              this.updateIntent(clientOrderId, { status: "SUBMITTED" });
+              return { ok: false, clientOrderId, error: "Algo order is still open; cancellation was not confirmed" };
+            }
+            this.updateIntent(clientOrderId, { status: "RESOLVED", lastState: JSON.stringify({ note: "unknown_algo_cancel_not_found" }) });
+            return { ok: true, clientOrderId, status: "RESOLVED" };
+          }
           const order = await this.deps.rest.getOrder(symbol, undefined, clientOrderId);
           if (order) {
             this.syncIntentFromOrder(clientOrderId, order);
@@ -495,6 +1258,11 @@ export class OrderService {
         // cause Binance to reject this close with -2022. Cancel them before the
         // reduce-only market order so closing also cannot leave stale exits behind.
         await this.deps.rest.cancelAllOpenOrdersEmergency(symbol);
+        const algoCancelError = await this.cancelAlgoOrdersForClose(symbol, true);
+        if (algoCancelError) {
+          this.markProtectionUnprotected(symbol, algoCancelError);
+          return { ok: false, clientOrderId: "", error: algoCancelError };
+        }
       } catch (err) {
         if (err instanceof CircuitBreakerOpenError) throw err;
         const message = err instanceof BinanceApiError ? err.exchangeMsg : String(err);
@@ -504,7 +1272,7 @@ export class OrderService {
       const amount = parseDec(row.positionAmt);
       const short = isNegative(amount);
       const qty = short ? toStr({ units: -amount.units, scale: amount.scale }) : toStr(amount);
-      return submitCloseWithReduceOnlyFallback(
+      const result = await submitCloseWithReduceOnlyFallback(
         (reduceOnly) =>
           this.submitOrderSerialized({
             symbol,
@@ -531,6 +1299,8 @@ export class OrderService {
           );
         },
       );
+      if (result.ok) deleteProtectionIntent(symbol, this.persistenceProfile);
+      return result;
     });
   }
 
@@ -548,12 +1318,25 @@ export class OrderService {
     const row = rows.find((candidate) => candidate.symbol === symbol && !isZero(parseDec(candidate.positionAmt)));
     if (!row) return { ok: false, clientOrderId: "", error: `No open position for ${symbol}` };
 
+    try {
+      requireSubmissionAllowed(this.deps.cfg);
+      const algoCancelError = await this.cancelAlgoOrdersForClose(symbol, false);
+      if (algoCancelError) {
+        this.markProtectionUnprotected(symbol, algoCancelError);
+        return { ok: false, clientOrderId: "", error: algoCancelError };
+      }
+    } catch (err) {
+      if (err instanceof SubmissionBlockedError) return { ok: false, clientOrderId: "", error: err.message };
+      if (err instanceof CircuitBreakerOpenError) throw err;
+      return { ok: false, clientOrderId: "", error: `Unable to cancel conditional orders for ${symbol}: ${String(err)}` };
+    }
+
     const amount = parseDec(row.positionAmt);
     const short = isNegative(amount);
     const qty = short ? toStr({ units: -amount.units, scale: amount.scale }) : toStr(amount);
     // A normal UI close is still a live order submission. Only the explicit
     // emergency-flatten path may bypass the execution gates.
-    return submitCloseWithReduceOnlyFallback(
+    const result = await submitCloseWithReduceOnlyFallback(
       (reduceOnly) =>
         this.submitOrder({
           symbol,
@@ -566,7 +1349,7 @@ export class OrderService {
         }),
       async () => {
         const [orders, rows] = await Promise.all([
-          this.deps.rest.getOpenOrders(symbol),
+          this.getOpenOrdersIncludingAlgos(symbol),
           this.deps.rest.getPositionRisk(symbol),
         ]);
         const row = rows.find((candidate) => candidate.symbol === symbol);
@@ -579,6 +1362,8 @@ export class OrderService {
         );
       },
     );
+    if (result.ok) deleteProtectionIntent(symbol, this.persistenceProfile);
+    return result;
   }
 
   /**
@@ -587,9 +1372,110 @@ export class OrderService {
    * never simulated in the browser. Replacing cancels the existing one first.
    */
   async protectPosition(input: { symbol: string; tpPrice?: string; slPrice?: string }): Promise<{ tp?: OrderResult; sl?: OrderResult }> {
+    return withRiskMutation(() =>
+      withProtectionIntentLock(
+        input.symbol,
+        () => this.protectPositionSerialized(input, true),
+        this.persistenceProfile,
+      ),
+    );
+  }
+
+  /** Reconciliation already owns the risk-mutation queue when invoking this. */
+  async restoreProtection(intent: ProtectionIntent): Promise<{ tp?: OrderResult; sl?: OrderResult }> {
+    return withProtectionIntentLock(
+      intent.symbol,
+      () => this.protectPositionSerialized({
+        symbol: intent.symbol,
+        tpPrice: intent.tpPrice ?? undefined,
+        slPrice: intent.slPrice ?? undefined,
+      }, false),
+      this.persistenceProfile,
+    );
+  }
+
+  async removeProtection(symbol: string): Promise<{ ok: boolean; error?: string }> {
+    return withRiskMutation(() =>
+      withProtectionIntentLock(
+        symbol,
+        () => this.removeProtectionSerialized(symbol),
+        this.persistenceProfile,
+      ),
+    );
+  }
+
+  private async removeProtectionSerialized(symbol: string): Promise<{ ok: boolean; error?: string }> {
+    const openOrders = await this.getOpenOrdersIncludingAlgos(symbol);
+    const canceled: string[] = [];
+    const failures: string[] = [];
+    let breakerError: CircuitBreakerOpenError | undefined;
+    for (const type of ["TAKE_PROFIT_MARKET", "STOP_MARKET"] as const) {
+      for (const side of ["BUY", "SELL"] as const) {
+        for (const order of openOrders.filter((candidate) => this.isProtectiveOrder(candidate, type, side))) {
+          try {
+            const cancelError = await this.cancelProtectiveOrders(symbol, type, side, [order]);
+            if (cancelError) failures.push(`${order.clientOrderId}: ${cancelError}`);
+            else canceled.push(order.clientOrderId);
+          } catch (err) {
+            if (!(err instanceof CircuitBreakerOpenError)) throw err;
+            breakerError = err;
+            failures.push(`${order.clientOrderId}: ${String(err)}`);
+            break;
+          }
+        }
+        if (breakerError) break;
+      }
+      if (breakerError) break;
+    }
+    let remaining: BinanceOrder[];
+    try {
+      remaining = await this.getOpenOrdersIncludingAlgos(symbol);
+    } catch (err) {
+      if (err instanceof CircuitBreakerOpenError) breakerError = err;
+      failures.push(`Could not verify remaining protection: ${String(err)}`);
+      remaining = openOrders.filter((order) => !canceled.includes(order.clientOrderId));
+    }
+    const remainingProtection = remaining.filter((order) =>
+      (order.type === "TAKE_PROFIT_MARKET" || order.type === "STOP_MARKET") && order.closePosition,
+    );
+    if (failures.length > 0 || remainingProtection.length > 0) {
+      const reason = [
+        `Protection removal incomplete: canceled [${canceled.join(", ") || "none"}]`,
+        `remaining [${remainingProtection.map((order) => order.clientOrderId).join(", ") || "none"}]`,
+        failures.length > 0 ? `failures [${failures.join("; ")}]` : "",
+      ].filter(Boolean).join("; ");
+      let intent = getProtectionIntent(symbol, this.persistenceProfile);
+      if (!intent) {
+        const position = liveState().positions.get(symbol);
+        if (position) {
+          const closeSide = position.side === "long" ? "SELL" : "BUY";
+          saveProtectionIntent({
+            symbol,
+            side: position.side,
+            tpPrice: remainingProtection.find((order) => order.type === "TAKE_PROFIT_MARKET" && order.side === closeSide)?.stopPrice ?? null,
+            slPrice: remainingProtection.find((order) => order.type === "STOP_MARKET" && order.side === closeSide)?.stopPrice ?? null,
+          }, Date.now(), this.persistenceProfile);
+          intent = getProtectionIntent(symbol, this.persistenceProfile);
+        }
+      }
+      if (intent) setProtectionStatus(symbol, "UNPROTECTED", reason, this.persistenceProfile);
+      this.deps.emit("account-update", { at: Date.now(), protection: symbol, status: "UNPROTECTED" });
+      if (breakerError) throw breakerError;
+      return { ok: false, error: reason };
+    }
+    deleteProtectionIntent(symbol, this.persistenceProfile);
+    this.deps.emit("account-update", { at: Date.now(), protection: symbol, status: null });
+    return { ok: true };
+  }
+
+  private async protectPositionSerialized(
+    input: { symbol: string; tpPrice?: string; slPrice?: string },
+    persistIntent: boolean,
+  ): Promise<{ tp?: OrderResult; sl?: OrderResult }> {
     const failed = (error: string): OrderResult => ({ ok: false, clientOrderId: "", error });
-    if (normalMutationBlock()) {
-      const result = failed(normalMutationBlock()!);
+    const mutationBlock = normalMutationBlock();
+    if (mutationBlock) {
+      const result = failed(mutationBlock);
       return {
         ...(input.tpPrice ? { tp: result } : {}),
         ...(input.slPrice ? { sl: result } : {}),
@@ -603,28 +1489,49 @@ export class OrderService {
         ...(input.slPrice ? { sl: result } : {}),
       };
     }
-    try {
-      requireSubmissionAllowed(this.deps.cfg);
-    } catch (err) {
-      if (err instanceof SubmissionBlockedError) {
-        const result = failed(err.message);
+    if (!persistIntent) {
+      const recoveryBlock = this.protectionRecoveryBlock(this.deps.cfg, input.symbol);
+      if (recoveryBlock) {
+        const result = failed(recoveryBlock);
         return {
           ...(input.tpPrice ? { tp: result } : {}),
           ...(input.slPrice ? { sl: result } : {}),
         };
       }
-      throw err;
+    } else {
+      try {
+        requireSubmissionAllowed(this.deps.cfg);
+      } catch (err) {
+        if (err instanceof SubmissionBlockedError) {
+          const result = failed(err.message);
+          return {
+            ...(input.tpPrice ? { tp: result } : {}),
+            ...(input.slPrice ? { sl: result } : {}),
+          };
+        }
+        throw err;
+      }
     }
 
-    const reference = await (this.deps.getMarkPrice?.(input.symbol) ?? this.deps.getReferencePrice(input.symbol));
-    if (!reference || !Number.isFinite(Number(reference.price)) || Number(reference.price) <= 0) {
+    let reference: ReferencePrice;
+    try {
+      reference = await this.getFreshProtectionMark(input.symbol);
+    } catch (err) {
+      if (err instanceof CircuitBreakerOpenError) throw err;
+      const result = failed(`Unable to fetch a fresh mark price for ${input.symbol}: ${String(err)}`);
+      return {
+        ...(input.tpPrice ? { tp: result } : {}),
+        ...(input.slPrice ? { sl: result } : {}),
+      };
+    }
+    if (!Number.isFinite(Number(reference.price)) || Number(reference.price) <= 0) {
       const result = failed(`No current mark price available for ${input.symbol}`);
       return {
         ...(input.tpPrice ? { tp: result } : {}),
         ...(input.slPrice ? { sl: result } : {}),
       };
     }
-    if (Date.now() - reference.at > STALE_REFERENCE_MS) {
+    if (Date.now() - reference.at > PROTECTION_MARK_MAX_AGE_MS) {
       const result = failed(`Current mark price for ${input.symbol} is stale`);
       return {
         ...(input.tpPrice ? { tp: result } : {}),
@@ -632,19 +1539,9 @@ export class OrderService {
       };
     }
 
-    const mark = Number(reference.price);
-    const tp = input.tpPrice == null ? null : Number(input.tpPrice);
-    const sl = input.slPrice == null ? null : Number(input.slPrice);
     const directionErrors: { tp?: string; sl?: string } = {};
-    if (tp != null && !Number.isFinite(tp)) directionErrors.tp = "TP price must be finite";
-    if (sl != null && !Number.isFinite(sl)) directionErrors.sl = "SL price must be finite";
-    if (pos.side === "long") {
-      if (tp != null && Number.isFinite(tp) && tp < mark) directionErrors.tp = `Long TP must be at or above mark price ${reference.price}`;
-      if (sl != null && Number.isFinite(sl) && sl > mark) directionErrors.sl = `Long SL must be at or below mark price ${reference.price}`;
-    } else {
-      if (tp != null && Number.isFinite(tp) && tp > mark) directionErrors.tp = `Short TP must be at or below mark price ${reference.price}`;
-      if (sl != null && Number.isFinite(sl) && sl < mark) directionErrors.sl = `Short SL must be at or above mark price ${reference.price}`;
-    }
+    if (input.tpPrice) directionErrors.tp = this.protectionPriceError(pos.side, "TAKE_PROFIT_MARKET", input.tpPrice, reference) ?? undefined;
+    if (input.slPrice) directionErrors.sl = this.protectionPriceError(pos.side, "STOP_MARKET", input.slPrice, reference) ?? undefined;
     if (directionErrors.tp || directionErrors.sl) {
       return {
         ...(input.tpPrice ? { tp: directionErrors.tp ? failed(directionErrors.tp) : undefined } : {}),
@@ -652,50 +1549,447 @@ export class OrderService {
       };
     }
 
+    const currentIntent = getProtectionIntent(input.symbol, this.persistenceProfile);
+    let intendedTp = input.tpPrice ?? currentIntent?.tpPrice ?? null;
+    let intendedSl = input.slPrice ?? currentIntent?.slPrice ?? null;
+
+    let openOrders: BinanceOrder[];
+    try {
+      openOrders = await this.getOpenOrdersIncludingAlgos(input.symbol);
+    } catch (err) {
+      const error = `Could not verify existing protective orders: ${String(err)}`;
+      this.markProtectionUnprotected(input.symbol, error);
+      if (err instanceof CircuitBreakerOpenError) throw err;
+      const result = failed(error);
+      return {
+        ...(input.tpPrice ? { tp: result } : {}),
+        ...(input.slPrice ? { sl: result } : {}),
+      };
+    }
+
     const closeSide = pos.side === "long" ? "SELL" : "BUY";
     const out: { tp?: OrderResult; sl?: OrderResult } = {};
+    const existingTp = openOrders.find((order) => this.isProtectiveOrder(order, "TAKE_PROFIT_MARKET", closeSide));
+    const existingSl = openOrders.find((order) => this.isProtectiveOrder(order, "STOP_MARKET", closeSide));
+    intendedTp = input.tpPrice ?? existingTp?.stopPrice ?? currentIntent?.tpPrice ?? null;
+    intendedSl = input.slPrice ?? existingSl?.stopPrice ?? currentIntent?.slPrice ?? null;
+    const previousTp = persistIntent
+      ? existingTp?.stopPrice ?? currentIntent?.tpPrice ?? null
+      : currentIntent?.previousTpPrice ?? existingTp?.stopPrice ?? null;
+    const previousSl = persistIntent
+      ? existingSl?.stopPrice ?? currentIntent?.slPrice ?? null
+      : currentIntent?.previousSlPrice ?? existingSl?.stopPrice ?? null;
 
-    // Each replacement is fail-closed: a failed/uncertain cancellation leaves
-    // the old protective order in place and prevents its replacement.
-    const cancelExisting = async (type: string): Promise<string | null> => {
-      for (const o of liveState().openOrders.values()) {
-        if (o.symbol === input.symbol && o.type === type && o.closePosition) {
-          const result = await this.cancelOrder(o.clientOrderId, input.symbol);
-          if (!result.ok) return result.error ?? `Could not cancel existing ${type}`;
-        }
-      }
-      return null;
-    };
-
-    if (input.tpPrice) {
-      const cancelError = await cancelExisting("TAKE_PROFIT_MARKET");
-      out.tp = cancelError
-        ? failed(`Protective TP replacement blocked: ${cancelError}`)
-        : await this.submitOrder({
-            symbol: input.symbol,
-            side: closeSide,
-            type: "TAKE_PROFIT_MARKET",
-            stopPrice: input.tpPrice,
-            closePosition: true,
-            kind: "algo",
-            clientOrderId: newServerClientOrderId("tp"),
-          });
+    if (persistIntent) {
+      savePendingProtectionIntent({
+        symbol: input.symbol,
+        side: pos.side,
+        tpPrice: intendedTp,
+        slPrice: intendedSl,
+        previousTpPrice: previousTp,
+        previousSlPrice: previousSl,
+      }, Date.now(), this.persistenceProfile);
     }
-    if (input.slPrice) {
-      const cancelError = await cancelExisting("STOP_MARKET");
-      out.sl = cancelError
-        ? failed(`Protective SL replacement blocked: ${cancelError}`)
-        : await this.submitOrder({
+
+    try {
+      if (input.tpPrice) {
+        out.tp = await this.replaceProtectionOrder(input.symbol, closeSide, "TAKE_PROFIT_MARKET", input.tpPrice, previousTp ?? undefined);
+      }
+      if (input.slPrice) {
+        out.sl = await this.replaceProtectionOrder(input.symbol, closeSide, "STOP_MARKET", input.slPrice, previousSl ?? undefined);
+      }
+
+      let finalOrders: BinanceOrder[];
+      try {
+        finalOrders = await this.getOpenOrdersIncludingAlgos(input.symbol);
+      } catch (err) {
+        if (err instanceof CircuitBreakerOpenError) throw err;
+        const error = `Could not verify final protective orders: ${String(err)}`;
+        this.markProtectionUnprotected(input.symbol, error);
+        if (input.tpPrice) out.tp = failed(error);
+        if (input.slPrice) out.sl = failed(error);
+        return out;
+      }
+
+      const tpConfirmed = !intendedTp || !!this.findProtectiveOrder(finalOrders, "TAKE_PROFIT_MARKET", closeSide, intendedTp);
+      const slConfirmed = !intendedSl || !!this.findProtectiveOrder(finalOrders, "STOP_MARKET", closeSide, intendedSl);
+      if (tpConfirmed && slConfirmed) {
+        confirmProtectionIntent({
+          symbol: input.symbol,
+          side: pos.side,
+          tpPrice: intendedTp,
+          slPrice: intendedSl,
+        }, Date.now(), this.persistenceProfile);
+        this.deps.emit("account-update", { at: Date.now(), protection: input.symbol });
+      } else {
+        const error = "Exchange open orders do not match the recorded TP/SL intent";
+        const previousConfirmed =
+          (!previousTp || !!this.findProtectiveOrder(finalOrders, "TAKE_PROFIT_MARKET", closeSide, previousTp)) &&
+          (!previousSl || !!this.findProtectiveOrder(finalOrders, "STOP_MARKET", closeSide, previousSl));
+        const rollbackInvalid = [out.tp, out.sl].some(
+          (result) => (result as ProtectionReplaceResult | undefined)?.rollbackInvalid,
+        );
+        if (rollbackInvalid) {
+          const invalidOrder = [out.tp, out.sl].find(
+            (result) => (result as ProtectionReplaceResult | undefined)?.rollbackInvalid,
+          ) as ProtectionReplaceResult | undefined;
+          markProtectionRestoreAttempted(input.symbol, Date.now(), this.persistenceProfile);
+          const rollbackError = invalidOrder?.rollbackError ?? invalidOrder?.error ?? error;
+          this.markProtectionUnprotected(input.symbol, rollbackError);
+          audit("operator", "position.protection.market_passed_old_trigger", {
             symbol: input.symbol,
-            side: closeSide,
-            type: "STOP_MARKET",
-            stopPrice: input.slPrice,
-            closePosition: true,
-            kind: "algo",
-            clientOrderId: newServerClientOrderId("sl"),
+            side: pos.side,
+            severity: "high",
+            error: rollbackError,
+          }, undefined, this.persistenceProfile);
+          alert(`position_protection_market_passed_old_trigger:${input.symbol}`, {
+            symbol: input.symbol,
+            side: pos.side,
+            severity: "high",
+            error: rollbackError,
           });
+        } else if (previousConfirmed && (previousTp || previousSl)) {
+          revertProtectionIntent({
+            symbol: input.symbol,
+            side: pos.side,
+            previousTpPrice: previousTp,
+            previousSlPrice: previousSl,
+          }, Date.now(), this.persistenceProfile);
+        } else {
+          markProtectionRestoreAttempted(input.symbol, Date.now(), this.persistenceProfile);
+          this.markProtectionUnprotected(input.symbol, error);
+        }
+        if (input.tpPrice && out.tp?.ok !== false) out.tp = failed(error);
+        if (input.slPrice && out.sl?.ok !== false) out.sl = failed(error);
+      }
+    } catch (err) {
+      this.markProtectionUnprotected(input.symbol, `Protective-order replacement failed: ${String(err)}`);
+      throw err;
     }
     return out;
+  }
+
+  private findProtectiveOrder(
+    orders: BinanceOrder[],
+    type: string,
+    side: "BUY" | "SELL",
+    price: string,
+  ): BinanceOrder | undefined {
+    return orders.find((order) => this.isProtectiveOrder(order, type, side, price));
+  }
+
+  private async cancelProtectiveOrders(
+    symbol: string,
+    type: string,
+    side: "BUY" | "SELL",
+    orders: BinanceOrder[],
+  ): Promise<string | null> {
+    for (const order of orders) {
+      if (!this.isProtectiveOrder(order, type, side)) continue;
+      const intent = this.findIntent(order.clientOrderId);
+      if (intent) this.updateIntent(order.clientOrderId, { status: "CANCEL_REQUESTED" });
+      try {
+        if (order.kind === "algo") {
+          const ack = await this.deps.rest.cancelAlgoOrder({
+            clientAlgoId: order.clientAlgoId ?? order.clientOrderId,
+          });
+          this.syncAlgoCancel(ack);
+        } else {
+          const canceled = await this.deps.rest.cancelOrder(symbol, undefined, order.clientOrderId);
+          if (intent) this.syncIntentFromOrder(order.clientOrderId, canceled);
+          else rememberOrder(canceled);
+        }
+        liveState().openOrders.delete(order.clientOrderId);
+        audit("operator", "order.protection.cancelled", { symbol, clientOrderId: order.clientOrderId, type }, undefined, this.persistenceProfile);
+      } catch (err) {
+        if (err instanceof CircuitBreakerOpenError) throw err;
+        if (order.kind === "algo") {
+          let exchangeOrder: BinanceAlgoOrder | null = null;
+          try {
+            exchangeOrder = await this.deps.rest.getAlgoOrder({
+              clientAlgoId: order.clientAlgoId ?? order.clientOrderId,
+            });
+          } catch (queryError) {
+            if (queryError instanceof CircuitBreakerOpenError) throw queryError;
+            if (!(queryError instanceof BinanceApiError) || queryError.code !== ERR_UNKNOWN_ORDER) {
+              return `Could not reconcile Algo ${type} cancellation: ${String(queryError)}`;
+            }
+          }
+          const currentAlgoOrders = await this.deps.rest.getOpenAlgoOrders(symbol);
+          if (currentAlgoOrders.some((candidate) => candidate.clientAlgoId === (order.clientAlgoId ?? order.clientOrderId))) {
+            return `Could not confirm cancellation of existing ${type}: ${String(err)}`;
+          }
+          if (exchangeOrder && !["CANCELED", "EXPIRED", "REJECTED"].includes(exchangeOrder.algoStatus)) {
+            return `Algo ${type} is no longer listed as open but reports ${exchangeOrder.algoStatus}; cancellation is uncertain`;
+          }
+          if (intent) {
+            if (exchangeOrder) await this.syncIntentFromAlgoOrder(order.clientOrderId, exchangeOrder);
+            else this.updateIntent(order.clientOrderId, { status: "CANCELED" });
+          }
+          if (exchangeOrder) rememberAlgoOrder(exchangeOrder);
+          else {
+            const current = liveState().orders.get(order.clientOrderId);
+            if (current) {
+              const canceled = { ...current, status: "CANCELED", updateTime: Date.now() };
+              liveState().orders.set(order.clientOrderId, canceled);
+              liveState().openOrders.delete(order.clientOrderId);
+            }
+          }
+          continue;
+        }
+        let remaining: BinanceOrder[];
+        try {
+          await this.sleep(250);
+          remaining = await this.getOpenOrdersIncludingAlgos(symbol);
+        } catch (reconcileError) {
+          if (reconcileError instanceof CircuitBreakerOpenError) throw reconcileError;
+          return `Could not reconcile cancel outcome: ${String(reconcileError)}`;
+        }
+        if (remaining.some((candidate) => candidate.clientOrderId === order.clientOrderId)) {
+          return `Could not confirm cancellation of existing ${type}: ${String(err)}`;
+        }
+        if (intent) this.updateIntent(order.clientOrderId, { status: "CANCELED" });
+        liveState().openOrders.delete(order.clientOrderId);
+      }
+    }
+    return null;
+  }
+
+  private async reconcileProtectionPlacement(
+    symbol: string,
+    type: string,
+    side: "BUY" | "SELL",
+    price: string,
+    clientOrderId: string,
+  ): Promise<{ order: BinanceOrder | null; absent: boolean }> {
+    await this.sleep(250);
+    const orders = await this.getOpenOrdersIncludingAlgos(symbol);
+    const openOrder = this.findProtectiveOrder(orders, type, side, price);
+    if (openOrder) return { order: openOrder, absent: false };
+    let exchangeOrder: BinanceAlgoOrder | null = null;
+    try {
+      exchangeOrder = await this.deps.rest.getAlgoOrder({ clientAlgoId: clientOrderId });
+    } catch (err) {
+      if (!(err instanceof BinanceApiError) || err.code !== ERR_UNKNOWN_ORDER) throw err;
+    }
+    if (exchangeOrder && !["CANCELED", "EXPIRED", "REJECTED"].includes(exchangeOrder.algoStatus)) {
+      return { order: null, absent: false };
+    }
+    if (exchangeOrder) await this.syncIntentFromAlgoOrder(clientOrderId, exchangeOrder);
+    else this.updateIntent(clientOrderId, {
+      status: "REJECTED",
+      lastState: JSON.stringify({ resolved: "protective_order_absent", exchangeStatus: null }),
+    });
+    this.maybeUnfreeze();
+    return {
+      order: null,
+      absent: !exchangeOrder || ["CANCELED", "EXPIRED", "REJECTED"].includes(exchangeOrder.algoStatus),
+    };
+  }
+
+  private async replaceProtectionOrder(
+    symbol: string,
+    side: "BUY" | "SELL",
+    type: "TAKE_PROFIT_MARKET" | "STOP_MARKET",
+    price: string,
+    previousPrice?: string,
+  ): Promise<ProtectionReplaceResult> {
+    const failed = (error: string, extra: Partial<ProtectionReplaceResult> = {}): ProtectionReplaceResult => ({
+      ok: false,
+      clientOrderId: "",
+      error,
+      ...extra,
+    });
+    const current = await this.getOpenOrdersIncludingAlgos(symbol);
+    const alreadyPresent = this.findProtectiveOrder(current, type, side, price);
+    if (alreadyPresent) return this.protectiveOrderResult(alreadyPresent);
+
+    const previous = current.filter((order) => this.isProtectiveOrder(order, type, side));
+    const cancelError = await this.cancelProtectiveOrders(symbol, type, side, previous);
+    if (cancelError) return failed(`Protective ${type} replacement blocked: ${cancelError}`);
+
+    const submit = (triggerPrice: string): Promise<OrderResult> => this.submitOrderSerialized({
+      symbol,
+      side,
+      type,
+      stopPrice: triggerPrice,
+      closePosition: true,
+      kind: "algo",
+      clientOrderId: newServerClientOrderId(type === "STOP_MARKET" ? "sl" : "tp"),
+    }, true);
+
+    const restorePrevious = async (): Promise<{
+      restored: boolean;
+      invalid?: boolean;
+      error?: string;
+    }> => {
+      if (!previousPrice) return { restored: false };
+      const validationError = await this.validateRollbackPrice(symbol, type, previousPrice);
+      if (validationError) return { restored: false, invalid: true, error: validationError };
+      const rollback = await submit(previousPrice);
+      if (rollback.ok) {
+        try {
+          const result = await this.reconcileProtectionPlacement(symbol, type, side, previousPrice, rollback.clientOrderId);
+          if (result.order) return { restored: true };
+          return {
+            restored: false,
+            error: result.absent
+              ? rollback.error ?? `Exchange did not confirm the previous ${type} order`
+              : `Previous ${type} order outcome remains uncertain`,
+          };
+        } catch (err) {
+          if (err instanceof CircuitBreakerOpenError) throw err;
+          return { restored: false, error: `Could not confirm previous ${type} order: ${String(err)}` };
+        }
+      }
+      try {
+        const result = await this.reconcileProtectionPlacement(symbol, type, side, previousPrice, rollback.clientOrderId);
+        if (result.order) return { restored: true };
+        return {
+          restored: false,
+          error: result.absent
+            ? rollback.error ?? `Exchange rejected the previous ${type} order`
+            : `Previous ${type} order outcome remains uncertain`,
+        };
+      } catch (err) {
+        if (err instanceof CircuitBreakerOpenError) throw err;
+        return { restored: false, error: `Could not confirm previous ${type} order: ${String(err)}` };
+      }
+    };
+
+    const first = await submit(price);
+    if (first.ok) return first;
+    if (first.failureKind !== "transient_or_uncertain") {
+      const rollback = await restorePrevious();
+      return {
+        ...first,
+        ...(rollback.restored ? { rollbackRestored: true } : {}),
+        ...(rollback.invalid ? { rollbackInvalid: true, rollbackError: rollback.error } : {}),
+      };
+    }
+
+    let reconciled: { order: BinanceOrder | null; absent: boolean };
+    try {
+      reconciled = await this.reconcileProtectionPlacement(symbol, type, side, price, first.clientOrderId);
+    } catch (err) {
+      if (err instanceof CircuitBreakerOpenError) throw err;
+      return {
+        ...first,
+        error: `Protective ${type} submission is uncertain and open orders could not be reconciled: ${String(err)}`,
+      };
+    }
+    if (reconciled.order) return this.protectiveOrderResult(reconciled.order);
+    if (!reconciled.absent) {
+      return { ...first, error: `Protective ${type} submission outcome remains uncertain; retry was not attempted` };
+    }
+
+    const retry = await submit(price);
+    if (retry.ok) return retry;
+    try {
+      reconciled = await this.reconcileProtectionPlacement(symbol, type, side, price, retry.clientOrderId);
+    } catch (err) {
+      if (err instanceof CircuitBreakerOpenError) throw err;
+      return {
+        ...retry,
+        error: `Protective ${type} retry is uncertain and open orders could not be reconciled: ${String(err)}`,
+      };
+    }
+    if (reconciled.order) return this.protectiveOrderResult(reconciled.order);
+    if (!reconciled.absent) {
+      return { ...retry, error: `Protective ${type} retry outcome remains uncertain; rollback was not attempted` };
+    }
+
+    const rollback = await restorePrevious();
+    return {
+      ...retry,
+      ...(rollback.restored ? { rollbackRestored: true } : {}),
+      ...(rollback.invalid ? { rollbackInvalid: true, rollbackError: rollback.error } : {}),
+      ...(!rollback.restored && !rollback.invalid && rollback.error ? {
+        error: `${retry.error ?? `Could not confirm new ${type} protection`}; ${rollback.error}`,
+      } : {}),
+    };
+  }
+
+  private async validateRollbackPrice(
+    symbol: string,
+    type: "TAKE_PROFIT_MARKET" | "STOP_MARKET",
+    price: string,
+  ): Promise<string | null> {
+    let mark: ReferencePrice;
+    try {
+      mark = await this.getFreshProtectionMark(symbol);
+    } catch (err) {
+      return `Cannot safely restore the previous ${type} order without a fresh mark: ${String(err)}`;
+    }
+    if (Date.now() - mark.at > PROTECTION_MARK_MAX_AGE_MS) {
+      return `Cannot safely restore the previous ${type} order because the mark is stale`;
+    }
+    const side = liveState().positions.get(symbol)?.side;
+    if (!side) return `Cannot safely restore the previous ${type} order without an open position`;
+    const error = this.protectionPriceError(side, type, price, mark);
+    if (!error) return null;
+    if (type === "STOP_MARKET") {
+      return `Market passed the old stop level ${price}; ${error}`;
+    }
+    return `Previous take-profit ${price} is no longer valid at mark ${mark.price}; ${error}`;
+  }
+
+  private isProtectiveOrder(
+    order: BinanceOrder,
+    type: string,
+    side: "BUY" | "SELL",
+    price?: string,
+  ): boolean {
+    if (order.type !== type || order.side !== side || order.closePosition !== true) return false;
+    if (price == null) return true;
+    if (!order.stopPrice) return false;
+    try {
+      return eq(parseDec(order.stopPrice), parseDec(price));
+    } catch {
+      return false;
+    }
+  }
+
+  private protectiveOrderResult(order: BinanceOrder): OrderResult {
+    return {
+      ok: true,
+      clientOrderId: order.clientOrderId,
+      status: order.status,
+      exchangeOrderId: order.kind === "algo" ? null : order.orderId,
+      ...(order.algoId != null ? { algoId: order.algoId } : {}),
+    };
+  }
+
+  /**
+   * An IP ban stops every Binance request, including the protection checks, so
+   * the affected position can no longer be called protected.
+   */
+  private markIpBanUnprotected(symbol: string, reason: string): void {
+    if (!liveState().positions.has(symbol)) return;
+    setProtectionStatus(symbol, "UNPROTECTED", reason, this.persistenceProfile);
+    this.deps.emit("account-update", { at: Date.now(), protection: symbol, status: "UNPROTECTED" });
+  }
+
+  private markProtectionUnprotected(symbol: string, reason: string): void {
+    setProtectionStatus(symbol, "UNPROTECTED", reason, this.persistenceProfile);
+    audit("operator", "position.protection.unprotected", { symbol, reason }, undefined, this.persistenceProfile);
+    alert("position_unprotected", { symbol, reason });
+    this.deps.emit("account-update", { at: Date.now(), protection: symbol, status: "UNPROTECTED" });
+  }
+
+  private protectionRecoveryBlock(cfg: EnvConfig, symbol: string): string | null {
+    const profileId = cfg.env === "testnet"
+      ? "binance-testnet"
+      : cfg.env === "production"
+        ? "binance-production"
+        : null;
+    if (!profileId || cfg.activeProfileId !== profileId || !cfg.profiles[profileId].configured) {
+      return "Protective-order recovery requires a configured active Binance profile";
+    }
+    if (this.uncertainIntents().some((intent) => intent.symbol === symbol)) {
+      return `Protective-order recovery for ${symbol} is blocked while an order outcome remains uncertain`;
+    }
+    return null;
   }
 }
 
@@ -791,6 +2085,82 @@ function buildOrderParams(input: SubmitOrderInput, clientOrderId: string) {
     reduceOnly: input.reduceOnly || undefined,
     timeInForce: input.type === "LIMIT" ? "GTC" : undefined,
     clientOrderId,
+  };
+}
+
+function isConditionalOrder(input: SubmitOrderInput): boolean {
+  return input.kind === "algo" || input.type === "STOP_MARKET" || input.type === "TAKE_PROFIT_MARKET";
+}
+
+function buildAlgoOrderParams(input: SubmitOrderInput, clientAlgoId: string): PlaceAlgoOrderParams {
+  if (!input.stopPrice) throw new Error(`${input.type} requires a trigger price`);
+  const base = {
+    algoType: "CONDITIONAL" as const,
+    symbol: input.symbol,
+    side: input.side,
+    type: input.type as "STOP_MARKET" | "TAKE_PROFIT_MARKET",
+    triggerPrice: input.stopPrice,
+    // Trigger levels are validated against the mark price (protectionPriceError
+    // / getFreshProtectionMark), so the exchange must evaluate the same series;
+    // the CONTRACT_PRICE default can fire early when last and mark diverge.
+    workingType: "MARK_PRICE" as const,
+    clientAlgoId,
+  };
+  if (input.closePosition) return { ...base, closePosition: true };
+  if (!input.qty) throw new Error(`${input.type} requires a quantity`);
+  return {
+    ...base,
+    closePosition: false,
+    quantity: input.qty,
+    ...(input.reduceOnly ? { reduceOnly: true } : {}),
+  };
+}
+
+function normalizeAlgoStatus(status: string): OrderIntent["status"] {
+  switch (status) {
+    case "CANCELED":
+      return "CANCELED";
+    case "REJECTED":
+      return "REJECTED";
+    case "EXPIRED":
+      return "EXPIRED";
+    case "FILLED":
+      return "FILLED";
+    case "PARTIALLY_FILLED":
+      return "PARTIALLY_FILLED";
+    default:
+      // NEW, TRIGGERED, FINISHED and unknown statuses are not outcomes.
+      // TRIGGERED/FINISHED are resolved from their actual order instead.
+      return "SUBMITTED";
+  }
+}
+
+function numericExchangeOrderId(value: number | string | null | undefined): number | null {
+  if (value == null || value === "" || !Number.isFinite(Number(value))) return null;
+  return Number(value);
+}
+
+function algoOrderAsBinanceOrder(order: BinanceAlgoOrder): BinanceOrder {
+  return {
+    orderId: numericExchangeOrderId(order.actualOrderId) ?? order.algoId,
+    clientOrderId: order.clientAlgoId,
+    clientAlgoId: order.clientAlgoId,
+    algoId: order.algoId,
+    kind: "algo",
+    symbol: order.symbol,
+    side: order.side,
+    type: order.orderType,
+    status: order.algoStatus,
+    price: order.price ?? "0",
+    stopPrice: order.triggerPrice,
+    origQty: order.quantity ?? "0",
+    executedQty: order.actualQty ?? "0",
+    cumQuote: "0",
+    avgPrice: order.actualPrice ?? "0",
+    reduceOnly: !!order.reduceOnly,
+    closePosition: !!order.closePosition,
+    time: order.createTime,
+    updateTime: order.updateTime,
   };
 }
 

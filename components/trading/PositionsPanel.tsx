@@ -10,15 +10,10 @@ import { useAppStore } from "@/lib/store";
 import {
   dispatchCancelOrder,
   dispatchClosePosition,
+  dispatchRemoveProtection,
 } from "@/lib/trading/dispatch";
-import {
-  disconnectBroker,
-  formatNum,
-  formatUsd,
-  ordersMargin,
-  positionPnl,
-  usedMargin,
-} from "@/lib/trading/mock";
+import { formatNum, formatUsd } from "@/lib/trading/format";
+import { PerformancePanel } from "@/components/trading/PerformancePanel";
 import { timezoneIana } from "@/lib/timezone";
 import { useQuotes } from "@/lib/use-quotes";
 import type { BalanceHistoryEntry, OrderHistoryEntry } from "@/types";
@@ -52,7 +47,7 @@ export function FreshnessBadge({ live }: { live: boolean }) {
     </span>
   );
 }
-import { ChevronDown, ChevronsDown, Columns3, Download, LogOut, Maximize2, Plug, Settings } from "lucide-react";
+import { ChevronDown, ChevronsDown, Columns3, Download, LogOut, Maximize2, Plug } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 
 function Metric({
@@ -65,10 +60,10 @@ function Metric({
   tone?: "up" | "down" | "muted";
 }) {
   const color =
-    tone === "up" ? "text-[#089981]" : tone === "down" ? "text-[#f23645]" : "text-[#d1d4dc]";
+    tone === "up" ? "text-[#089981]" : tone === "down" ? "text-[#f23645]" : "text-(--app-text)";
   return (
     <span className="flex flex-col justify-center gap-[3px] whitespace-nowrap border-l border-[var(--maws-border)] px-4 py-[5px] first:border-l-0">
-      <span className="text-[9px] font-semibold uppercase leading-none tracking-[0.08em] text-[#787b86]">{label}</span>
+      <span className="text-[9px] font-semibold uppercase leading-none tracking-[0.08em] text-(--app-muted)">{label}</span>
       <span className={`text-[13px] font-semibold leading-none ${color}`}>{value}</span>
     </span>
   );
@@ -91,6 +86,7 @@ export function PnlCell({
 }: {
   pnl: number;
   markPriceStale?: boolean;
+  protectionStatus?: "PROTECTED" | "UNPROTECTED";
   markAgeMs?: number;
 }) {
   const ageS = markAgeMs != null ? Math.max(0, Math.round(markAgeMs / 1000)) : null;
@@ -114,7 +110,7 @@ export function PnlCell({
 
 function Empty({ text }: { text: string }) {
   return (
-    <div className="flex h-full min-h-[120px] items-center justify-center text-[13px] text-[#787b86]">
+    <div className="flex h-full min-h-[120px] items-center justify-center text-[13px] text-(--app-muted)">
       {text}
     </div>
   );
@@ -145,13 +141,13 @@ function StatusTone({ status }: { status: string }) {
         ? "text-[#ff9800]"
         : status === "rejected"
           ? "text-[#f23645]"
-          : "text-[#787b86]";
+          : "text-(--app-muted)";
   return <span className={`capitalize ${color}`}>{status}</span>;
 }
 
 function SymbolChip({ symbol }: { symbol: string }) {
   return (
-    <span className="inline-flex items-center rounded-[4px] bg-[#2a2e39] px-1.5 py-0.5 text-[11px] text-[#d1d4dc]">
+    <span className="inline-flex items-center rounded-[4px] bg-(--app-hover) px-1.5 py-0.5 text-[11px] text-(--app-text)">
       {formatTicker(symbol)}
     </span>
   );
@@ -159,7 +155,7 @@ function SymbolChip({ symbol }: { symbol: string }) {
 
 function TableTools() {
   return (
-    <span className="flex justify-end gap-1.5 text-[#787b86]">
+    <span className="flex justify-end gap-1.5 text-(--app-muted)">
       <Download size={13} />
       <Columns3 size={13} />
     </span>
@@ -170,15 +166,13 @@ type OrderFilter = "all" | "filled" | "cancelled" | "rejected";
 
 export function useTradingMetrics() {
   const connected = useAppStore((s) => s.connectedBroker);
-  const balance = useAppStore((s) => s.mockBalance);
-  const realized = useAppStore((s) => s.mockRealized);
   const leverage = useAppStore((s) => s.chartSettings.defaultLeverage);
   const liveAccount = useLiveStore((s) => s.account);
   // Authoritative lifetime metrics from the server-side exchange income
   // ledger — NOT the capped latest-50-fill list.
   const liveMetrics = useLiveStore((s) => s.accountMetrics);
   const liveFills = useLiveStore((s) => s.fills);
-  // Exactly one book (live for binance, paper otherwise) — never a mix.
+  // Exactly one book (live for binance) — never a mix.
   const { orders, positions } = useBrokerBook();
   const quotes = useQuotes();
   const lastOf = (symbol: string) => quotes.find((q) => q.symbol === symbol)?.last ?? 0;
@@ -193,13 +187,13 @@ export function useTradingMetrics() {
     equitySource: "fallback" as const,
   };
   const liveMetricsSafe = liveMetrics ?? { realizedPnl: 0, commission: 0, fundingFee: 0, netRealized: 0, fetchedAt: null };
-  const unrealized = live ? liveAcc.unrealized : positions.reduce((sum, p) => sum + positionPnl(p, lastOf(p.symbol)), 0);
-  const margin = live ? liveAcc.margin : usedMargin(positions);
-  const orderMargin = live ? 0 : ordersMargin(orders, leverage);
-  const equity = live ? liveAcc.equity : balance + margin + unrealized;
-  const accountBalance = live ? liveAcc.balance : balance + margin;
-  const available = live ? liveAcc.available : balance;
-  const realizedShown = live ? liveMetricsSafe.realizedPnl : realized;
+  const unrealized = live ? liveAcc.unrealized : 0;
+  const margin = live ? liveAcc.margin : 0;
+  const orderMargin = live ? 0 : 0;
+  const equity = live ? liveAcc.equity : 0;
+  const accountBalance = live ? liveAcc.balance : 0;
+  const available = live ? liveAcc.available : 0;
+  const realizedShown = live ? liveMetricsSafe.realizedPnl : 0;
   const buffer = margin + orderMargin <= 0 ? 100 : (equity / (margin + orderMargin)) * 100;
   const pnlTone = (v: number): "up" | "down" | "muted" =>
     v > 0 ? "up" : v < 0 ? "down" : "muted";
@@ -288,20 +282,19 @@ export type PosRow = {
   /** PnL-freshness provenance from the live DTO (live branch only). */
   markAgeMs?: number;
   markPriceStale?: boolean;
+  protectionStatus?: "PROTECTED" | "UNPROTECTED";
 };
 
 export function computePosRows(
-  positions: Array<Parameters<typeof positionPnl>[0] & { id: string; mark?: number; unrealized?: number; notional?: number; marginType?: string; isolatedMargin?: number; isolatedWallet?: number; markAgeMs?: number; markPriceStale?: boolean }>,
+  positions: Array<{ id: string; symbol: string; side: "long" | "short"; entry: number; qty: number; leverage: number; tp: number | null; sl: number | null; liq: number | null; mark?: number; unrealized?: number; notional?: number; marginType?: string; isolatedMargin?: number; isolatedWallet?: number; markAgeMs?: number; markPriceStale?: boolean; protectionStatus?: "PROTECTED" | "UNPROTECTED" }>,
   live: boolean,
   lastOf: (symbol: string) => number,
 ): PosRow[] {
   return live
     ? positions.map((p) => {
         const last = (p.mark && p.mark > 0) ? p.mark : p.entry;
-        const pnl = (p.mark && p.mark > 0) ? positionPnl(p, last) : (p.unrealized ?? 0);
+        const pnl = (p.mark && p.mark > 0) ? (p.side === "long" ? (last - p.entry) * p.qty : (p.entry - last) * p.qty) : (p.unrealized ?? 0);
         const notional = p.qty * last;
-        // Use Binance isolatedWallet for isolated positions (matches Binance UI display).
-        // Fallback to isolatedMargin if isolatedWallet unavailable, then estimate.
         const margin = (p.marginType === "isolated" && p.isolatedWallet != null && p.isolatedWallet > 0)
           ? p.isolatedWallet
           : (p.marginType === "isolated" && p.isolatedMargin != null && p.isolatedMargin > 0)
@@ -323,6 +316,7 @@ export function computePosRows(
           marginType: p.marginType,
           markAgeMs: p.markAgeMs,
           markPriceStale: p.markPriceStale === true,
+          protectionStatus: p.protectionStatus,
         };
       })
     : positions.map((p) => {
@@ -339,7 +333,7 @@ export function computePosRows(
           sl: p.sl,
           leverage: p.leverage,
           last,
-          pnl: positionPnl(p, last),
+          pnl: p.side === "long" ? (last - p.entry) * p.qty : (p.entry - last) * p.qty,
           notional,
           margin: notional / Math.max(1, p.leverage),
         };
@@ -348,16 +342,11 @@ export function computePosRows(
 
 export function PositionsPanel() {
   const tab = useAppStore((s) => s.bottomTab);
-  const orderHistory = useAppStore((s) => s.orderHistory);
-  const balanceHistory = useAppStore((s) => s.balanceHistory);
-  const journal = useAppStore((s) => s.journal);
   const timezone = useAppStore((s) => s.chartSettings.timezone);
   const stampTz = timezoneIana(timezone);
   const setBrokerDialogOpen = useAppStore((s) => s.setBrokerDialogOpen);
-  const setAccountSettingsOpen = useAppStore((s) => s.setAccountSettingsOpen);
   const setBottomOpen = useAppStore((s) => s.setBottomOpen);
   const setBottomHeight = useAppStore((s) => s.setBottomHeight);
-  const setConnectedBroker = useAppStore((s) => s.setConnectedBroker);
   const liveProfileId = useLiveStore((s) => s.profileId);
   const livePhase = useLiveStore((s) => s.phase);
   const liveReady = useLiveStore((s) => s.ready);
@@ -370,7 +359,8 @@ export function PositionsPanel() {
   useEffect(() => {
     if (!brokerMenuOpen) return;
     const onDown = (e: MouseEvent) => {
-      if (!brokerMenuRef.current?.contains(e.target as Node)) setBrokerMenuOpen(false);
+      if (!(e.target instanceof Node)) return;
+      if (!brokerMenuRef.current?.contains(e.target)) setBrokerMenuOpen(false);
     };
     const id = window.setTimeout(() => {
       window.addEventListener("mousedown", onDown);
@@ -409,7 +399,7 @@ export function PositionsPanel() {
         fillPrice: f.price,
         status: "filled" as const,
       }))
-    : orderHistory;
+    : [];
 
   const filledCount = histRows.filter((o) => o.status === "filled").length;
   const cancelledCount = histRows.filter((o) => o.status === "cancelled").length;
@@ -420,9 +410,8 @@ export function PositionsPanel() {
       : histRows.filter((o) => o.status === orderFilter);
 
   // Live fills are the exchange-side record of every execution, including
-  // closing ones (non-zero realized P&L). Derive balance-history and journal
-  // rows from them so closes are recorded in both tabs, mirroring paper mode.
-  const liveBalanceRows: BalanceHistoryEntry[] = live
+  // closing ones (non-zero realized P&L).
+  const balanceRows: BalanceHistoryEntry[] = live
     ? liveFills.map((f) => ({
         id: `fill-${f.ts}-${f.symbol}-${f.side}-${f.qty}-${f.price}`,
         time: f.ts,
@@ -433,7 +422,8 @@ export function PositionsPanel() {
         symbol: f.symbol,
       }))
     : [];
-  const liveJournalRows = live
+
+  const journalRows = live
     ? liveFills
         .filter((f) => f.realizedPnl !== 0)
         .map((f) => ({
@@ -443,37 +433,27 @@ export function PositionsPanel() {
         }))
     : [];
 
-  const balanceRows = live
-    ? liveBalanceRows
-    : balanceHistory.filter(
-        (b) =>
-          b.type === "realized_pnl" || b.type === "deposit" || b.type === "withdrawal",
-      );
-  const journalRows = live ? liveJournalRows : journal;
-
   return (
     <div className="flex h-full min-h-0 flex-col bg-[var(--maws-panel)]">
       <div className="relative z-20 flex h-[28px] shrink-0 items-center gap-3 px-2">
         <div className="relative shrink-0" ref={brokerMenuRef}>
           <button
             type="button"
-            className="flex items-center gap-1 text-[13px] font-semibold text-[#d1d4dc] hover:text-white"
+            className="flex items-center gap-1 text-[13px] font-semibold text-(--app-text) hover:text-white"
             onClick={() => setBrokerMenuOpen((v) => !v)}
           >
-            {connected === "mock"
-              ? "Paper Trading"
-              : connected === "binance"
-                ? liveProfileId
-                  ? profileLabel(liveProfileId)
-                  : "Binance Futures"
-                : "Trade with your broker"}
-            <ChevronDown size={14} className="text-[#787b86]" />
+            {connected === "binance"
+              ? liveProfileId
+                ? profileLabel(liveProfileId)
+                : "Binance Futures"
+              : "Trade with your broker"}
+            <ChevronDown size={14} className="text-(--app-muted)" />
             {freshness}
             {live && !liveReady ? <span className="ml-1 text-[10px] font-normal text-[#f0b90b]">{profilePhaseLabel(livePhase)}</span> : null}
           </button>
           {brokerMenuOpen && (
             <div
-              className="absolute top-full left-0 z-50 mt-1 w-[210px] rounded-[8px] border border-[#2a2e39] bg-[#1b1b1b] py-1 shadow-[0_8px_28px_rgba(0,0,0,0.65)]"
+              className="absolute top-full left-0 z-50 mt-1 w-[210px] rounded-[8px] border border-(--app-border) bg-(--app-elevated) py-1 shadow-[0_8px_28px_rgba(0,0,0,0.65)]"
               role="menu"
               onMouseDown={(e) => e.stopPropagation()}
             >
@@ -485,7 +465,7 @@ export function PositionsPanel() {
                   setBrokerDialogOpen(true);
                 }}
               >
-                <Plug size={14} className="shrink-0 text-[#787b86]" />
+                <Plug size={14} className="shrink-0 text-(--app-muted)" />
                 Connect to a broker
               </button>
               <button
@@ -495,36 +475,21 @@ export function PositionsPanel() {
                   setBrokerMenuOpen(false);
                   if (connected === "binance") {
                     void disconnectLiveBroker();
-                    setConnectedBroker(null);
-                  } else {
-                    disconnectBroker();
                   }
                   setBottomOpen(false);
                 }}
               >
-                <LogOut size={14} className="shrink-0 text-[#787b86]" />
+                <LogOut size={14} className="shrink-0 text-(--app-muted)" />
                 Log out
               </button>
             </div>
           )}
         </div>
 
-        <div className="flex shrink-0 items-center gap-1 text-[12px] text-[#d1d4dc]">
-          <span>Account</span>
-          <button
-            type="button"
-            title="Account settings"
-            className="flex h-5 w-5 items-center justify-center rounded-[3px] text-[#787b86] hover:bg-[#1a1a1a] hover:text-[#d1d4dc]"
-            onClick={() => setAccountSettingsOpen(true)}
-          >
-            <Settings size={13} />
-          </button>
-        </div>
-
         <div className="ml-auto flex shrink-0 items-center gap-0.5">
           <button
             type="button"
-            className="flex h-6 w-6 items-center justify-center rounded-[3px] text-[#787b86] hover:bg-[#1a1a1a] hover:text-[#d1d4dc]"
+            className="flex h-6 w-6 items-center justify-center rounded-[3px] text-(--app-muted) hover:bg-(--app-hover) hover:text-(--app-text)"
             title="Collapse"
             onClick={() => setBottomOpen(false)}
           >
@@ -532,7 +497,7 @@ export function PositionsPanel() {
           </button>
           <button
             type="button"
-            className="flex h-6 w-6 items-center justify-center rounded-[3px] text-[#787b86] hover:bg-[#1a1a1a] hover:text-[#d1d4dc]"
+            className="flex h-6 w-6 items-center justify-center rounded-[3px] text-(--app-muted) hover:bg-(--app-hover) hover:text-(--app-text)"
             title="Expand to half screen"
             onClick={(event) => {
               const section = event.currentTarget.closest<HTMLElement>("section");
@@ -556,7 +521,7 @@ export function PositionsPanel() {
             <Empty text="There are no open positions in your trading account yet" />
           ) : (
             <table className="w-full min-w-[980px] text-left text-[12px]">
-              <thead className="sticky top-0 bg-[var(--maws-panel)] text-[#787b86]">
+              <thead className="sticky top-0 bg-[var(--maws-panel)] text-(--app-muted)">
                 <tr>
                   <th className="px-2 py-1.5 font-normal">Symbol</th>
                   <th className="px-2 py-1.5 font-normal">Side</th>
@@ -570,7 +535,7 @@ export function PositionsPanel() {
                   <th className="px-2 py-1.5 font-normal">Unrealized P&L</th>
                   <th className="px-2 py-1.5 font-normal">Expiration date</th>
                   <th className="px-2 py-1.5 font-normal">
-                    <span className="flex justify-end gap-1 text-[#787b86]">
+                    <span className="flex justify-end gap-1 text-(--app-muted)">
                       <Download size={13} />
                       <Columns3 size={13} />
                     </span>
@@ -588,8 +553,15 @@ export function PositionsPanel() {
                   const initialMargin = mgn > 0 ? mgn : notional / Math.max(1, p.leverage);
                   const pct = initialMargin === 0 ? 0 : (pnl / initialMargin) * 100;
                   return (
-                    <tr key={p.id} className="border-t border-[#222222] text-[#d1d4dc]">
-                      <td className="px-2 py-1.5">{formatTicker(p.symbol)}</td>
+                    <tr key={p.id} className="border-t border-(--app-border) text-(--app-text)">
+                      <td className="px-2 py-1.5">
+                        {formatTicker(p.symbol)}
+                        {p.protectionStatus === "UNPROTECTED" && (
+                          <span className="ml-1 text-[#f23645]" title="The recorded TP/SL protection is missing or could not be confirmed">
+                            UNPROTECTED
+                          </span>
+                        )}
+                      </td>
                       <td className={`px-2 py-1.5 ${p.side === "long" ? "text-[#2962ff]" : "text-[#f23645]"}`}>
                         {p.side === "long" ? "Buy" : "Sell"}
                       </td>
@@ -606,13 +578,28 @@ export function PositionsPanel() {
                       <td className={`px-2 py-1.5 ${pnl >= 0 ? "text-[#089981]" : "text-[#f23645]"}`}>
                         <PnlCell pnl={pnl} markPriceStale={p.markPriceStale} markAgeMs={p.markAgeMs} />
                       </td>
-                      <td className="px-2 py-1.5 text-[#787b86]">—</td>
+                      <td className="px-2 py-1.5 text-(--app-muted)">—</td>
                       <td className="px-2 py-1.5 text-right">
+                        {live && (p.tp != null || p.sl != null || p.protectionStatus != null) && (
+                          <button
+                            type="button"
+                            disabled={mutationBlocked}
+                            title={mutationBlocked ? "Switching profile…" : "Cancel all TP/SL orders for this position"}
+                            className="mr-2 text-[#f0b90b] hover:text-(--app-text) disabled:cursor-not-allowed disabled:opacity-40"
+                            onClick={() => {
+                              if (window.confirm(`Remove all TP/SL protection for ${formatTicker(p.symbol)}?`)) {
+                                void dispatchRemoveProtection(p.symbol);
+                              }
+                            }}
+                          >
+                            Remove TP/SL
+                          </button>
+                        )}
                         <button
                           type="button"
                           disabled={mutationBlocked}
                           title={mutationBlocked ? "Switching profile…" : undefined}
-                          className="text-[#787b86] hover:text-[#d1d4dc] disabled:cursor-not-allowed disabled:opacity-40"
+                          className="text-(--app-muted) hover:text-(--app-text) disabled:cursor-not-allowed disabled:opacity-40"
                           onClick={() => {
                             void dispatchClosePosition(p.id);
                           }}
@@ -633,7 +620,7 @@ export function PositionsPanel() {
             <Empty text="There are no working orders in your trading account yet" />
           ) : (
             <table className="w-full text-left text-[12px]">
-              <thead className="sticky top-0 bg-[var(--maws-panel)] text-[#787b86]">
+              <thead className="sticky top-0 bg-[var(--maws-panel)] text-(--app-muted)">
                 <tr>
                   <th className="px-2 py-1.5 font-normal">Symbol</th>
                   <th className="px-2 py-1.5 font-normal">Side</th>
@@ -645,7 +632,7 @@ export function PositionsPanel() {
               </thead>
               <tbody>
                 {ordRows.map((o) => (
-                  <tr key={o.id} className="border-t border-[#222222] text-[#d1d4dc]">
+                  <tr key={o.id} className="border-t border-(--app-border) text-(--app-text)">
                     <td className="px-2 py-1.5">{formatTicker(o.symbol)}</td>
                     <td className={`px-2 py-1.5 ${o.side === "buy" ? "text-[#2962ff]" : "text-[#f23645]"}`}>
                       {o.side === "buy" ? "Buy" : "Sell"}
@@ -658,7 +645,7 @@ export function PositionsPanel() {
                         type="button"
                         disabled={mutationBlocked}
                         title={mutationBlocked ? "Switching profile…" : undefined}
-                        className="text-[#787b86] hover:text-[#d1d4dc] disabled:cursor-not-allowed disabled:opacity-40"
+                        className="text-(--app-muted) hover:text-(--app-text) disabled:cursor-not-allowed disabled:opacity-40"
                         onClick={() => {
                           void dispatchCancelOrder(o.id);
                         }}
@@ -695,8 +682,8 @@ export function PositionsPanel() {
                       onClick={() => setOrderFilter(f.id)}
                       className={`h-[22px] rounded-[4px] px-2.5 text-[12px] ${
                         on
-                          ? "bg-[#2a2e39] text-[#d1d4dc]"
-                          : "text-[#787b86] hover:text-[#d1d4dc]"
+                          ? "bg-(--app-hover) text-(--app-text)"
+                          : "text-(--app-muted) hover:text-(--app-text)"
                       }`}
                     >
                       {f.label}
@@ -710,7 +697,7 @@ export function PositionsPanel() {
               </div>
               <div className="min-h-0 flex-1 overflow-auto">
                 <table className="w-full min-w-[1280px] text-left text-[12px]">
-                  <thead className="sticky top-0 bg-[var(--maws-panel)] text-[#787b86]">
+                  <thead className="sticky top-0 bg-[var(--maws-panel)] text-(--app-muted)">
                     <tr>
                       <th className="px-2 py-1.5 font-normal">Symbol</th>
                       <th className="px-2 py-1.5 font-normal">Side</th>
@@ -730,7 +717,7 @@ export function PositionsPanel() {
                   </thead>
                   <tbody>
                     {filteredOrders.map((o) => (
-                      <tr key={o.id} className="border-t border-[#222222] text-[#d1d4dc]">
+                      <tr key={o.id} className="border-t border-(--app-border) text-(--app-text)">
                         <td className="px-2 py-1.5">
                           <SymbolChip symbol={o.symbol} />
                         </td>
@@ -743,12 +730,12 @@ export function PositionsPanel() {
                         </td>
                         <td className="px-2 py-1.5 capitalize">{o.type}</td>
                         <td className="px-2 py-1.5">{o.qty}</td>
-                        <td className="px-2 py-1.5 text-[#787b86]">
+                        <td className="px-2 py-1.5 text-(--app-muted)">
                           {o.limitPrice != null
                             ? formatPrice(o.symbol, o.limitPrice)
                             : ""}
                         </td>
-                        <td className="px-2 py-1.5 text-[#787b86]">
+                        <td className="px-2 py-1.5 text-(--app-muted)">
                           {o.stopPrice != null
                             ? formatPrice(o.symbol, o.stopPrice)
                             : ""}
@@ -761,16 +748,16 @@ export function PositionsPanel() {
                         <td className="px-2 py-1.5">
                           <StatusTone status={o.status} />
                         </td>
-                        <td className="px-2 py-1.5 whitespace-nowrap text-[#d1d4dc]">
+                        <td className="px-2 py-1.5 whitespace-nowrap text-(--app-text)">
                           {formatStamp(o.time, stampTz)}
                         </td>
-                        <td className="px-2 py-1.5 whitespace-nowrap text-[#d1d4dc]">
+                        <td className="px-2 py-1.5 whitespace-nowrap text-(--app-text)">
                           {formatStamp(o.closingTime ?? o.time, stampTz)}
                         </td>
-                        <td className="px-2 py-1.5 font-mono text-[11px] text-[#787b86]">
+                        <td className="px-2 py-1.5 font-mono text-[11px] text-(--app-muted)">
                           {o.id}
                         </td>
-                        <td className="px-2 py-1.5 text-[#787b86]" />
+                        <td className="px-2 py-1.5 text-(--app-muted)" />
                         <td className="px-2 py-1.5">
                           {o.leverage != null ? `${o.leverage}x` : "—"}
                         </td>
@@ -798,7 +785,7 @@ export function PositionsPanel() {
               </div>
               <div className="min-h-0 flex-1 overflow-auto">
                 <table className="w-full min-w-[960px] text-left text-[12px]">
-                  <thead className="sticky top-0 bg-[var(--maws-panel)] text-[#787b86]">
+                  <thead className="sticky top-0 bg-[var(--maws-panel)] text-(--app-muted)">
                     <tr>
                       <th className="px-2 py-1.5 font-normal">Time</th>
                       <th className="px-2 py-1.5 font-normal">Balance before</th>
@@ -816,14 +803,14 @@ export function PositionsPanel() {
                           ? "text-[#089981]"
                           : b.amount < 0
                             ? "text-[#f23645]"
-                            : "text-[#d1d4dc]";
+                            : "text-(--app-text)";
                       return (
-                        <tr key={b.id} className="border-t border-[#222222] text-[#d1d4dc]">
+                        <tr key={b.id} className="border-t border-(--app-border) text-(--app-text)">
                           <td className="px-2 py-1.5 whitespace-nowrap">
                             {formatStamp(b.time, stampTz)}
                           </td>
                           <td className="px-2 py-1.5">{formatNum(before)}</td>
-                          <td className={`px-2 py-1.5 whitespace-nowrap ${isPnl ? pnlColor : "text-[#787b86]"}`}>
+                          <td className={`px-2 py-1.5 whitespace-nowrap ${isPnl ? pnlColor : "text-(--app-muted)"}`}>
                             {isPnl
                               ? `${b.amount < 0 ? "-" : ""}${formatNum(Math.abs(b.amount))} USD`
                               : b.type === "deposit" || b.type === "withdrawal"
@@ -831,7 +818,7 @@ export function PositionsPanel() {
                                 : "—"}
                           </td>
                           <td className="px-2 py-1.5">{formatNum(b.balanceAfter)}</td>
-                          <td className="max-w-[520px] px-2 py-1.5 text-[11px] leading-snug text-[#d1d4dc]">
+                          <td className="max-w-[520px] px-2 py-1.5 text-[11px] leading-snug text-(--app-text)">
                             {b.note}
                           </td>
                         </tr>
@@ -844,6 +831,8 @@ export function PositionsPanel() {
           )
         ) : null}
 
+        {tab === "performance" ? <PerformancePanel histRows={histRows} /> : null}
+
         {tab === "journal" ? (
           journalRows.length === 0 ? (
             <Empty text="Your trading journal is empty" />
@@ -854,7 +843,7 @@ export function PositionsPanel() {
               </div>
               <div className="min-h-0 flex-1 overflow-auto">
                 <table className="w-full min-w-[640px] text-left text-[12px]">
-                  <thead className="sticky top-0 bg-[var(--maws-panel)] text-[#787b86]">
+                  <thead className="sticky top-0 bg-[var(--maws-panel)] text-(--app-muted)">
                     <tr>
                       <th className="w-[180px] px-2 py-1.5 font-normal">Time</th>
                       <th className="px-2 py-1.5 font-normal">Text</th>
@@ -862,7 +851,7 @@ export function PositionsPanel() {
                   </thead>
                   <tbody>
                     {journalRows.map((j) => (
-                      <tr key={j.id} className="border-t border-[#222222] text-[#d1d4dc]">
+                      <tr key={j.id} className="border-t border-(--app-border) text-(--app-text)">
                         <td className="px-2 py-1.5 whitespace-nowrap align-top">
                           {formatStamp(j.time, stampTz)}
                         </td>

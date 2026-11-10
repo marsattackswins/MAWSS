@@ -12,6 +12,9 @@ const risk = {
   maxOpenPositions: 3,
   dailyLossPct: 10,
   priceCollarPct: 5,
+  maxLeverage: 10,
+  maxMarginRatio: 0.5,
+  minLiquidationDistancePct: 10,
 };
 
 function position(overrides: Partial<Parameters<typeof aggregateRiskCockpit>[0]["positions"][number]> = {}) {
@@ -143,16 +146,12 @@ describe("GET /api/admin/risk", () => {
     expect(response.status).toBe(401);
   });
 
-  test("accepts the configured health token header", async () => {
+  test("health token cannot access account, position, or order risk data", async () => {
     freshEnv(makeCfg({ env: "testnet", healthToken: "risk-test-token" }));
     const request = new NextRequest("http://localhost:3000/api/admin/risk", {
       headers: { "x-maws-health-token": "risk-test-token" },
     });
     const response = await GET(request);
-    const body = await response.json();
-
-    expect(response.status).toBe(200);
-    expect(body.env).toBe("testnet");
-    expect(body.sourceAvailable).toBe(true);
+    expect(response.status).toBe(401);
   });
 });

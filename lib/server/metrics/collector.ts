@@ -248,7 +248,9 @@ export const LIVE_MUTATION_OPERATIONS = {
   SUBMIT_ORDER: "submit_order",
   CANCEL_ORDER: "cancel_order",
   CLOSE_POSITION: "close_position",
+  REVERSE_POSITION: "reverse_position",
   PROTECT_POSITION: "protect_position",
+  REMOVE_PROTECTION: "remove_protection",
 } as const;
 
 // Event types

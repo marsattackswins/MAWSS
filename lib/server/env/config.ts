@@ -1,12 +1,14 @@
 import "server-only";
 
+import { compareSecretTokens } from "../auth/token";
+import { verifyOperatorPassword } from "../auth/password";
+
 export type MawsEnv = "local" | "testnet" | "shadow" | "production";
 export type BrokerType = "binance";
-export type ProfileId = "paper" | "binance-testnet" | "binance-production";
-export type ProfileEnvironment = "paper" | "testnet" | "production";
+export type ProfileId = "binance-testnet" | "binance-production";
+export type ProfileEnvironment = "testnet" | "production";
 
 export const PROFILE_IDS: readonly ProfileId[] = [
-  "paper",
   "binance-testnet",
   "binance-production",
 ];
@@ -17,10 +19,61 @@ export interface ServerProfileConfig {
   environment: ProfileEnvironment;
   configured: boolean;
   executionEnabled: boolean;
+  confirmOrders?: boolean;
   apiKey: string | null;
   apiSecret: string | null;
   restEndpoint: string;
   webSocketEndpoint: string;
+}
+
+export const PRODUCTION_RISK_LIMITS = [
+  ["MAWS_RISK_MAX_ORDER_NOTIONAL", "maxOrderNotionalUsd"],
+  ["MAWS_RISK_MAX_GROSS_EXPOSURE", "maxGrossExposureUsd"],
+  ["MAWS_RISK_MAX_OPEN_ORDERS", "maxOpenOrders"],
+  ["MAWS_RISK_MAX_OPEN_POSITIONS", "maxOpenPositions"],
+  ["MAWS_RISK_DAILY_LOSS_PCT", "dailyLossPct"],
+  ["MAWS_RISK_PRICE_COLLAR_PCT", "priceCollarPct"],
+  ["MAWS_RISK_MAX_LEVERAGE", "maxLeverage"],
+  ["MAWS_RISK_MAX_MARGIN_RATIO", "maxMarginRatio"],
+  ["MAWS_RISK_MIN_LIQ_DISTANCE_PCT", "minLiquidationDistancePct"],
+] as const satisfies readonly (readonly [string, keyof EnvConfig["risk"]])[];
+
+export function productionRiskConfigurationError(cfg: EnvConfig): string | null {
+  const missing = cfg.missingProductionRiskLimitVariables ?? PRODUCTION_RISK_LIMITS.map(([name]) => name);
+  if (missing.length > 0) {
+    return `Production risk limits must be explicitly configured; missing: ${missing.join(", ")}`;
+  }
+  for (const [name, key] of PRODUCTION_RISK_LIMITS) {
+    const value = cfg.risk[key];
+    if (!Number.isFinite(value) || value <= 0) {
+      return `${name} must be a positive finite number in production, got: ${value}`;
+    }
+  }
+  return null;
+}
+
+function validateAuthTokens(cfg: EnvConfig): void {
+  const tokens = [
+    ["MAWS_HEALTH_TOKEN", cfg.healthToken],
+    ["MAWS_EMERGENCY_TOKEN", cfg.emergencyToken],
+  ] as const;
+  for (const [name, token] of tokens) {
+    if (token && token.length < 32) throw new Error(`${name} must be at least 32 characters`);
+  }
+  if (cfg.healthToken && cfg.emergencyToken && compareSecretTokens(cfg.healthToken, cfg.emergencyToken)) {
+    throw new Error("MAWS_HEALTH_TOKEN and MAWS_EMERGENCY_TOKEN must differ");
+  }
+  if (cfg.operatorAuth) {
+    const operatorMaterial = [cfg.operatorAuth, ...cfg.operatorAuth.split(":")];
+    for (const [name, token] of tokens) {
+      if (token && (
+        verifyOperatorPassword(token, cfg.operatorAuth) ||
+        operatorMaterial.some((material) => compareSecretTokens(token, material))
+      )) {
+        throw new Error(`${name} must differ from MAWS_OPERATOR_AUTH material`);
+      }
+    }
+  }
 }
 
 export type ProfileRegistry = Record<ProfileId, ServerProfileConfig>;
@@ -32,6 +85,7 @@ export interface SafeProfileMetadata {
   configured: boolean;
   requiresProductionConfirmation: boolean;
   executionEnabled: boolean;
+  confirmOrders?: boolean;
 }
 
 export interface EnvConfig {
@@ -48,6 +102,8 @@ export interface EnvConfig {
   trustProxy: boolean;
   backupKey: Buffer | null;
   healthToken: string | null;
+  emergencyToken: string | null;
+  reverseEnabled: boolean;
   binanceApiKey: string | null;
   binanceApiSecret: string | null;
   recvWindowMs: number;
@@ -65,7 +121,11 @@ export interface EnvConfig {
   leaseTtlMs: number;
   /** Maximum age of the last authoritative account/positions/orders snapshot. */
   snapshotMaxAgeMs: number;
+  /** Maximum age for automatically restoring an interrupted protection replacement. */
+  protectionPendingMaxAgeMs: number;
   alertWebhookUrl: string | null;
+  /** Production risk variables absent from the source environment. */
+  missingProductionRiskLimitVariables?: string[];
   risk: {
     maxOrderNotionalUsd: number;
     maxGrossExposureUsd: number;
@@ -73,6 +133,9 @@ export interface EnvConfig {
     maxOpenPositions: number;
     dailyLossPct: number;
     priceCollarPct: number;
+    maxLeverage: number;
+    maxMarginRatio: number;
+    minLiquidationDistancePct: number;
   };
   circuitBreaker: {
     // Binance REST API breaker
@@ -95,8 +158,8 @@ export interface EnvConfig {
 
 /**
  * Fixed literal host map. Base URLs are never configurable via environment.
- * local/testnet use the Binance Futures Testnet; shadow/production use the
- * real USD-M Futures endpoints.
+ * local uses production public endpoints (chart only); testnet uses Binance
+ * USDⓈ-M Demo Trading; shadow/production use the real USD-M Futures endpoints.
  */
 export const HOST_MAP: Record<MawsEnv, { rest: string; uds: string; label: string }> = {
   local: {
@@ -105,9 +168,9 @@ export const HOST_MAP: Record<MawsEnv, { rest: string; uds: string; label: strin
     label: "Binance USD-M Futures (local, public data only)",
   },
   testnet: {
-    rest: "https://testnet.binancefuture.com",
-    uds: "wss://fstream.binancefuture.com",
-    label: "Binance USD-M Futures Testnet",
+    rest: "https://demo-fapi.binance.com",
+    uds: "wss://demo-fstream.binance.com",
+    label: "Binance USD-M Futures Demo Trading",
   },
   shadow: {
     rest: "https://fapi.binance.com",
@@ -120,6 +183,32 @@ export const HOST_MAP: Record<MawsEnv, { rest: string; uds: string; label: strin
     label: "Binance USD-M Futures (production)",
   },
 };
+
+/** Retired Binance testnet hosts — startup fails if any profile resolves to these. */
+const LEGACY_HOSTS = ["testnet.binancefuture.com", "fstream.binancefuture.com"];
+
+function hostnameOf(url: string): string {
+  try {
+    return new URL(url).hostname.toLowerCase();
+  } catch {
+    return "";
+  }
+}
+
+function assertNoLegacyHosts(profiles: ProfileRegistry): void {
+  for (const profile of Object.values(profiles)) {
+    const hosts = [hostnameOf(profile.restEndpoint), hostnameOf(profile.webSocketEndpoint)];
+    for (const host of hosts) {
+      if (LEGACY_HOSTS.includes(host)) {
+        throw new Error(
+          `Legacy Binance testnet host "${host}" is retired. ` +
+          `Demo Trading uses demo-fapi.binance.com (REST) and ` +
+          `demo-fstream.binance.com (WebSocket). Update your configuration.`,
+        );
+      }
+    }
+  }
+}
 
 const PROFILE_CONFIGURATION_ERROR = "MAWS_PROFILE_CONFIGURATION_INVALID";
 
@@ -154,12 +243,14 @@ function pairsEqual(left: CredentialPair, right: CredentialPair): boolean {
 }
 
 function parseDefaultProfile(raw: string | undefined): ProfileId {
-  const value = (raw ?? "paper").trim().toLowerCase();
-  if (value === "paper" || value === "binance-testnet" || value === "binance-production") {
+  const value = (raw ?? "binance-testnet").trim().toLowerCase();
+  if (value === "binance-testnet" || value === "binance-production") {
     return value;
   }
+  // Legacy "paper" value — treat as no preference (default to testnet).
+  if (value === "paper") return "binance-testnet";
   throw new Error(
-    "MAWS_DEFAULT_PROFILE must be one of paper|binance-testnet|binance-production",
+    "MAWS_DEFAULT_PROFILE must be one of binance-testnet|binance-production",
   );
 }
 
@@ -176,7 +267,6 @@ function credentialProfileForEnvironment(env: MawsEnv): ProfileId | null {
 }
 
 function profileEndpoints(profileId: ProfileId): { rest: string; uds: string } {
-  if (profileId === "paper") return HOST_MAP.local;
   if (profileId === "binance-testnet") return HOST_MAP.testnet;
   return HOST_MAP.production;
 }
@@ -187,6 +277,7 @@ function makeProfile(
   environment: ProfileEnvironment,
   source: CredentialPair,
   executionEnabled: boolean,
+  confirmOrders?: boolean,
 ): ServerProfileConfig {
   const endpoints = profileEndpoints(profileId);
   return {
@@ -195,6 +286,7 @@ function makeProfile(
     environment,
     configured: isComplete(source),
     executionEnabled,
+    confirmOrders,
     apiKey: source.apiKey,
     apiSecret: source.apiSecret,
     restEndpoint: endpoints.rest,
@@ -227,20 +319,21 @@ function buildProfiles(
   }
 
   return {
-    paper: makeProfile("paper", "Paper", "paper", { apiKey: null, apiSecret: null }, false),
     "binance-testnet": makeProfile(
       "binance-testnet",
-      "Binance Testnet",
+      "Binance Demo Trading",
       "testnet",
       testnetCredentials,
       isComplete(testnetCredentials),
+      source.MAWS_BINANCE_TESTNET_CONFIRM_ORDERS === "true" || false,
     ),
     "binance-production": makeProfile(
       "binance-production",
-      "Binance Production",
+      "Binance Live",
       "production",
       productionCredentials,
       isComplete(productionCredentials),
+      source.MAWS_BINANCE_PRODUCTION_CONFIRM_ORDERS === "true" || false,
     ),
   };
 }
@@ -256,6 +349,7 @@ export function safeProfileMetadata(profiles: ProfileRegistry): SafeProfileMetad
       configured: profile.configured,
       requiresProductionConfirmation: profile.profileId === "binance-production",
       executionEnabled: profile.executionEnabled,
+      confirmOrders: profile.confirmOrders ?? false,
     };
   });
 }
@@ -343,11 +437,15 @@ export function loadEnvConfig(source: NodeJS.ProcessEnv = process.env): EnvConfi
   const brokerType = parseBrokerType(source.MAWS_BROKER_TYPE);
   const defaultProfile = parseDefaultProfile(source.MAWS_DEFAULT_PROFILE);
   const { activeProfileId, activeCredentials } = resolveCredentials(source, env);
+  const missingProductionRiskLimitVariables = PRODUCTION_RISK_LIMITS
+    .map(([name]) => name)
+    .filter((name) => !source[name]?.trim());
   const profiles = buildProfiles(
     source,
     activeCredentials,
     credentialProfileForEnvironment(env),
   );
+  assertNoLegacyHosts(profiles);
   const cfg: EnvConfig = {
     env,
     brokerType,
@@ -360,6 +458,8 @@ export function loadEnvConfig(source: NodeJS.ProcessEnv = process.env): EnvConfi
     trustProxy: source.MAWS_TRUST_PROXY === "true",
     backupKey: hexKey(source.MAWS_BACKUP_KEY),
     healthToken: source.MAWS_HEALTH_TOKEN?.trim() || null,
+    emergencyToken: source.MAWS_EMERGENCY_TOKEN?.trim() || null,
+    reverseEnabled: source.MAWS_ENABLE_REVERSE === "true",
     // Keep the legacy active fields so all existing broker code retains its
     // process-startup behavior while credentials migrate to profile variables.
     binanceApiKey: activeCredentials.apiKey,
@@ -371,7 +471,9 @@ export function loadEnvConfig(source: NodeJS.ProcessEnv = process.env): EnvConfi
     historyBackfillMs: num(source.MAWS_HISTORY_BACKFILL_MS, 3 * 24 * 60 * 60 * 1000),
     leaseTtlMs: num(source.MAWS_LEASE_TTL_MS, 5 * 60_000),
     snapshotMaxAgeMs: num(source.MAWS_SNAPSHOT_MAX_AGE_MS, 5 * 60_000),
+    protectionPendingMaxAgeMs: num(source.MAWS_PROTECTION_PENDING_MAX_AGE_MS, 2 * 60_000),
     alertWebhookUrl: source.MAWS_ALERT_WEBHOOK_URL?.trim() || null,
+    missingProductionRiskLimitVariables,
     risk: {
       maxOrderNotionalUsd: num(source.MAWS_RISK_MAX_ORDER_NOTIONAL, 50),
       maxGrossExposureUsd: num(source.MAWS_RISK_MAX_GROSS_EXPOSURE, 100),
@@ -379,6 +481,9 @@ export function loadEnvConfig(source: NodeJS.ProcessEnv = process.env): EnvConfi
       maxOpenPositions: num(source.MAWS_RISK_MAX_OPEN_POSITIONS, 3),
       dailyLossPct: num(source.MAWS_RISK_DAILY_LOSS_PCT, 50),
       priceCollarPct: num(source.MAWS_RISK_PRICE_COLLAR_PCT, 5),
+      maxLeverage: num(source.MAWS_RISK_MAX_LEVERAGE, 10),
+      maxMarginRatio: num(source.MAWS_RISK_MAX_MARGIN_RATIO, 0.5),
+      minLiquidationDistancePct: num(source.MAWS_RISK_MIN_LIQ_DISTANCE_PCT, 5),
     },
     circuitBreaker: {
       // Binance REST API breaker (open after 5 failures in 60s, retry after 30s)
@@ -399,6 +504,7 @@ export function loadEnvConfig(source: NodeJS.ProcessEnv = process.env): EnvConfi
     },
   };
 
+  validateAuthTokens(cfg);
   if (env !== "local") {
     if (!cfg.operatorAuth) {
       throw new Error(`MAWS_OPERATOR_AUTH is required when MAWS_ENV=${env}`);
@@ -412,20 +518,11 @@ export function loadEnvConfig(source: NodeJS.ProcessEnv = process.env): EnvConfi
   // keeps shadow internal: it has production endpoints but no selectable profile ID.
 
   if (env === "production") {
-    const r = cfg.risk;
-    const fields: [string, number][] = [
-      ["MAWS_RISK_MAX_ORDER_NOTIONAL", r.maxOrderNotionalUsd],
-      ["MAWS_RISK_MAX_GROSS_EXPOSURE", r.maxGrossExposureUsd],
-      ["MAWS_RISK_MAX_OPEN_ORDERS", r.maxOpenOrders],
-      ["MAWS_RISK_MAX_OPEN_POSITIONS", r.maxOpenPositions],
-      ["MAWS_RISK_DAILY_LOSS_PCT", r.dailyLossPct],
-      ["MAWS_RISK_PRICE_COLLAR_PCT", r.priceCollarPct],
-    ];
-    for (const [name, val] of fields) {
-      if (!Number.isFinite(val) || val <= 0) {
-        throw new Error(`${name} must be a positive finite number in production, got: ${val}`);
-      }
+    if (cfg.reverseEnabled) {
+      throw new Error("MAWS_ENABLE_REVERSE cannot be enabled in production");
     }
+    const error = productionRiskConfigurationError(cfg);
+    if (error) throw new Error(error);
   }
 
   return cfg;

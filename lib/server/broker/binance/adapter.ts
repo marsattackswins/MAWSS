@@ -164,6 +164,27 @@ export class BinanceAdapter implements IBroker {
     }
   }
 
+  async reversePosition(input: {
+    symbol: string;
+    newQty: string;
+    expectedPositionQty: string;
+    expectedPositionSide: "long" | "short";
+    clientOrderId: string;
+  }) {
+    try {
+      return await this.manager.orders.reversePosition(input);
+    } catch (err) {
+      if (err instanceof CircuitBreakerOpenError) throw err;
+      if (err instanceof BinanceApiError) {
+        throw new BrokerOrderError("binance", err.code, err.exchangeMsg, err);
+      }
+      if (err instanceof TransportTimeoutError) {
+        throw new BrokerTimeoutError("binance", "reversePosition", err);
+      }
+      throw new BrokerError("Failed to reverse position", "binance", err);
+    }
+  }
+
   async emergencyFlatten(triggeredBy: string) {
     return this.manager.emergencyFlatten(triggeredBy);
   }
@@ -180,6 +201,18 @@ export class BinanceAdapter implements IBroker {
         throw new BrokerOrderError("binance", err.code, err.exchangeMsg, err);
       }
       throw new BrokerError("Failed to set protective orders", "binance", err);
+    }
+  }
+
+  async removeProtection(symbol: string): Promise<{ ok: boolean; error?: string }> {
+    try {
+      return await this.manager.orders.removeProtection(symbol);
+    } catch (err) {
+      if (err instanceof CircuitBreakerOpenError) throw err;
+      if (err instanceof BinanceApiError) {
+        throw new BrokerOrderError("binance", err.code, err.exchangeMsg, err);
+      }
+      throw new BrokerError("Failed to remove protective orders", "binance", err);
     }
   }
 
@@ -416,6 +449,7 @@ export class BinanceAdapter implements IBroker {
     return {
       clientOrderId: order.clientOrderId,
       exchangeOrderId: order.exchangeOrderId,
+      kind: order.kind,
       symbol: order.symbol,
       side: order.side === "BUY" ? "buy" : "sell",
       type: order.type.toLowerCase(),

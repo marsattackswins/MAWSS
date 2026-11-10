@@ -1,22 +1,20 @@
 "use client";
 
 import { ChartContextMenu } from "@/components/charts/ChartContextMenu";
-import { ChartGrid } from "@/components/charts/ChartGrid";
-import { SymbolSearch } from "@/components/charts/SymbolSearch";
+import { VelaWorkspaceHost } from "@/components/charts/VelaWorkspaceHost";
+import { IndicatorsDialog } from "@/components/indicators/IndicatorsDialog";
 import { SettingsModal } from "@/components/settings/SettingsModal";
 import { IndicatorSettingsModal } from "@/components/settings/IndicatorSettingsModal";
 import { DrawingSettingsModal } from "@/components/settings/DrawingSettingsModal";
 import { BrokerDialog } from "@/components/trading/BrokerDialog";
-import { AccountSettingsModal } from "@/components/trading/AccountSettingsModal";
 import { BuySellContextMenu } from "@/components/trading/BuySellContextMenu";
-import { TradingSettingsModal } from "@/components/trading/TradingSettingsModal";
-import { MockBrokerLoop } from "@/components/trading/MockBrokerLoop";
 import { ReplayBar } from "@/components/replay/ReplayBar";
 import { BottomPanel } from "@/components/shell/BottomPanel";
 import { RightDock } from "@/components/shell/RightDock";
 import { RightSidebar } from "@/components/shell/RightSidebar";
 import { TopBar } from "@/components/shell/TopBar";
-import { getChart, getLastCrosshair } from "@/lib/chart-registry";
+import { JournalOverlay } from "@/components/shell/JournalOverlay";
+import { getChart, getLastCrosshair, getWorkspace } from "@/lib/chart-registry";
 import { restoreServerProfile } from "@/lib/live/bridge";
 import { useLiveStore } from "@/lib/live/store";
 import { mawsFeed } from "@/lib/maws/feed";
@@ -32,6 +30,8 @@ import { X } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 
 type ChartRange = "1D" | "5D" | "1M" | "3M" | "6M" | "YTD" | "1Y" | "5Y" | "All";
+
+
 
 function rangeSeconds(range: ChartRange): number | null {
   const day = 86400;
@@ -63,13 +63,16 @@ function ChartRangeSync() {
     const candles = mawsFeed.getCandles(pane.symbol, pane.timeframe);
     const seconds = rangeSeconds(range);
     if (seconds == null) {
-      handle.chart.timeScale().fitContent();
+      handle.vela.setVisibleRangePreset("ALL");
       return;
     }
     const bars = Math.max(20, Math.round(seconds / timeframeSeconds(pane.timeframe)));
-    const to = candles.length + 4;
-    const from = Math.max(0, candles.length - bars);
-    handle.chart.timeScale().setVisibleLogicalRange({ from, to });
+    const tip = candles.at(-1);
+    if (!tip) return;
+    handle.vela.setVisibleRange({
+      from: (tip.time - bars * timeframeSeconds(pane.timeframe)) * 1000,
+      to: tip.time * 1000 + 60_000,
+    });
   }, [range, pane.id, pane.symbol, pane.timeframe]);
 
   return null;
@@ -98,14 +101,14 @@ function LiveNotices() {
               ? "border-[#f23645] bg-[#1a0b0d] text-[#f23645]"
               : n.tone === "success"
                 ? "border-[#089981] bg-[#071512] text-[#089981]"
-                : "border-[#2a2e39] bg-[#1b1b1b] text-[#d1d4dc]"
+                : "border-(--app-border) bg-(--app-elevated) text-(--app-text)"
           }`}
         >
           <span className="min-w-0 flex-1 break-words">{n.text}</span>
           <button
             type="button"
             aria-label="Dismiss"
-            className="shrink-0 text-[#787b86] hover:text-[#d1d4dc]"
+            className="shrink-0 text-(--app-muted) hover:text-(--app-text)"
             onClick={() => dismissNotice(n.id)}
           >
             <X size={13} />
@@ -121,12 +124,11 @@ export function AppShell() {
   const appSettings = useAppStore((s) => s.appSettings);
   const setDrawingTool = useAppStore((s) => s.setDrawingTool);
   const closeMenus = useAppStore((s) => s.closeMenus);
-  const setSearchOpen = useAppStore((s) => s.setSearchOpen);
   const setSettingsOpen = useAppStore((s) => s.setSettingsOpen);
   const setIndicatorSettingsOpen = useAppStore((s) => s.setIndicatorSettingsOpen);
   const setDrawingSettingsTarget = useAppStore((s) => s.setDrawingSettingsTarget);
   const setBrokerDialogOpen = useAppStore((s) => s.setBrokerDialogOpen);
-  const setAccountSettingsOpen = useAppStore((s) => s.setAccountSettingsOpen);
+  const setJournalOverlayOpen = useAppStore((s) => s.setJournalOverlayOpen);
   const setMaximizedPane = useAppStore((s) => s.setMaximizedPane);
 
   useSyncHotSymbols(ready);
@@ -164,12 +166,21 @@ export function AppShell() {
 
       switch (id) {
         case "openSearch":
-          setSearchOpen(true);
+          // Vela's own dialog (the same one the symbol button and bare typing open);
+          // the shell popover it used to raise no longer exists.
+          getWorkspace()?.openSymbolSearch();
+          break;
+        case "toggleJournal":
+          s.setJournalOverlayOpen(!s.journalOverlayOpen);
           break;
         case "fitChart": {
           if (!pane) return;
-          getChart(pane.id)?.chart.timeScale().fitContent();
-          getChart(pane.id)?.chart.priceScale("right").setAutoScale(true);
+          getChart(pane.id)?.vela.setVisibleRangePreset("ALL");
+          try {
+            getChart(pane.id)?.vela.renderer.set("autoScale", true);
+          } catch {
+            /* ignore */
+          }
           s.setRange("All");
           break;
         }
@@ -206,10 +217,9 @@ export function AppShell() {
         }
         case "drawHorizontalRay": {
           if (!pane || price == null) return;
-          const handle = getChart(pane.id);
-          const from = handle?.chart.timeScale().getVisibleRange()?.from;
+          const from = getChart(pane.id)?.vela.getVisibleRange()?.from;
           const time =
-            typeof from === "number" ? from : (cross?.time ?? Math.floor(Date.now() / 1000));
+            typeof from === "number" ? Math.floor(from / 1000) : (cross?.time ?? Math.floor(Date.now() / 1000));
           s.addDrawing(pane.id, {
             id: Math.random().toString(36).slice(2, 10),
             tool: "hray",
@@ -229,7 +239,8 @@ export function AppShell() {
           break;
         }
         case "openChartSettings":
-          setSettingsOpen(true);
+          // Open Vela's native settings dialog (the unified settings panel).
+          (getChart(s.activePaneId)?.renderer as unknown as { openSettings?: (s?: string) => void }).openSettings?.();
           break;
         case "cursorTool":
           setDrawingTool("cursor");
@@ -249,6 +260,10 @@ export function AppShell() {
       const s = useAppStore.getState();
 
       if (e.key === "Escape") {
+        if (s.journalOverlayOpen) {
+          setJournalOverlayOpen(false);
+          return;
+        }
         if (s.settingsOpen) {
           setSettingsOpen(false);
           return;
@@ -265,11 +280,7 @@ export function AppShell() {
           setBrokerDialogOpen(false);
           return;
         }
-        if (s.accountSettingsOpen) {
-          setAccountSettingsOpen(false);
-          return;
-        }
-        if (s.searchOpen || s.contextMenu || s.indicatorMenuOpen || s.layoutMenuOpen) {
+        if (s.contextMenu || s.indicatorMenuOpen || s.layoutMenuOpen) {
           closeMenus();
           return;
         }
@@ -278,7 +289,18 @@ export function AppShell() {
           return;
         }
         if (s.replay) {
+          // Stop Vela replay so live data resumes, then clear the store.
+          const workspaceReplay = getWorkspace()?.replay;
+          if (workspaceReplay?.state.active) workspaceReplay.stop();
+          else {
+            const chart = getChart(s.replay.paneId)?.vela;
+            if (chart?.replay.state.active) chart.replay.stop();
+          }
           s.stopReplay();
+          return;
+        }
+        if (s.replaySeeking) {
+          s.setReplaySeeking(false);
           return;
         }
       }
@@ -298,11 +320,10 @@ export function AppShell() {
   }, [
     closeMenus,
     setDrawingTool,
-    setSearchOpen,
     setSettingsOpen,
     setIndicatorSettingsOpen,
     setBrokerDialogOpen,
-    setAccountSettingsOpen,
+    setJournalOverlayOpen,
     setMaximizedPane,
     setDrawingSettingsTarget,
   ]);
@@ -317,27 +338,28 @@ export function AppShell() {
       className="flex h-screen w-screen flex-col overflow-hidden bg-[var(--app-bg)] text-[var(--app-text)]"
     >
       <TopBar />
-      <SymbolSearch />
+      <IndicatorsDialog />
       <div className="flex min-h-0 flex-1">
         <div className="relative z-0 flex min-h-0 min-w-0 flex-1 flex-col">
           <div className="min-h-0 flex-1">
-            <ChartGrid />
+            <VelaWorkspaceHost />
           </div>
           <ChartRangeSync />
           <BottomPanel />
           <ReplayBar />
         </div>
         <RightSidebar />
+        {/* The shortcut rail hides with the whole right side: the top-bar arrow
+            stows panel + rail together (RightDock returns null on !rightOpen),
+            while a rail icon itself folds only its own panel body. */}
         <RightDock />
       </div>
 
       <SettingsModal />
+      <JournalOverlay />
       <IndicatorSettingsModal />
       <DrawingSettingsModal />
       <BrokerDialog />
-      <AccountSettingsModal />
-      <TradingSettingsModal />
-      <MockBrokerLoop />
       <ChartContextMenu />
       <BuySellContextMenu />
       <LiveNotices />

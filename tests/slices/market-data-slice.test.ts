@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeEach, afterEach, jest } from "@jest/globals";
 import { useAppStore, workspacePartialize } from "@/lib/store";
 import type { Store } from "@/lib/store";
+import { useLiveStore } from "@/lib/live/store";
 import { collectHotSymbols, createMarketDataSlice } from "@/lib/slices/market-data-slice";
 import { mawsFeed } from "@/lib/maws/feed";
 import type { ChartOrder, ChartPaneState, ChartPosition } from "@/types";
@@ -9,7 +10,7 @@ import type { ChartOrder, ChartPaneState, ChartPosition } from "@/types";
  * Phase G regression tests for the market-data-slice extraction:
  *   - hotSymbols starts [] on the real root store (runtime-only field);
  *   - syncHotSymbols rebuilds the deduplicated union of watchlist + visible
- *     panes (layoutCount cutoff) + orders + positions, stripping ".P" and
+ *     panes (layoutCount cutoff) + live orders + positions, stripping ".P" and
  *     uppercasing, and pushes the SAME array to the store and mawsFeed;
  *   - hotSymbols never appears in workspacePartialize output;
  *   - atomicity: counting-set harness proves syncHotSymbols performs exactly
@@ -20,8 +21,6 @@ const SEEDED_FIELDS = [
   "watchlist",
   "layoutCount",
   "panes",
-  "orders",
-  "positions",
   "hotSymbols",
 ] as const;
 
@@ -36,6 +35,7 @@ const pristine = snapshot();
 
 function resetMarketData(): void {
   useAppStore.setState(JSON.parse(JSON.stringify(pristine)) as Partial<Store>);
+  useLiveStore.setState({ orders: [], positions: [] });
 }
 
 beforeEach(resetMarketData);
@@ -79,9 +79,11 @@ describe("syncHotSymbols rebuild proof (real root store)", () => {
       watchlist: ["BTCUSDT", "ethusdt.p", "LINKUSDT"],
       layoutCount: 2,
       panes: [mkPane("pane-0", "SOLUSDT"), mkPane("pane-1", "solusdt.p"), mkPane("pane-2", "XRPUSDT")],
+    } as Partial<Store>);
+    useLiveStore.setState({
       orders: [mkOrder("ORDUSDT")],
       positions: [mkPosition("POSUSDT")],
-    } as Partial<Store>);
+    } as never);
 
     useAppStore.getState().syncHotSymbols();
 
@@ -96,9 +98,11 @@ describe("syncHotSymbols rebuild proof (real root store)", () => {
       watchlist: ["BTCUSDT"],
       layoutCount: 1,
       panes: [mkPane("pane-0", "BTCUSDT")],
+    } as Partial<Store>);
+    useLiveStore.setState({
       orders: [mkOrder("ORDUSDT")],
       positions: [],
-    } as Partial<Store>);
+    } as never);
 
     useAppStore.getState().syncHotSymbols();
 
@@ -111,9 +115,11 @@ describe("syncHotSymbols rebuild proof (real root store)", () => {
       watchlist: ["BTCUSDT"],
       layoutCount: 1,
       panes: [mkPane("pane-0", "BTCUSDT")],
+    } as Partial<Store>);
+    useLiveStore.setState({
       orders: [],
       positions: [mkPosition("POSUSDT")],
-    } as Partial<Store>);
+    } as never);
 
     useAppStore.getState().syncHotSymbols();
 
@@ -126,8 +132,6 @@ describe("syncHotSymbols rebuild proof (real root store)", () => {
       watchlist: [],
       layoutCount: 1,
       panes: [mkPane("pane-0", "BTCUSDT"), mkPane("pane-1", "ETHUSDT")],
-      orders: [],
-      positions: [],
     } as Partial<Store>);
 
     useAppStore.getState().syncHotSymbols();
@@ -140,8 +144,6 @@ describe("syncHotSymbols rebuild proof (real root store)", () => {
       watchlist: [],
       layoutCount: 1,
       panes: [mkPane("pane-0", "BTCUSDT")],
-      orders: [],
-      positions: [],
     } as Partial<Store>);
     useAppStore.getState().syncHotSymbols();
     expect(useAppStore.getState().hotSymbols).toEqual(["BTCUSDT"]);
@@ -162,15 +164,13 @@ describe("hotSymbols persistence boundary", () => {
         watchlist: ["BTCUSDT"],
         layoutCount: 1,
         panes: [mkPane("pane-0", "BTCUSDT")],
-        orders: [],
-        positions: [],
       } as Partial<Store>);
       useAppStore.getState().syncHotSymbols();
       expect(useAppStore.getState().hotSymbols).toEqual(["BTCUSDT"]);
 
       const persisted = workspacePartialize(useAppStore.getState());
       expect(persisted).not.toHaveProperty("hotSymbols");
-      expect(Object.keys(persisted)).toHaveLength(50);
+      expect(Object.keys(persisted)).toHaveLength(43);
     } finally {
       spy.mockRestore();
     }
@@ -194,8 +194,6 @@ describe("collectHotSymbols pure helper", () => {
       watchlist: ["", "BTCUSDT"],
       layoutCount: 1,
       panes: [{ symbol: "ETHUSDT" }, { symbol: "XRPUSDT" }],
-      orders: [],
-      positions: [],
     });
     expect(hot).toEqual(["BTCUSDT", "ETHUSDT"]);
   });
@@ -205,12 +203,16 @@ describe("syncHotSymbols atomicity (counting-set harness)", () => {
   it("performs exactly ONE set() whose patch carries only hotSymbols", () => {
     const spy = jest.spyOn(mawsFeed, "setHotSymbols").mockImplementation(() => {});
     try {
+      // syncHotSymbols reads orders/positions from useLiveStore; seed it.
+      useLiveStore.setState({
+        orders: [mkOrder("ORDUSDT")],
+        positions: [],
+      } as never);
+
       const state = {
         watchlist: ["BTCUSDT"],
         layoutCount: 1,
         panes: [mkPane("pane-0", "SOLUSDT")],
-        orders: [mkOrder("ORDUSDT")],
-        positions: [],
       } as unknown as Store;
       const calls: Array<Partial<Store>> = [];
       const set = (

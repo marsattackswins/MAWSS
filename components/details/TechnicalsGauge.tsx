@@ -1,17 +1,7 @@
 "use client";
 
-import { useId } from "react";
-
-function polar(cx: number, cy: number, deg: number, radius: number) {
-  const rad = (deg * Math.PI) / 180;
-  return { x: cx + Math.cos(rad) * radius, y: cy - Math.sin(rad) * radius };
-}
-
-function arcPath(cx: number, cy: number, radius: number, startDeg: number, endDeg: number) {
-  const s = polar(cx, cy, startDeg, radius);
-  const e = polar(cx, cy, endDeg, radius);
-  return `M ${s.x.toFixed(2)} ${s.y.toFixed(2)} A ${radius} ${radius} 0 0 1 ${e.x.toFixed(2)} ${e.y.toFixed(2)}`;
-}
+import type { TechnicalsRow } from "@/lib/technicals-lean";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 
 export type GaugeLean =
   | "strongShort"
@@ -21,14 +11,14 @@ export type GaugeLean =
   | "strongLong";
 
 const LEAN_LABEL: Record<GaugeLean, string> = {
-  strongShort: "Strong short",
-  short: "Short",
+  strongShort: "Strong sell",
+  short: "Sell",
   neutral: "Neutral",
-  long: "Long",
-  strongLong: "Strong long",
+  long: "Buy",
+  strongLong: "Strong buy",
 };
 
-/** Needle score 0 (strong short) → 100 (strong long). */
+/** Needle position 0 (strong sell) → 100 (strong buy). */
 const LEAN_SCORE: Record<GaugeLean, number> = {
   strongShort: 10,
   short: 30,
@@ -37,142 +27,176 @@ const LEAN_SCORE: Record<GaugeLean, number> = {
   strongLong: 90,
 };
 
+/* Needle travel: the track spans the full card width, the needle is inset by
+ * NUB% so it never leaves the rounded caps. */
+const NUB = 2;
+
+/** Side pip color in the fold-out rows — the app's up/down hues, muted when flat. */
+const SIDE_COLOR: Record<string, string> = {
+  bullish: "var(--app-up)",
+  bearish: "var(--app-down)",
+  flat: "var(--app-muted)",
+};
+
 /**
- * Gauge lean from HTF-independent bullish/bearish confluence (0–5 each).
- * HTF bias is visual-only and never feeds this.
- * 0–2 → Neutral; 3–4 → Long/Short; 5 → Strong long/short.
- * If both sides qualify, the stronger side wins; ties stay Neutral.
+ * The gauge's fold-out detail: one row per check — label left, live reading
+ * right, and a small meaning-encoding pip that colors by which side the check
+ * currently votes for.
  */
-export function leanFromScreener(bullishMet: number, bearishMet: number): GaugeLean {
-  const longLean: GaugeLean | null =
-    bullishMet >= 5 ? "strongLong" : bullishMet >= 3 ? "long" : null;
-  const shortLean: GaugeLean | null =
-    bearishMet >= 5 ? "strongShort" : bearishMet >= 3 ? "short" : null;
-
-  if (longLean && shortLean) {
-    if (bullishMet > bearishMet) return longLean;
-    if (bearishMet > bullishMet) return shortLean;
-    return "neutral";
-  }
-  return longLean ?? shortLean ?? "neutral";
+export function TechnicalsRows({ rows }: { rows: TechnicalsRow[] }) {
+  return (
+    <ul className="flex flex-col gap-1.5">
+      {rows.map((row) => (
+        <li key={row.label} className="flex items-center justify-between gap-2">
+          <span className="truncate text-[12px] leading-4 text-(--app-muted)">{row.label}</span>
+          <span className="flex shrink-0 items-center gap-1.5">
+            <span className="text-[12px] leading-4 tabular-nums text-(--app-text)">
+              {row.value}
+            </span>
+            <span
+              aria-hidden
+              className="h-[5px] w-[5px] shrink-0 rounded-full"
+              style={{ background: SIDE_COLOR[row.side] }}
+            />
+          </span>
+        </li>
+      ))}
+    </ul>
+  );
 }
 
-/** Legacy RSI fallback for the details dock (not strategy-pegged). */
-export function leanFromRsi(rsi: number): GaugeLean {
-  const clamped = Math.max(0, Math.min(100, rsi));
-  if (clamped >= 80) return "strongLong";
-  if (clamped >= 60) return "long";
-  if (clamped >= 40) return "neutral";
-  if (clamped >= 20) return "short";
-  return "strongShort";
+/** The red→grey→blue lean track, shared by the full gauge and the dock's tiny meter. */
+const TRACK_GRADIENT =
+  "linear-gradient(90deg, var(--app-down) 0%, rgba(122,124,134,.5) 50%, var(--app-up) 100%)";
+
+/** Needle position as a left-inset percentage of the track. */
+function needleLeft(lean: GaugeLean): number {
+  return NUB + (LEAN_SCORE[lean] / 100) * (100 - 2 * NUB);
 }
 
-export function TechnicalsGauge({ lean }: { lean: GaugeLean }) {
-  const gid = useId().replaceAll(":", "");
-  const score = LEAN_SCORE[lean];
-  const angle = 180 - (score / 100) * 180;
+/**
+ * The lean track on its own — no label, no card. The docked strip uses this tiny
+ * form in place of the Open/Overlap pill; `width`/`height` size it for that row.
+ */
+export function TechnicalsMeter({
+  lean,
+  width = 44,
+  height = 4,
+}: {
+  lean: GaugeLean;
+  width?: number;
+  height?: number;
+}) {
+  return (
+    <span
+      role="img"
+      aria-label={`Technicals: ${LEAN_LABEL[lean]}`}
+      className="relative inline-block shrink-0 rounded-full align-middle"
+      style={{ width, height, background: TRACK_GRADIENT }}
+    >
+      <span
+        className="absolute top-1/2 -translate-y-1/2 rounded-full bg-(--app-text)"
+        style={{ left: `${needleLeft(lean)}%`, width: 2, height: height + 4 }}
+      />
+    </span>
+  );
+}
+
+/**
+ * Technicals block — an elevated, bordered card. Its top line carries the label
+ * + lean word ("Technicals" + lean); the thin desaturated red→grey→blue track
+ * and its small white needle sit below as the FOLDED preview, always visible.
+ * No Sell/Buy captions.
+ *
+ * Anything passed as `children` is the folded-out detail: it animates open with
+ * `expanded` (the Sessions/News drawer pattern) and turns the header into a
+ * toggle. With no `children` there is nothing to fold out, so the card stays a
+ * static gauge readout — the fold lights up once more content is added.
+ */
+export function TechnicalsGauge({
+  lean,
+  expanded = true,
+  onToggle,
+  children,
+}: {
+  lean: GaugeLean;
+  expanded?: boolean;
+  onToggle?: () => void;
+  children?: ReactNode;
+}) {
   const label = LEAN_LABEL[lean];
+  const collapsible = onToggle !== undefined && children !== undefined;
 
-  const cx = 150;
-  const cy = 150;
-  const r = 95;
-  const tip = polar(cx, cy, angle, r - 16);
-
-  const around: { text: string; deg: number; extra: number }[] = [
-    { text: "Short", deg: 138, extra: 26 },
-    { text: "Neutral", deg: 90, extra: 28 },
-    { text: "Long", deg: 42, extra: 26 },
-  ];
+  // Natural height of the fold-out content, so the drawer animates to a fixed
+  // pixel value instead of `auto` (the News/Sessions measurement pattern).
+  const detailRef = useRef<HTMLDivElement>(null);
+  const [detailHeight, setDetailHeight] = useState<number | null>(null);
+  useEffect(() => {
+    const el = detailRef.current;
+    if (!el) return;
+    const measure = () => setDetailHeight(el.offsetHeight);
+    measure();
+    const ro = typeof ResizeObserver !== "undefined" ? new ResizeObserver(measure) : null;
+    ro?.observe(el);
+    return () => ro?.disconnect();
+  }, []);
 
   return (
-    <div className="px-3 pb-3 pt-1">
-      <div className="mb-0.5 text-[13px] font-semibold text-[#d1d4dc]">Technicals</div>
-      <svg viewBox="0 0 300 220" width={220} height={161} className="mx-auto block shrink-0">
-        <defs>
-          <linearGradient id={`${gid}-arc`} x1="0%" y1="0%" x2="100%" y2="0%">
-            <stop offset="0%" stopColor="#f23645" />
-            <stop offset="20%" stopColor="#e04080" />
-            <stop offset="50%" stopColor="#9c27b0" />
-            <stop offset="80%" stopColor="#5c6bc0" />
-            <stop offset="100%" stopColor="#2962ff" />
-          </linearGradient>
-        </defs>
-        <path
-          d={arcPath(cx, cy, r, 180, 0)}
-          fill="none"
-          stroke="#2a2a2a"
-          strokeWidth="7"
-          strokeLinecap="butt"
-        />
-        <path
-          d={arcPath(cx, cy, r, 174, 6)}
-          fill="none"
-          stroke={`url(#${gid}-arc)`}
-          strokeWidth="5.5"
-          strokeLinecap="butt"
-        />
-        {around.map((item) => {
-          const p = polar(cx, cy, item.deg, r + item.extra);
-          return (
-            <text
-              key={item.text}
-              x={p.x}
-              y={p.y}
-              fill="#d1d4dc"
-              fontSize="12"
-              fontWeight="600"
-              fontFamily="Trebuchet MS, sans-serif"
-              textAnchor="middle"
-              dominantBaseline="middle"
-            >
-              {item.text}
-            </text>
-          );
-        })}
-        <text
-          x={cx - r}
-          y={cy + 22}
-          fill="#d1d4dc"
-          fontSize="12"
-          fontWeight="600"
-          fontFamily="Trebuchet MS, sans-serif"
-          textAnchor="middle"
-        >
-          Strong short
-        </text>
-        <text
-          x={cx + r}
-          y={cy + 22}
-          fill="#d1d4dc"
-          fontSize="12"
-          fontWeight="600"
-          fontFamily="Trebuchet MS, sans-serif"
-          textAnchor="middle"
-        >
-          Strong long
-        </text>
-        <line
-          x1={cx}
-          y1={cy}
-          x2={tip.x}
-          y2={tip.y}
-          stroke="#ffffff"
-          strokeWidth="1.5"
-          strokeLinecap="round"
-        />
-        <circle cx={cx} cy={cy} r="3.25" fill="#ffffff" />
-        <text
-          x={cx}
-          y={cy + 40}
-          fill="#ffffff"
-          fontSize="16"
-          fontWeight="700"
-          fontFamily="Trebuchet MS, sans-serif"
-          textAnchor="middle"
-        >
-          {label}
-        </text>
-      </svg>
+    <div className="px-3 pt-3">
+      <div
+        role={collapsible ? "button" : undefined}
+        tabIndex={collapsible ? 0 : undefined}
+        aria-expanded={collapsible ? expanded : undefined}
+        title={collapsible ? (expanded ? "Collapse technicals" : "Show technicals") : undefined}
+        onClick={collapsible ? onToggle : undefined}
+        onKeyDown={
+          collapsible
+            ? (e) => {
+                if (e.key === "Enter" || e.key === " ") {
+                  e.preventDefault();
+                  onToggle?.();
+                }
+              }
+            : undefined
+        }
+        className={`rounded-[8px] border border-(--app-border) bg-(--app-elevated) px-3 py-2.5 ${
+          collapsible ? "cursor-pointer" : ""
+        }`}
+      >
+        <div className="flex items-center justify-between gap-2">
+          <div className="text-[13px] font-semibold text-(--app-text)">Technicals</div>
+          <span className="text-[13px] font-semibold text-(--app-text)">{label}</span>
+        </div>
+
+        {/* Folded preview — the lean track, always visible. */}
+        <div className="pt-4 pb-1">
+          <div
+            role="img"
+            aria-label={`Technicals: ${label}`}
+            className="relative h-[5px] rounded-full"
+            style={{ background: TRACK_GRADIENT }}
+          >
+            <span
+              className="absolute top-1/2 h-[11px] w-[3px] -translate-y-1/2 rounded-full bg-(--app-text)"
+              style={{ left: `${needleLeft(lean)}%` }}
+            />
+          </div>
+        </div>
+
+        {/* Collapsible drawer window — the indicator rows. Same measured-height
+            slide as the News and Sessions cards: the un-clipped content keeps
+            its natural height so the fold animates to a fixed pixel value. */}
+        {children !== undefined && (
+          <div
+            className="overflow-hidden transition-[height] duration-200 ease-out"
+            style={{ height: expanded ? detailHeight ?? "auto" : 0 }}
+          >
+            <div ref={detailRef} className="pt-4 pb-1">
+              {children}
+            </div>
+          </div>
+        )}
+      </div>
     </div>
   );
 }

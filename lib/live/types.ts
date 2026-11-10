@@ -1,7 +1,7 @@
 /** Client-side mirror of the server DTOs. Never imports server-only code. */
 
-export type LiveProfileId = "paper" | "binance-testnet" | "binance-production";
-export type LiveProfileEnvironment = "paper" | "testnet" | "production";
+export type LiveProfileId = "binance-testnet" | "binance-production";
+export type LiveProfileEnvironment = "testnet" | "production";
 export type LiveProfilePhase = "idle" | "switching" | "ready" | "degraded" | "detached" | "failed";
 
 export interface ProfileRuntimeStatusDto {
@@ -75,6 +75,7 @@ export interface PositionDto {
   markAgeMs?: number;
   /** True when unrealized still holds the fill-time ACCOUNT_UPDATE snapshot. */
   markPriceStale?: boolean;
+  protectionStatus?: "PROTECTED" | "UNPROTECTED";
   openedAt: number;
   notional?: number;
   marginType?: string;
@@ -84,6 +85,7 @@ export interface PositionDto {
 
 export interface OrderDto {
   id: string;
+  kind?: "order" | "algo";
   symbol: string;
   side: "buy" | "sell";
   type: "limit" | "stop";

@@ -2,18 +2,18 @@
 
 ## Quick Start
 
-### 1. Get Testnet Credentials
+### 1. Get Demo Trading Credentials
 
-1. Visit https://testnet.binancefuture.com
+1. Visit https://demo-fapi.binance.com
 2. Sign up (free account, separate from main Binance)
 3. Navigate to **API Management**
 4. Click **Create API Key**
 5. Enable **Futures Trading** permission
 6. Copy your **API Key** and **Secret Key**
 
-### 2. Fund Your Testnet Account
+### 2. Fund Your Demo Trading Account
 
-1. Login to testnet.binancefuture.com
+1. Login to demo-fapi.binance.com
 2. Click **Get Testnet Funds** in the top right
 3. Request 10,000 USDT (resets every 24h if needed)
 4. Verify balance appears in your Futures wallet
@@ -60,7 +60,7 @@ npm run test:integration:verbose
 3. Ensure no extra spaces or quotes around values
 4. Test credentials manually:
    ```bash
-   curl -X GET "https://testnet.binancefuture.com/fapi/v2/account" \
+   curl -X GET "https://demo-fapi.binance.com/fapi/v2/account" \
      -H "X-MBX-APIKEY: your-key-here"
    ```
 
@@ -70,7 +70,7 @@ npm run test:integration:verbose
 
 **Solutions**:
 - Wait and retry (testnet can be slow)
-- Check testnet status at https://testnet.binancefuture.com
+- Check testnet status at https://demo-fapi.binance.com
 - Increase timeout with `MAWS_TEST_TIMEOUT_MULTIPLIER=2.0` in `.env.integration`
 
 ### "429 Rate Limit Exceeded"
@@ -87,7 +87,7 @@ npm run test:integration:verbose
 **Problem**: Testnet account has insufficient USDT balance
 
 **Solution**:
-1. Login to testnet.binancefuture.com
+1. Login to demo-fapi.binance.com
 2. Request more testnet funds (available every 24h)
 3. Verify balance in Futures wallet, not Spot
 
@@ -131,7 +131,7 @@ Tests clean up automatically, but to manually reset testnet state:
 
 1. Cancel all orders:
    ```bash
-   curl -X DELETE "https://testnet.binancefuture.com/fapi/v1/allOpenOrders?symbol=BTCUSDT" \
+   curl -X DELETE "https://demo-fapi.binance.com/fapi/v1/allOpenOrders?symbol=BTCUSDT" \
      -H "X-MBX-APIKEY: your-key"
    ```
 
@@ -164,7 +164,7 @@ This allows:
 
 If tests consistently fail:
 
-1. **Check testnet status**: https://testnet.binancefuture.com
+1. **Check testnet status**: https://demo-fapi.binance.com
 2. **Enable verbose logs**: `npm run test:integration:verbose`
 3. **Verify credentials work**: Use Postman or curl to test API
 4. **Check rate limits**: Wait 60s and retry

@@ -10,7 +10,6 @@ import { activeProfileConfig, activeProfileManager } from "@/lib/server/profile/
 import { initializeCircuitBreakers } from "@/lib/server/resilience/breakers";
 import { circuitRegistry } from "@/lib/server/resilience/circuit-registry";
 import { authenticate, isAuthFailure, jsonError, jsonOk } from "@/lib/server/http/guards";
-import { compareSecretTokens } from "@/lib/server/auth/token";
 
 export const dynamic = "force-dynamic";
 
@@ -26,8 +25,7 @@ export async function GET(req: Request): Promise<Response> {
 
   if (cfg.env !== "local") {
     const session = authenticate(req, cfg);
-    const tokenValid = compareSecretTokens(req.headers.get("x-maws-health-token"), cfg.healthToken);
-    if (isAuthFailure(session) && !tokenValid) return session.response;
+    if (isAuthFailure(session)) return session.response;
   }
 
   try {

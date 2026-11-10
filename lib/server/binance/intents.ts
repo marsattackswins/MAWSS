@@ -79,7 +79,7 @@ function rowToIntent(r: Record<string, unknown>): OrderIntent {
     stopPrice: (r.stop_price as string | null) ?? null,
     reduceOnly: (r.reduce_only as number) === 1,
     status: r.status as IntentStatus,
-    exchangeOrderId: (r.exchange_order_id as number | null) ?? null,
+    exchangeOrderId: r.exchange_order_id == null ? null : Number(r.exchange_order_id),
     lastState: (r.last_state as string | null) ?? null,
     createdAt: r.created_at as number,
     updatedAt: r.updated_at as number,
@@ -149,7 +149,9 @@ export function updateIntent(
   }
   if (patch.exchangeOrderId !== undefined) {
     sets.push("exchange_order_id = ?");
-    args.push(patch.exchangeOrderId);
+    // The column is TEXT; binding a JS number would store "123.0" and break
+    // findByExchangeOrderId, which compares against the integer string.
+    args.push(patch.exchangeOrderId == null ? null : String(patch.exchangeOrderId));
   }
   if (patch.lastState !== undefined) {
     sets.push("last_state = ?");

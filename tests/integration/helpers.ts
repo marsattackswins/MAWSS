@@ -1,6 +1,6 @@
 /**
- * Integration test helpers for Binance testnet.
- * These helpers make REAL network calls to testnet.binancefuture.com.
+ * Integration test helpers for Binance USDⓈ-M Demo Trading.
+ * These helpers make REAL network calls to demo-fapi.binance.com.
  */
 
 import crypto from "node:crypto";
@@ -17,6 +17,62 @@ import { resetLiveStateForTests, liveState } from "@/lib/server/binance/state";
 import { resetBrokerClientsForTests } from "@/lib/server/binance/transport";
 import { BinanceLiveManager, resetLiveManagerForTests } from "@/lib/server/binance/manager";
 import { setRuntime, RUNTIME_KEYS } from "@/lib/server/runtime/flags";
+
+const TESTNET_REST_HOST = "demo-fapi.binance.com";
+const TESTNET_WS_HOST = "demo-fstream.binance.com";
+const PRODUCTION_KEY_VARIABLES = [
+  "MAWS_BINANCE_PRODUCTION_API_KEY",
+  "MAWS_BINANCE_PRODUCTION_API_SECRET",
+] as const;
+const PROTECTED_DATABASES = [".maws/maws.db", ".maws/maws-prod.db"] as const;
+
+function endpointHost(url: string): string {
+  try {
+    return new URL(url).hostname.toLowerCase();
+  } catch {
+    return "";
+  }
+}
+
+/**
+ * Refuses to run Testnet integration tests against anything else: a MAWS_ENV
+ * that does not resolve to testnet, non-testnet endpoints, production
+ * credentials in the environment, or a real database file. Runs before any
+ * manager, HTTP client, or database handle is created.
+ */
+export function assertTestnetSafety(
+  cfg: EnvConfig,
+  env: NodeJS.ProcessEnv = process.env,
+  repoRoot: string = process.cwd(),
+): void {
+  const rawEnv = (env.MAWS_ENV ?? "").trim().toLowerCase();
+  if (rawEnv !== "testnet") {
+    throw new Error(`Integration tests require MAWS_ENV=testnet (resolved: ${rawEnv || "unset"})`);
+  }
+  if (cfg.env !== "testnet") {
+    throw new Error(`Integration tests refuse MAWS_ENV=${cfg.env}; only testnet is allowed`);
+  }
+  const profile = cfg.activeProfileId ? cfg.profiles[cfg.activeProfileId] : null;
+  if (!profile || profile.environment !== "testnet") {
+    throw new Error(`Integration tests require the binance-testnet profile, got: ${cfg.activeProfileId ?? "none"}`);
+  }
+  if (endpointHost(profile.restEndpoint) !== TESTNET_REST_HOST || endpointHost(profile.webSocketEndpoint) !== TESTNET_WS_HOST) {
+    throw new Error(`Integration tests refuse non-Testnet endpoints: rest=${profile.restEndpoint} ws=${profile.webSocketEndpoint}`);
+  }
+  for (const name of PRODUCTION_KEY_VARIABLES) {
+    if ((env[name] ?? "").trim() !== "") {
+      throw new Error(`${name} must be unset when running integration tests`);
+    }
+  }
+  const dbPaths = [cfg.dbPath, env.MAWS_DB_PATH?.trim() || cfg.dbPath];
+  for (const dbPath of dbPaths) {
+    for (const protectedPath of PROTECTED_DATABASES) {
+      if (path.resolve(repoRoot, dbPath) === path.resolve(repoRoot, protectedPath)) {
+        throw new Error(`Integration tests refuse MAWS_DB_PATH=${protectedPath}`);
+      }
+    }
+  }
+}
 
 const VERBOSE = process.env.MAWS_TEST_VERBOSE === "true";
 
@@ -58,31 +114,20 @@ export function loadTestnetConfig(): EnvConfig {
   }
 
   const profiles: ProfileRegistry = {
-    paper: {
-      profileId: "paper",
-      label: "Paper",
-      environment: "paper",
-      configured: false,
-      executionEnabled: false,
-      apiKey: null,
-      apiSecret: null,
-      restEndpoint: "https://fapi.binance.com",
-      webSocketEndpoint: "wss://fstream.binance.com",
-    },
     "binance-testnet": {
       profileId: "binance-testnet",
-      label: "Binance Testnet",
+      label: "Binance Demo Trading",
       environment: "testnet",
       configured: true,
       executionEnabled: true,
       apiKey,
       apiSecret,
-      restEndpoint: "https://testnet.binancefuture.com",
-      webSocketEndpoint: "wss://fstream.binancefuture.com",
+      restEndpoint: "https://demo-fapi.binance.com",
+      webSocketEndpoint: "wss://demo-fstream.binance.com",
     },
     "binance-production": {
       profileId: "binance-production",
-      label: "Binance Production",
+      label: "Binance Live",
       environment: "production",
       configured: false,
       executionEnabled: false,
@@ -93,10 +138,10 @@ export function loadTestnetConfig(): EnvConfig {
     },
   };
 
-  return {
+  const cfg: EnvConfig = {
     env: "testnet",
     brokerType: "binance",
-    defaultProfile: "paper",
+    defaultProfile: "binance-testnet",
     activeProfileId: "binance-testnet",
     profiles,
     dbPath: tempDbPath(),
@@ -105,6 +150,8 @@ export function loadTestnetConfig(): EnvConfig {
     trustProxy: false,
     backupKey: null,
     healthToken: null,
+    emergencyToken: null,
+    reverseEnabled: false,
     binanceApiKey: apiKey,
     binanceApiSecret: apiSecret,
     recvWindowMs: 5000,
@@ -114,6 +161,7 @@ export function loadTestnetConfig(): EnvConfig {
     markPriceIntervalMs: 15_000,
     leaseTtlMs: 60_000,
     snapshotMaxAgeMs: 5 * 60_000,
+    protectionPendingMaxAgeMs: 2 * 60_000,
     alertWebhookUrl: null,
     risk: {
       maxOrderNotionalUsd: 500, // testnet limits
@@ -122,6 +170,9 @@ export function loadTestnetConfig(): EnvConfig {
       maxOpenPositions: 5,
       dailyLossPct: 80,
       priceCollarPct: 10, // wider collar for testnet price variance
+      maxLeverage: 10,
+      maxMarginRatio: 0.5,
+      minLiquidationDistancePct: 5,
     },
     circuitBreaker: {
       restFailureThreshold: 10, // More tolerant for testnet
@@ -138,6 +189,8 @@ export function loadTestnetConfig(): EnvConfig {
       reconSuccessThreshold: 2,
     },
   };
+  assertTestnetSafety(cfg);
+  return cfg;
 }
 
 /**
@@ -190,15 +243,8 @@ export async function cleanupTestnetState(manager: BinanceLiveManager): Promise<
       if (Number(pos.qty) === 0) continue;
 
       log(`Closing position ${pos.symbol} ${pos.side} ${pos.qty}...`);
-      const closeSide = pos.side === "long" ? "SELL" : "BUY";
       try {
-        await manager.orders.submitOrder({
-          symbol: pos.symbol,
-          side: closeSide,
-          type: "MARKET",
-          qty: pos.qty,
-          clientOrderId: manager.newClientOrderId("cleanup"),
-        });
+        await manager.orders.closePosition(pos.symbol);
       } catch (err) {
         log(`Failed to close ${pos.symbol}:`, err);
       }
@@ -311,7 +357,7 @@ export function sleep(ms: number): Promise<void> {
  * Get current mark price from testnet for a symbol.
  */
 export async function getCurrentMarkPrice(symbol: string): Promise<number> {
-  const res = await fetch(`https://testnet.binancefuture.com/fapi/v1/premiumIndex?symbol=${symbol}`);
+  const res = await fetch(`https://demo-fapi.binance.com/fapi/v1/premiumIndex?symbol=${symbol}`);
   if (!res.ok) throw new Error(`Failed to fetch mark price: ${res.statusText}`);
   const data = await res.json();
   return Number(data.markPrice);

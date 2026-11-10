@@ -1,27 +1,22 @@
 import { liveApi, LiveApiError, LiveAuthError } from "@/lib/live/api";
 import { redirectToLogin } from "@/lib/live/bridge";
+import { clampCloseFraction } from "@/lib/trade-marks";
 import { useLiveStore } from "@/lib/live/store";
 import { mawsFeed } from "@/lib/maws/feed";
 import { useAppStore } from "@/lib/store";
 import { resolveSymbolTrading } from "@/lib/trading/symbol-settings";
-import {
-  cancelOrder as mockCancelOrder,
-  closePosition as mockClosePosition,
-  submitOrder as mockSubmitOrder,
-} from "@/lib/trading/mock";
 import type { UiOrderInput } from "./ui-orders";
 
 /**
- * Broker dispatch boundary. Existing UI call sites keep their signatures;
- * dispatch routes the action to the paper engine or to the authenticated
- * server routes depending on the connected broker.
+ * Broker dispatch boundary. All trading actions require an active, verified
+ * Binance connection. When the app is disconnected, every action fails closed.
  */
 
-export function activeBrokerId(): "mock" | "binance" {
-  return useAppStore.getState().connectedBroker === "binance" ? "binance" : "mock";
+export function isLiveBrokerConnected(): boolean {
+  return useAppStore.getState().connectedBroker === "binance";
 }
 
-function notifyLiveError(text: string): void {
+function notifyError(text: string): void {
   useLiveStore.getState().notify("error", text);
 }
 
@@ -34,15 +29,16 @@ function describe(err: unknown): string {
 /**
  * Dispatch-level execution gate: mirrors the server's submission gates so a
  * halted/frozen/kill-switched system never reaches the broker from the UI.
- * Null health (no live session, e.g. paper trading) never blocks.
+ * Returns null when trading is allowed; returns the halt reason otherwise.
  */
 export function tradingHaltReason(): string | null {
   const liveState = useLiveStore.getState();
+  if (!isLiveBrokerConnected()) return "not_connected";
   if (liveState.phase === "switching") return "profile_switch_in_progress";
   if (liveState.phase === "degraded" || liveState.phase === "failed" || liveState.phase === "detached") {
     return liveState.reasonCode ?? "profile_runtime_unavailable";
   }
-  if (useAppStore.getState().connectedBroker === "binance" && liveState.profileId !== null && (!liveState.ready || liveState.phase !== "ready")) {
+  if (liveState.profileId !== null && (!liveState.ready || liveState.phase !== "ready")) {
     return liveState.reasonCode ?? "profile_runtime_unavailable";
   }
   const { health } = liveState;
@@ -56,25 +52,25 @@ export function tradingHaltReason(): string | null {
 }
 
 export async function dispatchSubmitOrder(input: UiOrderInput): Promise<{ ok: boolean; error?: string }> {
+  if (!isLiveBrokerConnected()) {
+    notifyError("Connect to a Binance profile to submit orders");
+    return { ok: false, error: "not_connected" };
+  }
   const state = useAppStore.getState();
   const pane = state.panes.find((p) => p.id === state.activePaneId);
   const tf = pane?.timeframe ?? "1D";
   const feedStatus = mawsFeed.getKlineStatus(input.symbol, tf);
   if (feedStatus !== "live") {
-    notifyLiveError(`Trading halted: market data ${feedStatus}`);
+    notifyError(`Trading halted: market data ${feedStatus}`);
     return { ok: false, error: `feed_${feedStatus}` };
   }
 
   const halt = tradingHaltReason();
   if (halt !== null) {
-    notifyLiveError(`Trading halted: ${halt}`);
+    notifyError(`Trading halted: ${halt}`);
     return { ok: false, error: "trading_halted" };
   }
 
-  if (activeBrokerId() !== "binance") {
-    mockSubmitOrder(input);
-    return { ok: true };
-  }
   try {
     const type = input.type === "limit" ? "LIMIT" : input.type === "stop" ? "STOP_MARKET" : "MARKET";
     const res = await liveApi.submitOrder({
@@ -84,14 +80,11 @@ export async function dispatchSubmitOrder(input: UiOrderInput): Promise<{ ok: bo
       qty: String(input.qty),
       price: input.type === "limit" && input.price != null ? String(input.price) : undefined,
       stopPrice: input.type === "stop" && input.price != null ? String(input.price) : undefined,
-      // Binance computes initial margin from the exchange-side per-symbol
-      // leverage, which is a persisted account setting — the server syncs it
-      // before the order so margin matches the UI (margin × leverage) sizing.
       leverage: resolveSymbolTrading(input.symbol).leverage,
       clientOrderId: input.clientOrderId,
     });
     if (!res.ok) {
-      notifyLiveError(res.error ?? "Order rejected");
+      notifyError(res.error ?? "Order rejected");
       return { ok: false, error: res.error };
     }
     return { ok: true };
@@ -100,52 +93,101 @@ export async function dispatchSubmitOrder(input: UiOrderInput): Promise<{ ok: bo
       redirectToLogin();
       return { ok: false, error: "unauthenticated" };
     }
-    notifyLiveError(describe(err));
+    notifyError(describe(err));
     return { ok: false, error: describe(err) };
   }
 }
 
 export async function dispatchCancelOrder(id: string): Promise<{ ok: boolean; error?: string }> {
-  const halt = tradingHaltReason();
-  if (halt !== null && activeBrokerId() === "binance") {
-    notifyLiveError(`Trading halted: ${halt}`);
-    return { ok: false, error: "trading_halted" };
+  if (!isLiveBrokerConnected()) {
+    notifyError("Connect to a Binance profile to cancel orders");
+    return { ok: false, error: "not_connected" };
   }
-  if (activeBrokerId() !== "binance") {
-    mockCancelOrder(id);
-    return { ok: true };
+  const halt = tradingHaltReason();
+  if (halt !== null) {
+    notifyError(`Trading halted: ${halt}`);
+    return { ok: false, error: "trading_halted" };
   }
   const order = useLiveStore.getState().orders.find((o) => o.id === id);
   if (!order) return { ok: false, error: "Order not found" };
   try {
     const res = await liveApi.cancelOrder(id, order.symbol);
     if (!res.ok) {
-      notifyLiveError(res.error ?? "Cancel rejected");
+      notifyError(res.error ?? "Cancel rejected");
       return { ok: false, error: res.error };
     }
     return { ok: true };
   } catch (err) {
-    notifyLiveError(describe(err));
+    notifyError(describe(err));
     return { ok: false, error: describe(err) };
   }
 }
 
-/** Live positions are keyed by symbol (one-way mode); paper positions by id. */
 export async function dispatchClosePosition(idOrSymbol: string): Promise<{ ok: boolean; error?: string }> {
-  if (activeBrokerId() !== "binance") {
-    mockClosePosition(idOrSymbol);
-    return { ok: true };
+  if (!isLiveBrokerConnected()) {
+    notifyError("Connect to a Binance profile to close positions");
+    return { ok: false, error: "not_connected" };
   }
   try {
     const res = await liveApi.closePosition(idOrSymbol);
     if (!res.ok) {
-      notifyLiveError(res.error ?? "Close rejected");
+      notifyError(res.error ?? "Close rejected");
       return { ok: false, error: res.error };
     }
     return { ok: true };
   } catch (err) {
-    notifyLiveError(describe(err));
+    notifyError(describe(err));
     return { ok: false, error: describe(err) };
+  }
+}
+
+/**
+ * Partial close is not available for live accounts.
+ * The parameter is preserved so callers compile without changes.
+ */
+export async function dispatchClosePositionFraction(
+  _idOrSymbol: string,
+  _fraction: number,
+): Promise<{ ok: boolean; error?: string }> {
+  notifyError("Partial close is not available for live accounts");
+  return { ok: false, error: "partial_close_unavailable" };
+}
+
+export async function dispatchReversePosition(input: {
+  idOrSymbol: string;
+  symbol: string;
+  side: "long" | "short";
+  qty: number;
+}): Promise<{ ok: boolean; error?: string }> {
+  if (!isLiveBrokerConnected()) {
+    const message = "Reverse is disabled. Close the position, then open the opposite side.";
+    notifyError(message);
+    return { ok: false, error: message };
+  }
+  const halt = tradingHaltReason();
+  if (halt !== null) {
+    notifyError(`Trading halted: ${halt}`);
+    return { ok: false, error: "trading_halted" };
+  }
+  try {
+    const qty = String(Math.abs(input.qty));
+    const result = await liveApi.reversePosition({
+      symbol: input.symbol,
+      newQty: qty,
+      expectedPositionQty: qty,
+      expectedPositionSide: input.side,
+      clientOrderId: crypto.randomUUID(),
+    });
+    if (!result.ok) {
+      notifyError(result.error ?? "Reverse rejected");
+      return { ok: false, error: result.error ?? "Reverse rejected" };
+    }
+    if (result.error) notifyError(result.error);
+    return { ok: true, error: result.error };
+  } catch (err) {
+    const message = describe(err);
+    notifyError(message);
+    return { ok: false, error: message };
   }
 }
 
@@ -154,12 +196,15 @@ export async function dispatchProtect(
   tpPrice?: number | null,
   slPrice?: number | null,
 ): Promise<{ ok: boolean; error?: string }> {
+  if (!isLiveBrokerConnected()) {
+    notifyError("Connect to a Binance profile to set TP/SL");
+    return { ok: false, error: "not_connected" };
+  }
   const halt = tradingHaltReason();
-  if (halt !== null && activeBrokerId() === "binance") {
-    notifyLiveError(`Trading halted: ${halt}`);
+  if (halt !== null) {
+    notifyError(`Trading halted: ${halt}`);
     return { ok: false, error: "trading_halted" };
   }
-  if (activeBrokerId() !== "binance") return { ok: true };
   try {
     const res = await liveApi.protect({
       symbol,
@@ -169,12 +214,33 @@ export async function dispatchProtect(
     const failed = (res.tp && !res.tp.ok) || (res.sl && !res.sl.ok);
     if (failed) {
       const msg = res.tp?.error ?? res.sl?.error ?? "Protective order rejected";
-      notifyLiveError(msg);
+      notifyError(msg);
       return { ok: false, error: msg };
     }
     return { ok: true };
   } catch (err) {
-    notifyLiveError(describe(err));
+    notifyError(describe(err));
     return { ok: false, error: describe(err) };
   }
 }
+
+export async function dispatchRemoveProtection(symbol: string): Promise<{ ok: boolean; error?: string }> {
+  if (!isLiveBrokerConnected()) {
+    notifyError("Connect to a Binance profile to remove TP/SL");
+    return { ok: false, error: "not_connected" };
+  }
+  try {
+    const res = await liveApi.removeProtection(symbol);
+    if (!res.ok) {
+      notifyError(res.error ?? "Could not remove protective orders");
+      return { ok: false, error: res.error };
+    }
+    return { ok: true };
+  } catch (err) {
+    notifyError(describe(err));
+    return { ok: false, error: describe(err) };
+  }
+}
+
+// Re-export clampCloseFraction for callers that import it transitively.
+export { clampCloseFraction };
