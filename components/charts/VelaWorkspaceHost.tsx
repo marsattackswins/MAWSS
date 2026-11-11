@@ -34,6 +34,7 @@ import { mountVelaLayoutPicker } from "@/lib/vela-layout-picker";
 import { PineEngine } from "@luxalgo/vela-pinets";
 import { mawsVelaProvider, toVelaTicker } from "@/lib/vela-feed-adapter";
 import { registerChart, unregisterChart, setWorkspaceHandle } from "@/lib/chart-registry";
+import { mawsFeed } from "@/lib/maws/feed";
 import { useAppStore } from "@/lib/store";
 import { collapseDrawingDuplicates, withoutDrawingsDoc } from "@/lib/vela-drawings";
 import { velaThemeNameFromAppSettings } from "@/lib/app-theme";
@@ -73,6 +74,26 @@ export function VelaWorkspaceHost() {
   // The workspace instance in React state so the overlay portals re-render once
   // it exists (the ref alone doesn't trigger a render).
   const [wsState, setWsState] = useState<NonNullable<VelaWorkspace | null> | null>(null);
+
+  const feedSymbol = useAppStore(
+    (s) => s.panes.find((p) => p.id === s.activePaneId)?.symbol ?? "",
+  );
+  const feedTimeframe = useAppStore(
+    (s) => s.panes.find((p) => p.id === s.activePaneId)?.timeframe ?? "1D",
+  );
+
+  // Trading-gate parity: `lib/trading/dispatch.ts` blocks orders unless
+  // `mawsFeed.getKlineStatus(activeSymbol, activeTimeframe)` is live, but Vela
+  // charts stream through their own provider, so the chart path registered no
+  // feed subscription. That subscription only happened as a side effect of the
+  // SessionBreaks overlay, so turning a purely cosmetic overlay off made every
+  // order fail closed as `feed_idle`. The displayed pane owns it now.
+  useEffect(() => {
+    if (!feedSymbol) return;
+    return mawsFeed.subscribe(feedSymbol, feedTimeframe, () => {
+      /* status is polled by the UI; this listener only pins the subscription */
+    });
+  }, [feedSymbol, feedTimeframe]);
 
   // Mount the workspace once. The zustand snapshot seeds the cells; later store
   // changes flow through the subscription below.

@@ -249,3 +249,31 @@ describe("dispatchSubmitOrder execution gate (live broker)", () => {
     expect(submitOrderMock).not.toHaveBeenCalled();
   });
 });
+
+describe("dispatchSubmitOrder feed gate", () => {
+  beforeEach(() => {
+    submitOrderMock.mockReset();
+    useAppStore.setState({ connectedBroker: "binance" });
+    useLiveStore.setState({ health: makeHealth(), notices: [] });
+  });
+
+  test("delayed feed: broker not called and the toast names the feed state", async () => {
+    klineStatusMock.mockReturnValue("delayed");
+
+    const res = await dispatchSubmitOrder(INPUT);
+
+    expect(res).toEqual({ ok: false, error: "feed_delayed" });
+    expect(submitOrderMock).not.toHaveBeenCalled();
+    expectHaltedToast("Trading halted: market data delayed");
+  });
+
+  test("idle feed (no subscription): fails closed instead of trading blind", async () => {
+    klineStatusMock.mockReturnValue("idle");
+
+    const res = await dispatchSubmitOrder(INPUT);
+
+    expect(res).toEqual({ ok: false, error: "feed_idle" });
+    expect(submitOrderMock).not.toHaveBeenCalled();
+    expectHaltedToast("Trading halted: market data idle");
+  });
+});

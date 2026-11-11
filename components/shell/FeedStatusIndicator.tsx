@@ -1,0 +1,72 @@
+"use client";
+
+/**
+ * FeedStatusIndicator.tsx — chart-feed health dot in the topbar trading strip.
+ *
+ * Renders the SAME `mawsFeed.getKlineStatus` value that
+ * `lib/trading/dispatch.ts` gates order submission on, so what the user sees
+ * and what blocks the order can never disagree. The markup (span[role="status"]
+ * + "Market feed status: <state>" aria-label + background color) is the one the
+ * e2e suite has asserted since the ChartCanvas legend days.
+ */
+
+import { useEffect, useState } from "react";
+import { mawsFeed } from "@/lib/maws/feed";
+import { useActivePane } from "@/lib/store";
+import type { Timeframe } from "@/types";
+
+const COLORS = {
+  connecting: "#787b86",
+  live: "#089981",
+  delayed: "#f23645",
+  reconnecting: "#ff9800",
+} as const;
+
+type FeedHealth = { label: string; color: string };
+
+function readFeedHealth(symbol: string, timeframe: Timeframe): FeedHealth {
+  // Recovery outranks the stale snapshot: the socket is already being replaced.
+  if (mawsFeed.isKlineRecovering(symbol, timeframe)) {
+    return { label: "Reconnecting", color: COLORS.reconnecting };
+  }
+  const status = mawsFeed.getKlineStatus(symbol, timeframe);
+  if (status === "live") return { label: "Live", color: COLORS.live };
+  if (status === "delayed") return { label: "Data delayed", color: COLORS.delayed };
+  // "idle" and "connecting" both read as Connecting: the dot is shown before
+  // the first frame, and color is never the only signal.
+  return { label: "Connecting", color: COLORS.connecting };
+}
+
+export function FeedStatusIndicator() {
+  const pane = useActivePane();
+  const [health, setHealth] = useState<FeedHealth>(() =>
+    readFeedHealth(pane.symbol, pane.timeframe),
+  );
+
+  useEffect(() => {
+    const read = () => setHealth(readFeedHealth(pane.symbol, pane.timeframe));
+    read();
+    // Feed freshness is polled internally (no event), so sample it once a second
+    // like the topbar's own live/disabled state does.
+    const id = window.setInterval(read, 1_000);
+    return () => window.clearInterval(id);
+  }, [pane.symbol, pane.timeframe]);
+
+  return (
+    <span
+      role="status"
+      aria-label={`Market feed status: ${health.label}`}
+      title={`Market feed status: ${health.label}`}
+      data-testid="feed-status"
+      style={{
+        display: "inline-block",
+        width: 10,
+        height: 10,
+        borderRadius: "50%",
+        background: health.color,
+        flexShrink: 0,
+        marginInline: 4,
+      }}
+    />
+  );
+}

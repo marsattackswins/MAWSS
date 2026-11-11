@@ -34,6 +34,7 @@ import { applyThemeToCharts } from "@/lib/vela-chart-settings";
 import type { Timeframe } from "@/types";
 import { VelaTemplateMenu } from "@/components/shell/VelaTemplateMenu";
 import { VelaLayoutButton } from "@/components/shell/VelaLayoutButton";
+import { FeedStatusIndicator } from "@/components/shell/FeedStatusIndicator";
 import {
   BookOpen,
   ChevronDown,
@@ -374,6 +375,7 @@ function BuySellStrip({
         onContextMenu(e.clientX, e.clientY);
       }}
     >
+      <FeedStatusIndicator />
       {disconnected ? (
         <div className="relative" ref={menuRef}>
           <button
