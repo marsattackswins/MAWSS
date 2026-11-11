@@ -252,7 +252,9 @@ describe("persistence compatibility (maws.workspace.v6)", () => {
       "alerts",
     ]);
     expect(s.bottomTab).toBe("positions");
-    expect(s.journalOverlayOpen).toBe(true);
+    // A persisted-open journal must hydrate CLOSED: a reload starts on the
+    // chart, never inside the full-screen journal overlay.
+    expect(s.journalOverlayOpen).toBe(false);
     expect(s.drawingTool).toBe("cursor");
 
     // Seeded indicator templates filtered; custom template kept.

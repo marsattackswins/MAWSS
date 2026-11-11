@@ -4,7 +4,6 @@ import { ToolbarBtn } from "@/components/ui/ToolbarBtn";
 import { getChart, getWorkspace } from "@/lib/chart-registry";
 import type { ThemeName } from "@/lib/charting";
 import { CHART_STYLES } from "@/lib/chart-style";
-import { AssetLogo } from "@/components/brand/AssetLogo";
 import { VelaDrawingBar } from "@/components/drawings/VelaDrawingBar";
 import { MawsProductMenu } from "@/components/shell/MawsProductMenu";
 import { formatPrice, mawsFeed } from "@/lib/maws/feed";
@@ -386,7 +385,6 @@ function BuySellStrip({
         onContextMenu(e.clientX, e.clientY);
       }}
     >
-      <FeedStatusIndicator />
       {disconnected ? (
         <div className="relative" ref={menuRef}>
           <button
@@ -1016,8 +1014,9 @@ export function TopBar() {
         onClick={openSymbolSearch}
         className="relative z-[2] flex h-[28px] w-[140px] shrink-0 items-center justify-between gap-1.5 rounded-full bg-[var(--app-elevated)] px-3 hover:bg-[var(--app-border)]"
       >
-        {/* Asset icon left of the ticker — mirrors the status line/search rows. */}
-        <AssetLogo symbol={pane.symbol} size={16} />
+        {/* Market-feed health leads the ticker: the dot describes the series named
+            right beside it, and this block never carries trading controls. */}
+        <FeedStatusIndicator />
         <span className="min-w-0 flex-1 truncate text-left text-[13px] font-semibold">{formatTicker(pane.symbol)}</span>
         <ChevronDown size={12} className="shrink-0 text-(--app-muted)" />
       </button>

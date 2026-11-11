@@ -360,6 +360,11 @@ export function normalizeUiRehydrate(state: Store): void {
   state.buySellMenu = null;
   state.accountSettingsOpen = false;
   state.brokerDialogOpen = false;
+  // The journal is a full-screen overlay: a reload must land on the chart, never
+  // inside the journal. The key stays part of the persisted workspace document
+  // (the 44-key contract) so a toggle inside a session still round-trips, but
+  // hydration always starts closed.
+  state.journalOverlayOpen = false;
   if (
     state.bottomTab !== "positions" &&
     state.bottomTab !== "orders" &&

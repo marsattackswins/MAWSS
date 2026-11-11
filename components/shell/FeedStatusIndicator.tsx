@@ -1,13 +1,22 @@
 "use client";
 
 /**
- * FeedStatusIndicator.tsx — chart-feed health dot in the topbar trading strip.
+ * FeedStatusIndicator.tsx — market-feed health dot.
  *
- * Renders the SAME `mawsFeed.getKlineStatus` value that
- * `lib/trading/dispatch.ts` gates order submission on, so what the user sees
- * and what blocks the order can never disagree. The markup (span[role="status"]
- * + "Market feed status: <state>" aria-label + background color) is the one the
- * e2e suite has asserted since the ChartCanvas legend days.
+ * A small dot, coloured by the SAME `mawsFeed.getKlineStatus` value that
+ * `lib/trading/dispatch.ts` gates order submission on, so what the user sees and
+ * what blocks the order can never disagree. It leads the ticker in the top-left
+ * symbol block, beside the series it describes.
+ *
+ * Colours come from the app theme's own tokens (`--app-up` / `--app-down` /
+ * `--app-muted`), which `applyAppTheme` rewrites whenever the theme changes, so
+ * the dot follows Vela Muted / Classic / Light / Gruvbox instead of hardcoding
+ * the muted palette. `--app-warn` is not a universal token; it falls back to the
+ * TradingView warning orange so the default theme is unchanged.
+ *
+ * The markup (span[role="status"] + "Market feed status: <state>" aria-label +
+ * background color) is the one the e2e suite has asserted since the ChartCanvas
+ * legend days.
  */
 
 import { useEffect, useState } from "react";
@@ -16,10 +25,10 @@ import { useActivePane } from "@/lib/store";
 import type { Timeframe } from "@/types";
 
 const COLORS = {
-  connecting: "#787b86",
-  live: "#089981",
-  delayed: "#f23645",
-  reconnecting: "#ff9800",
+  connecting: "var(--app-muted, #787b86)",
+  live: "var(--app-up, #089981)",
+  delayed: "var(--app-down, #f23645)",
+  reconnecting: "var(--app-warn, #ff9800)",
 } as const;
 
 type FeedHealth = { label: string; color: string };
@@ -60,12 +69,12 @@ export function FeedStatusIndicator() {
       data-testid="feed-status"
       style={{
         display: "inline-block",
-        width: 10,
-        height: 10,
+        width: 7,
+        height: 7,
         borderRadius: "50%",
         background: health.color,
         flexShrink: 0,
-        marginInline: 4,
+        boxShadow: "0 0 0 1px rgba(0,0,0,0.2)",
       }}
     />
   );
