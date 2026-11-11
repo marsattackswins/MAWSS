@@ -1,4 +1,4 @@
-import { defineConfig } from "@playwright/test";
+import { defineConfig, devices } from "@playwright/test";
 
 const FAKE_WS_PORT = 8787;
 
@@ -51,6 +51,19 @@ export default defineConfig({
     baseURL: "http://localhost:3001",
     viewport: { width: 1440, height: 900 },
   },
+  // The CI workflow selects this project with `--project=chromium`. Without a
+  // projects array Playwright reports `Project(s) "chromium" not found`.
+  // devices["Desktop Chrome"] supplies the Chromium channel; the explicit
+  // viewport keeps the 1440x900 layout the existing specs were written for.
+  projects: [
+    {
+      name: "chromium",
+      use: {
+        ...devices["Desktop Chrome"],
+        viewport: { width: 1440, height: 900 },
+      },
+    },
+  ],
   // E2E CI POLICY (see .github/workflows/e2e.yml):
   // - The disconnected.spec.ts and smoke.spec.ts suites use FakeBinanceFeed (no
   //   real exchange) and run in CI on every PR via the e2e.yml workflow.
