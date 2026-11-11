@@ -17,7 +17,7 @@ const STYLE_ID = 'vela-widget-layout-picker-v15';
 const CSS = `
 .vela-lp-layer { position: absolute; z-index: var(--vela-z-menu); }
 .vela-lp {
-    background: var(--vela-surface-elev);
+    background: var(--vela-surface-overlay);
     color: var(--vela-fg);
     border: 1px solid var(--vela-border-strong);
     border-radius: 8px;

@@ -177,7 +177,7 @@ function DockButton({
 }
 
 /**
- * The compact dock: a floating rounded card pinned at the bottom of the sidebar while
+ * The compact dock: a flat strip pinned at the bottom of the sidebar while
  * the full card is folded. Three divider-separated segments, each its own undock
  * control — ticker + live price (undock, keep block states), the technicals meter
  * (undock + open Technicals), and the cash sessions (undock + open Sessions). The
@@ -214,7 +214,7 @@ function CompactSymbolPanel({ symbol }: { symbol: string }) {
   return (
     <div
       data-symbol-panel-dock
-      className="flex h-9 w-full shrink-0 items-stretch overflow-hidden border-t border-(--app-border) bg-(--app-elevated)"
+      className="flex h-9 w-full shrink-0 items-stretch overflow-hidden border-t border-(--app-border) bg-(--app-panel)"
     >
       {/* Three equal flex-1 blocks, each centring its readout. justify-center makes the
           gap from the content to its outer edge (dock edge or separator) equal to the gap

@@ -86,7 +86,7 @@ export function themeTokens(t: VelaTheme): Record<string, string> {
         '--vela-fg-bright': textPrimary,
         '--vela-surface': bgMain,
         '--vela-surface-elev': bgCard,
-        '--vela-surface-overlay': bgCard,
+        '--vela-surface-overlay': t.bgOverlay ?? bgCard,
         '--vela-surface-sunken': bgPanel,
         '--vela-hover': bgHover,
         '--vela-active': withAlpha(t.upColor, 0.2),

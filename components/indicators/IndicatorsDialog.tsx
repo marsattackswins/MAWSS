@@ -190,7 +190,7 @@ export function IndicatorsDialog() {
       }}
     >
       <div
-        className="mt-[10vh] flex max-h-[76vh] w-[560px] flex-col overflow-hidden rounded-[8px] bg-[var(--app-elevated)] shadow-[0_16px_48px_rgba(0,0,0,0.6)]"
+        className="mt-[10vh] flex max-h-[76vh] w-[560px] flex-col overflow-hidden rounded-[8px] bg-(--app-menu) shadow-[0_16px_48px_rgba(0,0,0,0.6)]"
         onMouseDown={(e) => e.stopPropagation()}
       >
         {/* Header */}

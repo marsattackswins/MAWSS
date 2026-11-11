@@ -275,7 +275,7 @@ function StatsMultiSelect({
         <span className="shrink-0 text-[10px] text-(--app-muted)">▾</span>
       </button>
       {open ? (
-        <div className="absolute top-[calc(100%+4px)] right-0 z-20 max-h-[240px] w-[240px] overflow-y-auto rounded-[6px] border border-[#363a45] bg-(--app-elevated) py-1 shadow-[0_8px_28px_rgba(0,0,0,0.65)]">
+        <div className="absolute top-[calc(100%+4px)] right-0 z-20 max-h-[240px] w-[240px] overflow-y-auto rounded-[6px] border border-[#363a45] bg-(--app-menu) py-1 shadow-[0_8px_28px_rgba(0,0,0,0.65)]">
           {ALL_POSITION_STATS.map((key) => {
             const on = selected.has(key);
             return (

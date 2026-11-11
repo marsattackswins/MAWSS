@@ -455,8 +455,8 @@ export class DrawingToolbar {
         // square LEFT corners (butts flush against the bar), rounded RIGHT corners; no left border so the seam is invisible
         fly.style.cssText =
             `position:absolute;z-index:23;display:flex;flex-direction:column;gap:2px;padding:4px;border-radius:0 8px 8px 0;` +
-            // Same elevated surface as every other menu (chart settings, context menus, …).
-            `background:var(--vela-surface-elev);border:1px solid ${this.borderColor};border-left:none;box-shadow:var(--vela-shadow);pointer-events:auto;` +
+            // Same surface as every other dropdown menu (context menus, select lists, …).
+            `background:var(--vela-surface-overlay);border:1px solid ${this.borderColor};border-left:none;box-shadow:var(--vela-shadow);pointer-events:auto;` +
             `overflow-y:auto;overscroll-behavior:contain;`;
         // The flyout is hosted OUTSIDE the bar root (it must escape its overflow), so it
         // carries its own copy of the tokens.

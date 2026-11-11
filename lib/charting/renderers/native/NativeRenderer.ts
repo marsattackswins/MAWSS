@@ -1815,10 +1815,10 @@ export class NativeRenderer implements IChartRenderer {
         this.surfaceBackground = theme.background;
         this.surfaceTextColor = theme.textColor;
         const s = this.scene.style;
-        s.candle.borderUpColor = theme.upColor;
-        s.candle.borderDownColor = theme.downColor;
-        s.candle.wickUpColor = theme.upColor;
-        s.candle.wickDownColor = theme.downColor;
+        s.candle.borderUpColor = theme.upBorderColor ?? theme.upColor;
+        s.candle.borderDownColor = theme.downBorderColor ?? theme.downColor;
+        s.candle.wickUpColor = theme.upWickColor ?? theme.upColor;
+        s.candle.wickDownColor = theme.downWickColor ?? theme.downColor;
         s.bars.upColor = theme.upColor;
         s.bars.downColor = theme.downColor;
         s.baseline.topLineColor = theme.upColor;
@@ -2192,7 +2192,7 @@ export class NativeRenderer implements IChartRenderer {
             if (skip == null) {
                 // Nothing index-aligned to measure against (a drawings-only model). Keep the
                 // old, honest-but-approximate behavior rather than inventing a count.
-                console.warn(`[vela] indicator "${model.id}" starts before the first bar with no series to align on — rendering unanchored`);
+                console.debug(`[vela] indicator "${model.id}" starts before the first bar with no series to align on — rendering unanchored`);
                 this.scene.setAnchorOffset(model.id, 0);
                 return;
             }
@@ -2208,7 +2208,7 @@ export class NativeRenderer implements IChartRenderer {
             if (this.bars[mid]!.time >= anchor) { at = mid; hi = mid - 1; } else lo = mid + 1;
         }
         if (at >= this.bars.length || this.bars[at]!.time !== anchor) {
-            console.warn(`[vela] indicator "${model.id}" anchorTime matches no chart bar — rendering unanchored`);
+            console.debug(`[vela] indicator "${model.id}" anchorTime matches no chart bar — rendering unanchored`);
             this.scene.setAnchorOffset(model.id, 0);
             return;
         }

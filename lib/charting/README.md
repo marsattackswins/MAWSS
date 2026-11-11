@@ -281,6 +281,18 @@ Local changes on top of upstream v0.8.1:
   read muted against bg0). Upstream code paths that
   only ever see `dark`/`classic`/`light` are untouched; MAWS selects it from
   its own theme switch and settings rows. `core/options.ts`, `core/theme.ts`.
+- **Gruvbox menu surface.** `VelaTheme` gains optional `bgOverlay`, consumed
+  by `themeTokens` as `--vela-surface-overlay` (default `bgCard`, so other
+  themes are unchanged). `GRUVBOX_THEME` sets it to bg0 `#282828` — the same
+  surface the settings dialog uses — so dropdown menus (select lists, the
+  layout-picker popover, the drawing-toolbar flyout, kit menus' switch
+  wells) match the global settings menu instead of reading as the lighter
+  bg1 card tone. Elevated surfaces that are not menus (inputs, badges,
+  toasts, pickers' inner fields) keep `bgCard`. MAWS mirrors the same split
+  for its React menus via `--app-menu` in `lib/app-theme.ts` (gruvbox →
+  `backgroundColor`, other themes → `elevatedColor`). `core/options.ts`,
+  `core/theme.ts`, `core/tokens.ts`, `widget/layout-picker.ts`,
+  `renderers/native/drawings/DrawingToolbar.ts`.
 
 Conventions:
 
@@ -296,3 +308,4 @@ Conventions:
   `@luxalgo/vela/plugin` for `stableSeriesId` and the default plot colors).
   All app code imports the vendored source above (`@/lib/charting`), never the
   registry copy.
+- **Anchor-offset warnings demoted to debug.** `NativeRenderer.refreshAnchorOffset` emitted `console.warn` when an indicator's anchorTime matched no loaded bar, or when it started before the first bar with no series to align on. Both are expected runtime conditions (trimmed history, draft indicators, timeframe switches) that the code already handles gracefully by falling back to offset 0. Changed to `console.debug` so they no longer pollute the browser console. (`renderers/native/NativeRenderer.ts`)

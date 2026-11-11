@@ -63,7 +63,7 @@ type MenuKind = "scripts" | "more" | "history" | "version" | null;
 
 // Surfaces read from CSS variables so the editor matches the active theme.
 const SURFACE = "var(--app-panel)";
-const MENU_BG = "var(--app-elevated)";
+const MENU_BG = "var(--app-menu)";
 const BORDER = "var(--app-border)";
 const TEXT = "var(--app-text)";
 const MUTED = "var(--app-muted)";

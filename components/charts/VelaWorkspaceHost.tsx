@@ -39,7 +39,10 @@ import { useAppStore } from "@/lib/store";
 import { collapseDrawingDuplicates, withoutDrawingsDoc } from "@/lib/vela-drawings";
 import { velaThemeNameFromAppSettings } from "@/lib/app-theme";
 import { wireCell } from "@/lib/vela-cell-wiring";
-import { startChartSettingsEcho } from "@/lib/vela-chart-settings";
+import {
+  startChartSettingsEcho,
+  stripThemeOwnedConfigColors,
+} from "@/lib/vela-chart-settings";
 import { registerChartVisibilityActions } from "@/lib/vela-context-actions";
 import { registerMawsSymbolSearch } from "@/lib/vela-symbol-search";
 import { ensurePineStatePersistence, watchPineSources } from "@/lib/vela-pine-scripts";
@@ -65,6 +68,24 @@ function mapTfToVela(tf: ChartPaneState["timeframe"]): string {
     "1D": "D", "1W": "W", "1M": "M",
   };
   return map[tf] ?? "60";
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return value != null && typeof value === "object" && !Array.isArray(value);
+}
+
+/** A persisted cell doc serializes theme-owned config colors resolved under the
+ *  theme active at save time. Drop those leaves so `applyConfig`'s merge keeps
+ *  the workspace theme the cell was constructed with. */
+function withoutStaleThemeConfig(
+  velaState: Record<string, unknown>,
+): Record<string, unknown> {
+  const rendererConfig = velaState.rendererConfig;
+  if (!isRecord(rendererConfig)) return velaState;
+  return {
+    ...velaState,
+    rendererConfig: stripThemeOwnedConfigColors(rendererConfig),
+  };
 }
 
 export function VelaWorkspaceHost() {
@@ -288,7 +309,7 @@ export function VelaWorkspaceHost() {
       );
       if (saved) {
         try {
-          cell.rehydrate(saved as never);
+          cell.rehydrate(withoutStaleThemeConfig(saved) as never);
         } catch {
           /* malformed doc — fall back to seed */
         }

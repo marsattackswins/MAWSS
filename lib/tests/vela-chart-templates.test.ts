@@ -10,6 +10,7 @@ import {
 } from "@/lib/vela-templates";
 import { useAppStore } from "@/lib/store";
 import { createStudy } from "@/lib/studies";
+import { stripThemeOwnedConfigColors } from "@/lib/vela-chart-settings";
 import type { Store } from "@/lib/store";
 import type { PaneNative } from "@/types";
 
@@ -237,7 +238,9 @@ describe("vela-templates target resolution", () => {
     expect(saved?.prefs).toEqual(prefs);
 
     expect(applyTemplate(saved!.id, "pane-2")).toBe(true);
-    expect(target.vela.renderer.applyConfig).toHaveBeenCalledWith(TPL_DOC);
+    // Theme-owned leaves (candles.upColor here) are stripped at apply time so a
+    // template captured under another theme cannot repaint the live palette.
+    expect(target.vela.renderer.applyConfig).toHaveBeenCalledWith({ version: 1 });
     expect(target.applyTemplatePrefs).toHaveBeenCalledWith(prefs);
     const appliedPane = useAppStore.getState().panes.find((pane) => pane.id === "pane-2");
     expect(appliedPane?.studies).toHaveLength(1);
@@ -251,6 +254,40 @@ describe("vela-templates target resolution", () => {
     expect(visibleChanges).toEqual([false]);
     expect(oldNative.remove).toHaveBeenCalledTimes(1);
     expect(liveNativeHandles.map((handle) => handle.nativeType)).toEqual(["sma"]);
+  });
+
+  it("strips theme-owned colors when applying so the live theme survives", () => {
+    // A template doc serializes every cosmetic resolved — including the theme
+    // palette active at save time. Applying it verbatim would repaint the
+    // chart (and, via the config-changed echo, the persisted chartSettings)
+    // with that stale theme on every boot.
+    const doc = {
+      version: 1,
+      layout: { background: "#202126", textColor: "#757882", fontSize: 12 },
+      candles: { upColor: "#a7be94", downColor: "#af6870", bodyVisible: true },
+      grid: {
+        vertLines: { visible: true, color: "#24252a" },
+        horzLines: { color: "#24252a" },
+      },
+      crosshair: { color: "#757882" },
+      panes: { separatorColor: "#262629" },
+      priceScale: { borderColor: "#262629" },
+      margins: { top: 10 },
+    };
+    registerChart("pane-0", stubHandle(doc) as never);
+    expect(saveTemplate("themed")).toBe(true);
+    const tpl = getTemplates().find((t) => t.name === "themed");
+    const target = stubHandle({});
+    registerChart("pane-1", target as never);
+
+    expect(applyTemplate(tpl!.id, "pane-1")).toBe(true);
+    expect(target.vela.renderer.applyConfig).toHaveBeenCalledWith({
+      version: 1,
+      layout: { fontSize: 12 },
+      candles: { bodyVisible: true },
+      grid: { vertLines: { visible: true } },
+      margins: { top: 10 },
+    });
   });
 
   it("captures and applies display preferences through persisted pane state when chart hooks are unavailable", () => {
@@ -285,5 +322,47 @@ describe("vela-templates target resolution", () => {
 
     expect(applyTemplate(template!.id, "pane-2")).toBe(true);
     expect(useAppStore.getState().panes.find((pane) => pane.id === "pane-2")?.velaState).toMatchObject(prefs);
+  });
+});
+
+describe("stripThemeOwnedConfigColors", () => {
+  it("drops only the config leaves the app theme owns", () => {
+    const doc = {
+      version: 1,
+      layout: { background: "#202126", textColor: "#757882", fontSize: 12 },
+      candles: {
+        upColor: "#a7be94",
+        downColor: "#af6870",
+        borderUpColor: "#a7be94",
+        wickDownColor: "#af6870",
+        bodyVisible: false,
+      },
+      grid: {
+        vertLines: { visible: true, color: "#24252a" },
+        horzLines: { visible: false, color: "#24252a" },
+      },
+      crosshair: { color: "#757882", style: "dashed" },
+      panes: { separatorColor: "#262629", heightWeights: { main: 2 } },
+      priceScale: { borderColor: "#262629", log: true },
+      bars: { upColor: "#123456", downColor: "#654321" },
+      baseline: { topLineColor: "#123456", bottomLineColor: "#654321" },
+    };
+
+    expect(stripThemeOwnedConfigColors(doc)).toEqual({
+      version: 1,
+      layout: { fontSize: 12 },
+      candles: { bodyVisible: false },
+      grid: {
+        vertLines: { visible: true },
+        horzLines: { visible: false },
+      },
+      crosshair: { style: "dashed" },
+      panes: { heightWeights: { main: 2 } },
+      priceScale: { log: true },
+      bars: { upColor: "#123456", downColor: "#654321" },
+      baseline: { topLineColor: "#123456", bottomLineColor: "#654321" },
+    });
+    // The input document is not mutated — persisted state stays intact.
+    expect(doc.layout.background).toBe("#202126");
   });
 });
