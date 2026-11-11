@@ -4,6 +4,8 @@
 
 MAWS is a browser-based market-analysis and trading-workflow terminal. It brings Binance Futures market data, multi-chart analysis, technical indicators, drawings, replay, news, an economic calendar into one workspace. Server-managed Binance Testnet and Production trading are available only in the corresponding non-local runtime modes and remain subject to authentication and safety checks.
 
+> **Disclaimer:** MAWS is personal-use trading software. It is unaudited, is not financial advice, and comes with no warranty of any kind. Trading futures can lose money, including more than you deposit. See [docs/VERIFICATION_STATUS.md](docs/VERIFICATION_STATUS.md) for what has and has not been verified against a real exchange.
+
 > **Trading risk:** Start in Chart Only (disconnected). Test exchange workflows on Testnet before considering Production. Binance API keys must not have withdrawal permission. MAWS is software, not financial advice.
 
 ## What is in the workspace
