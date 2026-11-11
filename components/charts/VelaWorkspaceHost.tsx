@@ -436,7 +436,11 @@ export function VelaWorkspaceHost() {
   }, []);
 
   return (
-    <div ref={containerRef} className="vela-workspace-host h-full min-h-0 w-full">
+    <div
+      ref={containerRef}
+      data-chart-host
+      className="vela-workspace-host h-full min-h-0 w-full"
+    >
       {wsState && <VelaWorkspaceOverlays ws={wsState} />}
     </div>
   );
