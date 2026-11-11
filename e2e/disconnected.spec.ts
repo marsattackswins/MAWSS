@@ -63,6 +63,34 @@ function broadcastPrice(feed: FakeBinanceFeed, price: number) {
   feed.broadcast(miniTickerEvent("btcusdt@miniTicker", "BTCUSDT", price, Date.now()));
 }
 
+/**
+ * Broadcast until the MAWS feed applies a frame. Vela's chart provider also
+ * connects to this fake server, so waiting for the FIRST connection no longer
+ * proves the MAWS socket (the source of the trading gate) is subscribed yet;
+ * a single early frame is silently missed. Re-broadcasting the same bar is
+ * safe: `applyKline` marks the series live before its duplicate check.
+ */
+async function broadcastPriceUntilLive(
+  page: import("@playwright/test").Page,
+  feed: FakeBinanceFeed,
+  price: number,
+  timeout = 20_000,
+) {
+  const dot = page.locator(
+    `span[role="status"][aria-label="Market feed status: ${FEED_STATE.live.label}"]`,
+  );
+  await expect
+    .poll(
+      async () => {
+        broadcastPrice(feed, price);
+        return dot.count();
+      },
+      { timeout, intervals: [250] },
+    )
+    .toBeGreaterThan(0);
+  await expectFeedDot(page, "live", 5_000);
+}
+
 // ---------------------------------------------------------------------------
 // 1. Disconnected startup
 // ---------------------------------------------------------------------------
@@ -75,8 +103,7 @@ test("disconnected startup: topbar shows Disconnected label, no Sell/Buy buttons
     await stubRest(page);
     await page.goto("/");
     await waitForKlineClient(feed);
-    broadcastPrice(feed, 100);
-    await expectFeedDot(page, "live", 20_000);
+    await broadcastPriceUntilLive(page, feed, 100);
 
     // The "Disconnected" label must be visible in the topbar trading strip
     // when no broker is connected.
@@ -100,8 +127,7 @@ test("disconnected startup: bottom trading panel is hidden (no positions/orders 
     await stubRest(page);
     await page.goto("/");
     await waitForKlineClient(feed);
-    broadcastPrice(feed, 100);
-    await expectFeedDot(page, "live", 20_000);
+    await broadcastPriceUntilLive(page, feed, 100);
 
     // The positions/orders panel is only shown after a confirmed broker
     // attachment. In disconnected mode it must not render.
@@ -120,8 +146,7 @@ test("disconnected startup: broker dialog shows two profiles, no Paper Trading o
     await stubRest(page);
     await page.goto("/");
     await waitForKlineClient(feed);
-    broadcastPrice(feed, 100);
-    await expectFeedDot(page, "live", 20_000);
+    await broadcastPriceUntilLive(page, feed, 100);
 
     // Open the broker chooser.
     await page.locator('[data-testid="topbar-disconnected"]').click();
@@ -165,8 +190,7 @@ test("dispatch rejects order when disconnected (server returns not_connected)", 
     await stubRest(page);
     await page.goto("/");
     await waitForKlineClient(feed);
-    broadcastPrice(feed, 100);
-    await expectFeedDot(page, "live", 20_000);
+    await broadcastPriceUntilLive(page, feed, 100);
 
     // Verify that the dispatch layer rejects the order in the browser.
     const result = await page.evaluate(async () => {
@@ -226,8 +250,7 @@ test("failed live profile phase keeps bottom panel hidden", async ({ page }) => 
 
     await page.goto("/");
     await waitForKlineClient(feed);
-    broadcastPrice(feed, 100);
-    await expectFeedDot(page, "live", 20_000);
+    await broadcastPriceUntilLive(page, feed, 100);
 
     // With a failed profile and no attachment, the bottom panel must not render.
     await expect(page.locator('button:has-text("Positions")')).toHaveCount(0, { timeout: 5_000 });
@@ -309,8 +332,7 @@ test("controlled fixture: ready Testnet profile shows connected state and bottom
 
     await page.goto("/");
     await waitForKlineClient(feed);
-    broadcastPrice(feed, 100);
-    await expectFeedDot(page, "live", 20_000);
+    await broadcastPriceUntilLive(page, feed, 100);
 
     // The bottom panel should appear once the attachment confirms.
     // The broker attachment is driven by restoreServerProfile on session start.
@@ -359,8 +381,7 @@ test("switching from Testnet to Production goes through exposure and mutation ch
 
     await page.goto("/");
     await waitForKlineClient(feed);
-    broadcastPrice(feed, 100);
-    await expectFeedDot(page, "live", 20_000);
+    await broadcastPriceUntilLive(page, feed, 100);
 
     // The profile switch rejected: verify the error surfaces in the UI.
     // This is tested via the dispatch layer in Jest; here we confirm the

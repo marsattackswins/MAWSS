@@ -43,6 +43,35 @@ async function waitForKlineClient(feed: FakeBinanceFeed) {
   await expect.poll(() => feed.connections, { timeout: 20_000 }).toBeGreaterThan(0);
 }
 
+/**
+ * Broadcast until the MAWS feed applies the frame. Vela's chart provider also
+ * connects to this fake server, so `waitForKlineClient` can be satisfied by
+ * Vela's socket before the MAWS socket (the source of the trading gate) has
+ * subscribed, and that first frame is silently missed. Re-broadcasting the
+ * same bar is safe: `applyKline` marks the series live before the duplicate
+ * check, while the assertion below still requires the real live state.
+ */
+async function broadcastUntilLive(
+  page: import("@playwright/test").Page,
+  feed: FakeBinanceFeed,
+  event: unknown,
+  timeout = 20_000,
+) {
+  const dot = page.locator(
+    `span[role="status"][aria-label="Market feed status: ${FEED_STATE.live.label}"]`,
+  );
+  await expect
+    .poll(
+      async () => {
+        feed.broadcast(event);
+        return dot.count();
+      },
+      { timeout, intervals: [250] },
+    )
+    .toBeGreaterThan(0);
+  await expectFeedDot(page, "live", 5_000);
+}
+
 test("chart starts Connecting and becomes Live after a valid feed frame", async ({ page }) => {
   const feed = new FakeBinanceFeed(8787);
   try {
@@ -52,10 +81,12 @@ test("chart starts Connecting and becomes Live after a valid feed frame", async 
     // No frames yet → the pane dot must be gray (connecting), not green.
     await expectFeedDot(page, "connecting", 30_000);
 
-    await waitForKlineClient(feed);
-    feed.broadcast(klineEvent(KLINE_STREAM, "BTCUSDT", "1d", currentDayOpenSec(), 100));
-
-    await expectFeedDot(page, "live", 15_000);
+    await waitForKlineClient(feed);    await broadcastUntilLive(
+      page,
+      feed,
+      klineEvent(KLINE_STREAM, "BTCUSDT", "1d", currentDayOpenSec(), 100),
+      15_000,
+    );
   } finally {
     await feed.close();
   }
@@ -67,8 +98,12 @@ test("stale feed shows Data delayed and returns to Live after recovery", async (
     await stubRest(page);
     await page.goto("/");
     await waitForKlineClient(feed);
-    feed.broadcast(klineEvent(KLINE_STREAM, "BTCUSDT", "1d", currentDayOpenSec(), 100));
-    await expectFeedDot(page, "live", 15_000);
+    await broadcastUntilLive(
+      page,
+      feed,
+      klineEvent(KLINE_STREAM, "BTCUSDT", "1d", currentDayOpenSec(), 100),
+      15_000,
+    );
 
     const connectionsAfterLive = feed.connections;
 
@@ -84,8 +119,12 @@ test("stale feed shows Data delayed and returns to Live after recovery", async (
     // Recovery started but no fresh frame yet (broadcast withheld) → Reconnecting.
     await expectFeedDot(page, "reconnecting", 15_000);
 
-    feed.broadcast(klineEvent(KLINE_STREAM, "BTCUSDT", "1d", currentDayOpenSec(), 100));
-    await expectFeedDot(page, "live", 20_000);
+    await broadcastUntilLive(
+      page,
+      feed,
+      klineEvent(KLINE_STREAM, "BTCUSDT", "1d", currentDayOpenSec(), 100),
+      20_000,
+    );
   } finally {
     await feed.close();
   }
@@ -152,8 +191,12 @@ test("rapid timeframe switches never hit 'Object is disposed' and chart stays li
 
     await page.goto("/");
     await waitForKlineClient(feed);
-    feed.broadcast(klineEvent(KLINE_STREAM, "BTCUSDT", "1d", currentDayOpenSec(), 100));
-    await expectFeedDot(page, "live", 20_000);
+    await broadcastUntilLive(
+      page,
+      feed,
+      klineEvent(KLINE_STREAM, "BTCUSDT", "1d", currentDayOpenSec(), 100),
+      20_000,
+    );
 
     // Rapid-fire TF switching — no settling between clicks.
     for (const tf of ["15m", "5m", "15m", "5m", "1m"]) {
@@ -171,8 +214,12 @@ test("rapid timeframe switches never hit 'Object is disposed' and chart stays li
     // is alive and processing (a disposed instance could not update).
     await expectFeedDot(page, "connecting", 20_000);
     const minuteOpen = Math.floor(Date.now() / 60_000) * 60;
-    feed.broadcast(klineEvent("btcusdt@kline_1m", "BTCUSDT", "1m", minuteOpen, 105));
-    await expectFeedDot(page, "live", 20_000);
+    await broadcastUntilLive(
+      page,
+      feed,
+      klineEvent("btcusdt@kline_1m", "BTCUSDT", "1m", minuteOpen, 105),
+      20_000,
+    );
 
     expect(pageErrors).toEqual([]);
   } finally {
@@ -188,8 +235,12 @@ test("position tool entry/TP/SL and extent dragging update drawing and labels", 
     await stubRest(page);
     await page.goto("/");
     await waitForKlineClient(feed);
-    feed.broadcast(klineEvent(KLINE_STREAM, "BTCUSDT", "1d", currentDayOpenSec(), 100));
-    await expectFeedDot(page, "live", 15_000);
+    await broadcastUntilLive(
+      page,
+      feed,
+      klineEvent(KLINE_STREAM, "BTCUSDT", "1d", currentDayOpenSec(), 100),
+      15_000,
+    );
 
     const host = page.locator("[data-chart-host]").first();
     await expect(host).toBeVisible({ timeout: 30_000 });
