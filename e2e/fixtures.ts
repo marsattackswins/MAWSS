@@ -1,3 +1,5 @@
+import fs from "node:fs";
+
 import { expect, test as base, type BrowserContext } from "@playwright/test";
 
 /**
@@ -22,14 +24,39 @@ const BLOCKED_HOST =
 /** Every page is behind the operator session: without a login the proxy
  *  redirects to /login before any spec assertion can run. The password is the
  *  one minted for this run by playwright.config.ts; it never appears on disk. */
-// One session per worker: the login route rate-limits real attempts (5 per
-// 15 minutes), and repeat-each runs would otherwise exhaust it before the suite
-// finishes. The cookie stays in memory for this run only.
+// One session per run: the login route rate-limits real attempts (5 per 15
+// minutes), and repeat-each runs plus worker restarts would otherwise exhaust
+// it. The cookie is cached in a run-scoped file set by playwright.config.ts.
 let cachedCookies: Awaited<ReturnType<BrowserContext["cookies"]>> | null = null;
 
+function readCachedCookies(): Awaited<ReturnType<BrowserContext["cookies"]>> | null {
+  if (cachedCookies) return cachedCookies;
+  const file = process.env.MAWS_E2E_SESSION_FILE;
+  if (!file) return null;
+  try {
+    const parsed: unknown = JSON.parse(fs.readFileSync(file, "utf8"));
+    if (Array.isArray(parsed)) cachedCookies = parsed as Awaited<ReturnType<BrowserContext["cookies"]>>;
+  } catch {
+    // No usable session from this run yet.
+  }
+  return cachedCookies;
+}
+
+function writeCachedCookies(cookies: Awaited<ReturnType<BrowserContext["cookies"]>>): void {
+  cachedCookies = cookies;
+  const file = process.env.MAWS_E2E_SESSION_FILE;
+  if (!file) return;
+  try {
+    fs.writeFileSync(file, JSON.stringify(cookies), { mode: 0o600 });
+  } catch {
+    // The in-memory copy still covers this worker.
+  }
+}
+
 async function loginOperator(page: import("@playwright/test").Page): Promise<void> {
-  if (cachedCookies) {
-    await page.context().addCookies(cachedCookies);
+  const cached = readCachedCookies();
+  if (cached) {
+    await page.context().addCookies(cached);
     return;
   }
   const password = process.env.MAWS_E2E_OPERATOR_PASSWORD;
@@ -46,7 +73,7 @@ async function loginOperator(page: import("@playwright/test").Page): Promise<voi
   if (login.status() !== 200) {
     throw new Error(`Operator login failed (${login.status()}) — the disposable server rejected the generated password`);
   }
-  cachedCookies = await page.context().cookies();
+  writeCachedCookies(await page.context().cookies());
 }
 
 export const test = base.extend({

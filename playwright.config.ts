@@ -1,3 +1,6 @@
+import crypto from "node:crypto";
+import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { defineConfig, devices } from "@playwright/test";
 import { createDisposableContext } from "./scripts/disposable-bootstrap.mjs";
@@ -13,6 +16,13 @@ const disposable = createDisposableContext({ source: {}, purpose: "e2e" });
 // Playwright reloads this config in every worker process. Keep the password
 // minted by the main process, which started the server with matching verifier.
 process.env.MAWS_E2E_OPERATOR_PASSWORD ??= disposable.password;
+// The worker caches its operator session here so a worker restart does not
+// spend another login against the route's 5-per-15-minutes limiter. The path
+// is unique per run and inherited by every worker.
+if (!process.env.MAWS_E2E_SESSION_FILE) {
+  process.env.MAWS_E2E_SESSION_FILE = path.join(os.tmpdir(), `maws-e2e-session-${crypto.randomUUID()}.json`);
+  fs.rmSync(process.env.MAWS_E2E_SESSION_FILE, { force: true });
+}
 
 // Playwright merges `env` over process.env, so also blank every ambient
 // MAWS_* variable (secrets included) so nothing leaks into e2e runs.

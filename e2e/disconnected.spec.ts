@@ -176,8 +176,8 @@ test("disconnected startup: profile menu and API list exactly Testnet and Live",
     // Open the topbar profile menu from the Disconnected label.
     await page.locator('[data-testid="topbar-disconnected"]').click();
     await expect(page.getByText("Trading Profiles")).toBeVisible({ timeout: 10_000 });
-    await expect(page.getByText("Testnet", { exact: true })).toBeVisible();
-    await expect(page.getByText("Live", { exact: true })).toBeVisible();
+    await expect(page.getByRole("button", { name: /USDT-M Futures \(Testnet\)/ })).toBeVisible();
+    await expect(page.getByRole("button", { name: /USDT-M Futures \(Live\)/ })).toBeVisible();
 
     // The two-mode product has no paper option anywhere in the menu.
     await expect(page.locator('[role="menu"]')).not.toContainText("Paper");
@@ -216,7 +216,7 @@ test("order submission while disconnected is rejected with 409 not_connected", a
       csrf?: string;
     };
     const response = await page.request.post("/api/live/orders", {
-      headers: { "x-maws-csrf": session.csrf ?? "" },
+      headers: { "x-maws-csrf": session.csrf ?? "", origin: "http://localhost:3001" },
       data: {
         symbol: "BTCUSDT",
         side: "BUY",
