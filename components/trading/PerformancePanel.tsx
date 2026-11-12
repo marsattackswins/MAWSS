@@ -8,8 +8,8 @@ import type { OrderHistoryEntry } from "@/types";
 
 /**
  * Performance tab of the bottom panel: FIFO round-trip statistics derived
- * from the confirmed fill history (paper order history, or the live fill
- * feed mapped onto the same shape by the panel). Read-only — the engine
+ * from the confirmed fill history (the live fill feed mapped onto the
+ * order-history shape by the panel). Read-only — the engine
  * never mutates state and never sees order credentials.
  */
 

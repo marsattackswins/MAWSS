@@ -6,7 +6,7 @@
  * Position entry / TP / SL / liquidation / alert / order lines are Vela user
  * drawings (`hline`) owned by this component. Vela emits the new price on drag
  * (`drawing:edited`); the existing MAWS dispatch layer validates and executes
- * (live → /api/live/protect via dispatchProtect, paper → the paper engine), and
+ * (live → /api/live/protect via dispatchProtect), and
  * Vela is updated only from the confirmed broker state that flows back through
  * the store. Risk/reward zones paint through the `maws-trade-zones` renderer
  * layer. Vela never sees broker credentials or executes orders directly.
@@ -46,7 +46,7 @@ const TRADE_LAYER = "maws-trade-zones";
 export function TradeMarks({ pane }: { pane: ChartPaneState }) {
   const settings = useAppStore((s) => s.chartSettings);
   const alerts = useAppStore((s) => s.alerts);
-  // Exactly one book (live for binance, paper otherwise) — never a mix.
+  // The broker book is empty while Disconnected — there is no fallback book.
   const { orders, positions } = useBrokerBook();
   const updateAlert = useAppStore((s) => s.updateAlert);
   const removeAlert = useAppStore((s) => s.removeAlert);

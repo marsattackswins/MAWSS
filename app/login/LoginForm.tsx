@@ -6,7 +6,6 @@ type LoginErrorBody = { error?: { code?: string } };
 
 function errorMessage(status: number, body: LoginErrorBody | null): string {
   if (status === 429) return "Too many attempts. Wait a while and try again.";
-  if (body?.error?.code === "env_local") return "Sign-in is not used in local mode. Return to the chart.";
   if (status === 401 || body?.error?.code === "bad_credentials") return "Invalid operator password.";
   return "Sign-in is unavailable. Try again later.";
 }

@@ -9,13 +9,9 @@ export default async function AdminPage() {
   const headersList = await headers();
   const cookieHeader = headersList.get("cookie");
 
-  // Server-side authorization check
-  // Throws on config error (fail closed), returns false if unauthorized
+  let authorized: boolean;
   try {
-    const authorized = isOperatorPageAuthorized(cookieHeader);
-    if (!authorized) {
-      redirect("/login");
-    }
+    authorized = isOperatorPageAuthorized(cookieHeader);
   } catch {
     // Configuration load failure: fail closed, do not render admin content
     // Return generic error page without sensitive information
@@ -31,5 +27,6 @@ export default async function AdminPage() {
     );
   }
 
+  if (!authorized) redirect("/login");
   return <AdminDashboard />;
 }

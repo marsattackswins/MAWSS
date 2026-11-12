@@ -103,7 +103,7 @@ export default function AppPowerControl({ className }: { className?: string }) {
     setBusy(true);
     setError(null);
     try {
-      // Non-local modes require the per-session CSRF header on mutations.
+      // Mutations require the per-session CSRF header.
       let csrf: string | null = null;
       try {
         const session = await fetch("/api/auth/session", { cache: "no-store" }).then(
@@ -111,7 +111,7 @@ export default function AppPowerControl({ className }: { className?: string }) {
         );
         csrf = session?.csrf ?? null;
       } catch {
-        // Local mode needs no CSRF; non-local will fail below with 403.
+        // Without a session token the mutation fails below with 403.
       }
 
       const res = await fetch("/api/admin/power", {

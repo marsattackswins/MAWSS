@@ -9,14 +9,9 @@ export default async function Home() {
   const headersList = await headers();
   const cookieHeader = headersList.get("cookie");
 
-  // Server-side authorization check, same pattern as /admin:
-  // local → anonymous allowed; non-local → session required.
-  // Throws on config error (fail closed), redirects to /login when unauthorized.
+  let authorized: boolean;
   try {
-    const authorized = isOperatorPageAuthorized(cookieHeader);
-    if (!authorized) {
-      redirect("/login");
-    }
+    authorized = isOperatorPageAuthorized(cookieHeader);
   } catch {
     // Configuration load failure: fail closed, do not render the terminal.
     return (
@@ -31,5 +26,6 @@ export default async function Home() {
     );
   }
 
+  if (!authorized) redirect("/login");
   return <AppShell />;
 }

@@ -307,8 +307,6 @@ function BuySellStrip({
     } catch (error: unknown) {
       if (error instanceof LiveAuthError) {
         setAuthError("Invalid operator password.");
-      } else if (error instanceof LiveApiError && error.code === "env_local") {
-        setAuthError("Set MAWS_OPERATOR_AUTH to connect a Binance profile from Chart Only.");
       } else {
         setAuthError("Operator authentication is unavailable. Try again.");
       }
@@ -416,7 +414,7 @@ function BuySellStrip({
               >
                 <BinanceIcon />
                 <div className="flex min-w-0 flex-1 flex-col">
-                  <span className="text-[12px] font-medium text-(--app-text)">Binance Testnet</span>
+                  <span className="text-[12px] font-medium text-(--app-text)">Testnet</span>
                   <span className="truncate text-[11px] text-(--app-muted)">USDT-M Futures (Testnet)</span>
                 </div>
                 <span className="shrink-0 rounded bg-[#22c55e]/15 px-1.5 py-0.5 text-[10px] font-semibold uppercase text-[#22c55e]">
@@ -431,7 +429,7 @@ function BuySellStrip({
               >
                 <BinanceIcon />
                 <div className="flex min-w-0 flex-1 flex-col">
-                  <span className="text-[12px] font-medium text-(--app-text)">Binance Live</span>
+                  <span className="text-[12px] font-medium text-(--app-text)">Live</span>
                   <span className="truncate text-[11px] text-(--app-muted)">USDT-M Futures (Live)</span>
                 </div>
                 <span className="shrink-0 rounded bg-[#f0b90b]/15 px-1.5 py-0.5 text-[10px] font-semibold uppercase text-[#f0b90b]">

@@ -8,14 +8,9 @@ export default async function Page() {
   const headersList = await headers();
   const cookieHeader = headersList.get("cookie");
 
-  // Server-side authorization check:
-  // local → anonymous allowed; non-local → session required.
-  // The page itself moved into the Operations Console at /admin.
+  let authorized: boolean;
   try {
-    const authorized = isOperatorPageAuthorized(cookieHeader);
-    if (!authorized) {
-      redirect("/login");
-    }
+    authorized = isOperatorPageAuthorized(cookieHeader);
   } catch {
     // Configuration load failure: fail closed, do not redirect anywhere.
     return (
@@ -30,5 +25,6 @@ export default async function Page() {
     );
   }
 
+  if (!authorized) redirect("/login");
   redirect("/admin");
 }

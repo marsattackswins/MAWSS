@@ -227,7 +227,7 @@ function buildTradingBlocks({ health, tradingHealth }: ConsoleProps): Block[] {
   const stream = tradingHealth?.feed.serverTradingStream;
   const recon = tradingHealth?.execution.reconciliation;
   const circuits = tradingHealth?.circuits;
-  const chartOnly = health?.env === "local" && health.managerStatus === "idle";
+  const disconnected = health != null && health.managerStatus === "idle";
   const waiting: StatusTone = "muted";
 
   return [
@@ -235,20 +235,20 @@ function buildTradingBlocks({ health, tradingHealth }: ConsoleProps): Block[] {
       id: "manager",
       label: "Manager",
       value: managerLabel(health),
-      detail: health?.managerError ?? "Profile coordinator",
-      tone: health ? (health.managerReady ? "healthy" : chartOnly ? waiting : "warning") : waiting,
+      detail: health?.managerError ?? (disconnected ? "No profile attached" : "Profile coordinator"),
+      tone: health ? (health.managerReady ? "healthy" : disconnected ? waiting : "warning") : waiting,
     },
     {
       id: "stream",
       label: "Private stream",
-      value: stream ? streamLabel(stream.status) : chartOnly ? "Not required" : "Waiting",
+      value: stream ? streamLabel(stream.status) : disconnected ? "Not required" : "Waiting",
       detail: stream?.lastMessageAt ? `Last message ${formatTime(stream.lastMessageAt)}` : "Account data feed",
       tone: stream ? (stream.level === "healthy" ? "healthy" : "warning") : waiting,
     },
     {
       id: "reconciliation",
       label: "Reconciliation",
-      value: recon ? `${recon.mismatches} mismatch${recon.mismatches === 1 ? "" : "es"}` : chartOnly ? "Not required" : "Waiting",
+      value: recon ? `${recon.mismatches} mismatch${recon.mismatches === 1 ? "" : "es"}` : disconnected ? "Not required" : "Waiting",
       detail: recon ? `${recon.runs} lifetime runs` : "Account consistency",
       tone: recon ? (recon.mismatches === 0 ? "healthy" : "warning") : waiting,
     },
@@ -265,10 +265,13 @@ function buildTradingBlocks({ health, tradingHealth }: ConsoleProps): Block[] {
 // --- Surface values (one source of truth per visible value) ---
 
 function envLabel(health: HealthSnapshot | null): string {
-  if (health?.env === "local") return "Chart Only";
-  if (health?.env === "testnet") return "Binance Testnet";
-  if (health?.env === "production") return "Binance Live";
-  return health?.env ?? "Waiting";
+  if (!health) return "Waiting";
+  // The configured environment is only shown while a profile is attached;
+  // with nothing attached the operator sees Disconnected, not a mode.
+  if (health.managerStatus === "idle") return "Disconnected";
+  if (health.env === "testnet") return "Testnet";
+  if (health.env === "production") return "Live";
+  return health.env;
 }
 
 function systemLabel(health: HealthSnapshot | null): string {
@@ -283,19 +286,19 @@ function systemTone(health: HealthSnapshot | null): StatusTone {
 
 function submissionLabel(health: HealthSnapshot | null): string {
   if (!health) return "Waiting";
-  if (health.env === "local" && health.managerStatus === "idle") return "Chart-only";
+  if (health.managerStatus === "idle") return "Disconnected";
   return health.execution.canSubmit ? "Ready" : "Blocked";
 }
 
 function submissionTone(health: HealthSnapshot | null): StatusTone {
   if (!health) return "muted";
-  if (health.env === "local" && health.managerStatus === "idle") return "muted";
+  if (health.managerStatus === "idle") return "muted";
   return health.execution.canSubmit ? "healthy" : "warning";
 }
 
 function submissionDetail(health: HealthSnapshot | null): string {
   if (!health) return "Execution readiness";
-  if (health.env === "local" && health.managerStatus === "idle") return "Orders intentionally blocked in Chart Only mode";
+  if (health.managerStatus === "idle") return "No profile attached — orders are rejected until you attach Testnet or Live";
   const reason = health.execution.reasons[0] ?? "";
   const normalized = reason.toLowerCase();
   if (normalized.includes("runtime execution flag")) return "Runtime switch is off — reconnect the profile";
@@ -416,7 +419,7 @@ function EnvironmentPanel({ health }: { health: HealthSnapshot | null }) {
       </Panel>
       <Panel title="What this means">
         <p className="text-sm text-[#787b86]">
-          Chart Only never submits server-side orders. Binance Testnet trades against the test exchange. Binance Live places real orders — treat every warning on this page as actionable.
+          Disconnected never submits server-side orders. Binance Testnet trades against the Demo Trading exchange. Binance Live places real orders — treat every warning on this page as actionable.
         </p>
       </Panel>
     </PanelGrid>

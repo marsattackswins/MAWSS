@@ -148,7 +148,7 @@ function PositionPill({
     if (!result.ok) notify(result.error ?? "Close rejected");
   };
 
-  /** Commit one exit leg at a price through the guarded path (paper: store, live: broker). */
+  /** Commit one exit leg at a price through the guarded path. */
   const commitExit = useCallback(
     async (leg: Leg, price: number) => {
       if (!validExitPrice(position.side, position.entry, leg, price)) {

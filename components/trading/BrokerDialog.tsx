@@ -11,7 +11,7 @@ import { useEffect, useMemo, useRef, useState, type FormEvent } from "react";
 const FALLBACK_PROFILES: ProfileMetadataDto[] = [
   {
     profileId: "binance-testnet",
-    label: "Binance Testnet",
+    label: "Testnet",
     environment: "testnet",
     configured: false,
     requiresProductionConfirmation: false,
@@ -19,7 +19,7 @@ const FALLBACK_PROFILES: ProfileMetadataDto[] = [
   },
   {
     profileId: "binance-production",
-    label: "Binance Live",
+    label: "Live",
     environment: "production",
     configured: false,
     requiresProductionConfirmation: true,
@@ -51,18 +51,13 @@ function ProfileMark({ profileId }: { profileId: LiveProfileId }) {
 
 function safeLoadError(error: unknown): string {
   if (error instanceof LiveAuthError) return "Authenticate when you choose a Binance profile.";
-  if (error instanceof LiveApiError && error.code === "env_local") {
-    return "Binance profiles are unavailable in local mode. Connect credentials first.";
-  }
-  if (error instanceof LiveApiError) return "Server profile status is unavailable.";
+  void error;
   return "Server profile status is unavailable.";
 }
 
 function safeAuthError(error: unknown): string {
   if (error instanceof LiveAuthError) return "Invalid operator password.";
-  if (error instanceof LiveApiError && error.code === "env_local") {
-    return "Set MAWS_OPERATOR_AUTH to connect a Binance profile from Chart Only.";
-  }
+  void error;
   return "Operator authentication is unavailable. Try again.";
 }
 
@@ -82,7 +77,6 @@ export function BrokerDialog() {
   const [productionConfirmation, setProductionConfirmation] = useState(false);
   const [productionChecked, setProductionChecked] = useState(false);
   const [authenticationRequired, setAuthenticationRequired] = useState(false);
-  const [localUnavailable, setLocalUnavailable] = useState(false);
   const [authTarget, setAuthTarget] = useState<LiveProfileId | null>(null);
   const [authPassword, setAuthPassword] = useState("");
   const [authBusy, setAuthBusy] = useState(false);
@@ -91,7 +85,7 @@ export function BrokerDialog() {
 
   const activeProfile = connectedBroker === "binance" ? liveProfile : null;
   const switching = switchingTarget !== null || livePhase === "switching";
-  const currentLabel = activeProfile ? profileLabel(activeProfile) : "Chart only";
+  const currentLabel = activeProfile ? profileLabel(activeProfile) : "Disconnected";
   const currentStatus = livePhase === "switching" ? "Switching profile…" : liveReady ? profilePhaseLabel(livePhase) : livePhase !== "idle" ? profilePhaseLabel(livePhase) : "No active broker";
 
   const orderedProfiles = useMemo(
@@ -113,7 +107,6 @@ export function BrokerDialog() {
     setLoading(true);
     setLoadError(null);
     setAuthenticationRequired(false);
-    setLocalUnavailable(false);
     void liveApi.profiles()
       .then((response) => {
         if (!cancelled) {
@@ -125,7 +118,6 @@ export function BrokerDialog() {
         if (!cancelled) {
           setProfiles(FALLBACK_PROFILES);
           setAuthenticationRequired(error instanceof LiveAuthError);
-          setLocalUnavailable(error instanceof LiveApiError && error.code === "env_local");
           setLoadError(safeLoadError(error));
         }
       })
@@ -241,7 +233,7 @@ export function BrokerDialog() {
 
   const selectProfile = (profile: ProfileMetadataDto) => {
     const unavailable = !profile.configured && !authenticationRequired;
-    if (switching || unavailable || localUnavailable) return;
+    if (switching || unavailable) return;
     void requestBinanceProfile(profile.profileId);
   };
 
@@ -295,9 +287,7 @@ export function BrokerDialog() {
                 <span className="mt-1 text-[12px] leading-4 text-(--app-muted)">{copy.description}</span>
                 <span className="mt-auto flex items-center gap-1 pt-4 text-[11px] text-(--app-muted)">
                   {unavailable
-                    ? localUnavailable
-                      ? "Unavailable in local mode"
-                      : "Not configured"
+                    ? "Not configured"
                     : authenticationRequired && !selected
                       ? "Authentication required"
                       : selected
