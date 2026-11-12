@@ -1,28 +1,16 @@
 import path from "node:path";
 import { defineConfig, devices } from "@playwright/test";
+import { createDisposableContext } from "./scripts/disposable-bootstrap.mjs";
 
 const FAKE_WS_PORT = 8787;
 
-// Explicit allowlist: never inherit ambient secrets (MAWS_BINANCE_*,
-// MAWS_OPERATOR_AUTH, ...) into the e2e webServer process.
-const OS_PASSTHROUGH = [
-  "PATH",
-  "PATHEXT",
-  "SystemRoot",
-  "SystemDrive",
-  "COMSPEC",
-  "USERPROFILE",
-  "HOMEDRIVE",
-  "HOMEPATH",
-  "LOCALAPPDATA",
-  "APPDATA",
-  "TEMP",
-  "TMP",
-  "HOME",
-  "SHELL",
-  "LANG",
-  "NODE_EXTRA_CA_CERTS",
-];
+// Isolated launch: scratch DB/state under the OS temp dir, a fresh operator
+// verifier, every Binance credential name blanked, origin pinned to the e2e
+// port. The generated password stays in this process only (picked up by
+// login-first specs via MAWS_E2E_OPERATOR_PASSWORD); it is never printed and
+// never written to disk.
+const disposable = createDisposableContext({ source: {}, purpose: "e2e" });
+process.env.MAWS_E2E_OPERATOR_PASSWORD = disposable.password;
 
 // Playwright merges `env` over process.env, so also blank every ambient
 // MAWS_* variable (secrets included) so nothing leaks into e2e runs.
@@ -30,8 +18,7 @@ const webServerEnv: Record<string, string> = {};
 for (const [name] of Object.entries(process.env)) {
   if (name.startsWith("MAWS_")) webServerEnv[name] = "";
 }
-Object.assign(webServerEnv, {
-  MAWS_NEXT_DIST_DIR: ".next-e2e",
+Object.assign(webServerEnv, disposable.env, {
   NEXT_PUBLIC_BINANCE_FAPI_WS: `ws://127.0.0.1:${FAKE_WS_PORT}`,
   NEXT_PUBLIC_BINANCE_FAPI_WS_FALLBACK: `ws://127.0.0.1:${FAKE_WS_PORT}`,
   // The browser guard in e2e/fixtures.ts cannot see the Next server's own
@@ -41,10 +28,6 @@ Object.assign(webServerEnv, {
   // instead of reaching the network. e2e/server-guard.spec.ts proves it is on.
   NODE_OPTIONS: `--require ${path.resolve("e2e/server-network-guard.cjs")}`,
 });
-for (const name of OS_PASSTHROUGH) {
-  const value = process.env[name];
-  if (value !== undefined) webServerEnv[name] = value;
-}
 
 export default defineConfig({
   testDir: "./e2e",
@@ -80,15 +63,20 @@ export default defineConfig({
     },
   ],
   // E2E CI POLICY (see .github/workflows/e2e.yml):
-  // - The disconnected.spec.ts and smoke.spec.ts suites use FakeBinanceFeed (no
-  //   real exchange) and run in CI on every PR via the e2e.yml workflow.
-  // - order-lifecycle.spec.ts is skipped pending a Testnet rewrite.
-  // - No real credentials are needed or injected: playwright.config.ts blanks
-  //   all MAWS_* env vars. The webServer runs on port 3001 (isolated from the
-  //   dev workspace on 3000) so saved state keys (origin-scoped localStorage)
-  //   cannot cross-contaminate.
+  // - Every spec runs against a disposable server: scratch DB, fresh operator
+  //   account, no Binance credentials (scripts/disposable-bootstrap.mjs blanks
+  //   all six credential names). Specs log in through the real /api/auth/login
+  //   route and never reach the real exchange.
+  // - disconnected.spec.ts and smoke.spec.ts use FakeBinanceFeed (no real
+  //   exchange) and run in CI on every PR via the e2e.yml workflow.
+  // - The webServer runs on port 3001 (isolated from the dev workspace on
+  //   3000) so saved state keys (origin-scoped localStorage) cannot
+  //   cross-contaminate; MAWS_ALLOWED_ORIGIN matches this port.
   webServer: {
     command: "npx next dev -p 3001",
+    // Readiness = the anonymous liveness endpoint answering, not merely the
+    // port accepting connections.
+    url: "http://127.0.0.1:3001/api/liveness",
     port: 3001,
     reuseExistingServer: false,
     timeout: 120_000,

@@ -24,7 +24,7 @@ export interface ExecutionDecision {
 
 /**
  * Submission requires ALL of:
- *  - an env that permits submissions (testnet or production; shadow/local never),
+ *  - an env that permits submissions (testnet or production),
  *  - an authenticated, configured Binance profile,
  *  - the DB runtime execution flag (enabled automatically after profile attachment),
  *  - kill switch disengaged,
@@ -42,13 +42,10 @@ export function executionDecision(cfg: EnvConfig): ExecutionDecision {
   const killSwitch = getRuntime(RUNTIME_KEYS.killSwitch, "", profile) === "true";
   const frozen = getRuntime(RUNTIME_KEYS.frozen, "", profile) === "true";
   const frozenReason = getRuntime(RUNTIME_KEYS.frozenReason, "", profile);
-  const envAllowsSubmissions = cfg.env === "testnet" || cfg.env === "production";
-  const executableProfileId = cfg.env === "testnet"
-    ? "binance-testnet"
-    : cfg.env === "production"
-      ? "binance-production"
-      : null;
-  const profileExecutionEnabled = executableProfileId !== null && cfg.profiles[executableProfileId].configured;
+  // Only an explicitly attached profile can permit submissions; the base
+  // configuration never carries an active profile or private credentials.
+  const profileExecutionEnabled =
+    cfg.activeProfileId !== null && cfg.profiles[cfg.activeProfileId].configured;
   const signals = healthSignals();
   const managerReady = signals.brokerStatus === "ready";
   const stream = signals.stream;
@@ -76,11 +73,7 @@ export function executionDecision(cfg: EnvConfig): ExecutionDecision {
 
   const reasons: string[] = [];
   let canSubmit = true;
-  if (!envAllowsSubmissions) {
-    canSubmit = false;
-    reasons.push(cfg.env === "shadow" ? "shadow mode is read-only" : `env ${cfg.env} does not permit submissions`);
-  }
-  if (envAllowsSubmissions && !profileExecutionEnabled) {
+  if (!profileExecutionEnabled) {
     canSubmit = false;
     reasons.push("Binance credentials are not configured for the active profile");
   }
@@ -120,7 +113,9 @@ export function executionDecision(cfg: EnvConfig): ExecutionDecision {
 
   return {
     env: cfg.env,
-    envAllowsSubmissions,
+    // Both environments permit submissions; detachment is enforced by the
+    // coordinator (not_connected), not by the execution gate.
+    envAllowsSubmissions: true,
     profileExecutionEnabled,
     runtimeEnabled,
     killSwitch,
@@ -149,19 +144,4 @@ export function requireSubmissionAllowed(cfg: EnvConfig): ExecutionDecision {
   const d = executionDecision(cfg);
   if (!d.canSubmit) throw new SubmissionBlockedError(d);
   return d;
-}
-
-/**
- * Emergency reduce-only closes are a separate, explicit action. They still
- * require a live Binance environment, but deliberately do not inherit the
- * normal submission freeze, kill switch, or circuit state.
- */
-export function requireEmergencyActionAllowed(cfg: EnvConfig): void {
-  if (cfg.env !== "testnet" && cfg.env !== "production") {
-    throw new SubmissionBlockedError({
-      ...executionDecision(cfg),
-      canSubmit: false,
-      reasons: [`emergency flatten is unavailable in ${cfg.env} mode`],
-    });
-  }
 }

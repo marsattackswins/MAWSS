@@ -5,7 +5,7 @@ import crypto from "node:crypto";
 import { abs, add, eq, gt, isNegative, isZero, lt, parseDec, roundDownToStep, toStr } from "./decimal";
 import { applySymbolLeverage } from "./state";
 import { audit } from "../audit/log";
-import { requireEmergencyActionAllowed, requireSubmissionAllowed, SubmissionBlockedError } from "../gates/execution";
+import { requireSubmissionAllowed, SubmissionBlockedError } from "../gates/execution";
 import type { EnvConfig } from "../env/config";
 import {
   assertPersistenceProfile,
@@ -690,12 +690,11 @@ export class OrderService {
     if (blocked && !input.emergencyClose) return { ok: false, clientOrderId, error: blocked };
 
     try {
-      if (input.emergencyClose) requireEmergencyActionAllowed(cfg);
-      else if (protectionRecovery) {
+      if (protectionRecovery) {
         const recoveryBlock = this.protectionRecoveryBlock(cfg, input.symbol);
         if (recoveryBlock) return { ok: false, clientOrderId, error: recoveryBlock };
       }
-      else requireSubmissionAllowed(cfg);
+      else if (!input.emergencyClose) requireSubmissionAllowed(cfg);
     } catch (err) {
       if (err instanceof SubmissionBlockedError) {
         trackOrderRejected(clientOrderId, input.symbol, err.message);

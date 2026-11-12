@@ -10,7 +10,7 @@ import type { EnvConfig } from "../env/config";
  * Returns SessionRecord if a valid, unexpired, non-revoked session exists.
  * Returns null if no session, malformed, expired, revoked, or wrong cookie name.
  * 
- * Does not know about routes, environments, local-mode bypass, or response formatting.
+ * Does not know about routes, environments, or response formatting.
  * Callers decide whether to allow anonymous access or require authentication.
  */
 export function resolveOperatorSession(

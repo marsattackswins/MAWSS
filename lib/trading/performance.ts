@@ -22,8 +22,8 @@ export function orderHistoryToTrades(history: OrderHistoryEntry[]): PerfTrade[] 
 }
 
 /**
- * Performance statistics for one fill history (paper order history or the
- * live fill feed, both normalized to OrderHistoryEntry by the panel).
+ * Performance statistics for one fill history (normalized to
+ * OrderHistoryEntry by the panel).
  * Pure — callers memoize over the history identity.
  */
 export function computePerformanceStats(history: OrderHistoryEntry[]): PerfTradeStats | null {

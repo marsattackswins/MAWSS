@@ -81,12 +81,12 @@ const defaults: BrokerClients = { http: new FetchTransport(), ws: new NodeWsTran
 let installed: BrokerClients | null = null;
 
 /**
- * Dependency-injection seam for tests. Fakes are refused in shadow and
- * production so the real transport can never be swapped out there.
+ * Dependency-injection seam for tests. Fakes are refused in production so the
+ * real transport can never be swapped out there.
  */
 export function installBrokerClients(clients: BrokerClients): void {
   const env = serverConfig().env;
-  if (env === "shadow" || env === "production") {
+  if (env === "production") {
     throw new Error(`installBrokerClients is forbidden when MAWS_ENV=${env}`);
   }
   log.debug("broker clients installed via DI seam");

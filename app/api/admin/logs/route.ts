@@ -12,24 +12,13 @@ export const dynamic = "force-dynamic";
  * GET /api/admin/logs
  * Returns the most recent server terminal output (stdout/stderr) captured
  * in memory by the running process. Shown on /admin under "Terminal logs".
- * In local mode: No authentication required.
- * In other modes: Requires operator authentication.
+ * Requires operator authentication.
  */
 export async function GET(req: NextRequest) {
-  // Defensive: instrumentation installs capture at startup, but if this
-  // server was started by a path that skipped it, the first request turns
-  // capture on so later lines still appear. Idempotent per process.
-  installTerminalCapture();
-
   const cfg = serverConfig();
-
-  if (cfg.env !== "local") {
-    const ctx = authenticate(req, cfg);
-
-    if (isAuthFailure(ctx)) {
-      return ctx.response;
-    }
-  }
+  const ctx = authenticate(req, cfg);
+  if (isAuthFailure(ctx)) return ctx.response;
+  installTerminalCapture();
 
   const parsed = Number.parseInt(req.nextUrl.searchParams.get("limit") ?? "", 10);
   const limit = Number.isFinite(parsed) ? parsed : 200;

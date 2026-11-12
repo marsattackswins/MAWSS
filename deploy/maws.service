@@ -3,8 +3,7 @@
 # live under /opt/maws/.maws with mode 0600.
 #
 # Environment file /etc/maws/maws.env must contain (chmod 0600, owner maws):
-#   MAWS_ENV=production          (or testnet/shadow)
-#   MAWS_DEFAULT_PROFILE=paper   (Phase 1 metadata; does not switch MAWS_ENV)
+#   MAWS_ENV=production          (or testnet)
 #   MAWS_DB_PATH=/opt/maws/.maws/maws.db
 #   MAWS_OPERATOR_AUTH=<salt:hash from npm run gen-operator-auth>
 #   MAWS_ALLOWED_ORIGIN=https://terminal.example.com
@@ -12,6 +11,9 @@
 #   MAWS_BACKUP_KEY=<64 hex chars>
 #   MAWS_BINANCE_PRODUCTION_API_KEY=...
 #   MAWS_BINANCE_PRODUCTION_API_SECRET=...
+#
+# The server always boots Disconnected (no profile attached): no orders flow
+# until the operator attaches Testnet or Live through the app.
 
 # Legacy MAWS_BINANCE_API_KEY/SECRET remain supported during migration.
 # Never enable withdrawal permission on the Binance API key.
@@ -31,6 +33,9 @@ Environment=NODE_ENV=production
 Environment=PORT=3000
 Environment=HOSTNAME=127.0.0.1
 ExecStart=/usr/bin/node server.js
+# Readiness: the unit is "started" only once the anonymous liveness endpoint
+# answers; a server that never comes up fails the unit instead of hanging.
+ExecStartPost=/usr/bin/node -e "const deadline=Date.now()+60000;(function probe(){require('http').get('http://127.0.0.1:3000/api/liveness',r=>{r.resume();process.exit(0)}).on('error',()=>{if(Date.now()>deadline)process.exit(1);else setTimeout(probe,1000)})})()"
 Restart=always
 RestartSec=3
 NoNewPrivileges=true

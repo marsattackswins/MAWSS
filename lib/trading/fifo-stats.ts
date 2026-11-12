@@ -33,8 +33,8 @@ export type PerfTrade = {
   executedAt?: string;
   /**
    * Which of two positions held at once on one symbol the fill belongs to
-   * (hedge mode, e.g. Binance). Fills without it net per symbol — the paper
-   * engine is one-way and matches the default behavior.
+   * (hedge mode, e.g. Binance). Fills without it net per symbol, which
+   * matches one-way mode.
    */
   positionSide?: "long" | "short";
 };

@@ -38,7 +38,17 @@ const scrub = (s: string) => s.replaceAll(KEY, "<API_KEY>").replaceAll(SECRET, "
 const show = (label: string, v: unknown) => console.log(`\n=== ${label} ===\n${scrub(typeof v === "string" ? v : JSON.stringify(v, null, 2))}`);
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
-type Parsed = { status: number; json: any; at: number };
+type PositionRow = {
+  symbol: string;
+  positionAmt: string;
+  entryPrice: string;
+  markPrice: string;
+  unRealizedProfit: string;
+  updateTime?: number;
+};
+type StreamEvent = { e: string; o?: { l?: string; t?: number; rp?: string; L?: string; X?: string } };
+type ExchangeSymbol = { symbol: string; filters: Array<{ filterType: string; stepSize?: string }> };
+type Parsed = { status: number; json: unknown; at: number };
 
 async function restPublic(path: string): Promise<Parsed> {
   const res = await fetch(`${REST}${path}`);
@@ -57,13 +67,13 @@ async function restSigned(method: "GET" | "POST" | "DELETE", path: string, param
 
 // --- stream captures ---------------------------------------------------------
 
-const userEvents: Array<{ ev: any; recvAt: number }> = [];
+const userEvents: Array<{ ev: StreamEvent; recvAt: number }> = [];
 let wsUser: WebSocket | null = null;
 let listenKey = "";
 
 async function connectStreams(): Promise<void> {
   const lk = await restSigned("POST", "/fapi/v1/listenKey");
-  listenKey = lk.json.listenKey;
+  listenKey = (lk.json as { listenKey: string }).listenKey;
   wsUser = new WebSocket(`${UDS}/ws/${listenKey}`);
   wsUser.on("message", (d: unknown) => {
     try { userEvents.push({ ev: JSON.parse(String(d)), recvAt: Date.now() }); } catch { /* ignore */ }
@@ -74,7 +84,7 @@ async function connectStreams(): Promise<void> {
 // --- app-algorithm replicas (verbatim from product code) ---------------------
 
 /** state.ts applyPositionSnapshot: sign→side, abs(qty), fields verbatim. */
-function appFromPositionRow(row: any) {
+function appFromPositionRow(row: PositionRow) {
   const amt = Number(row.positionAmt);
   return {
     symbol: row.symbol,
@@ -97,7 +107,7 @@ function appClientRow(d: ReturnType<typeof appDto>) {
   return { last, pnl: d.mark > 0 ? (d.side === "long" ? (last - d.entry) * d.qty : (d.entry - last) * d.qty) : d.unrealized };
 }
 
-function divergenceReport(tag: string, row: any, dto: ReturnType<typeof appDto>, client: ReturnType<typeof appClientRow>) {
+function divergenceReport(tag: string, row: PositionRow, dto: ReturnType<typeof appDto>, client: ReturnType<typeof appClientRow>) {
   const binancePnl = Number(row.unRealizedProfit);
   const appPnl = Number(
     (Number(row.markPrice) - Number(row.entryPrice)) * Number(row.positionAmt) * 1, // signed amt form
@@ -140,8 +150,8 @@ async function main(): Promise<void> {
     // inputs; qty is pre-normalized to the symbol's LOT_SIZE step here so the
     // request matches what the app would send after filter validation.
     const info = await restPublic("/fapi/v1/exchangeInfo");
-    const symInfo = (info.json.symbols as any[]).find((s) => s.symbol === SYMBOL);
-    const stepSize = symInfo?.filters?.find((f: any) => f.filterType === "LOT_SIZE")?.stepSize ?? "0.001";
+    const symInfo = (info.json as { symbols: ExchangeSymbol[] }).symbols.find((s) => s.symbol === SYMBOL);
+    const stepSize = symInfo?.filters?.find((f) => f.filterType === "LOT_SIZE")?.stepSize ?? "0.001";
     const stepDecimals = (stepSize.split(".")[1] ?? "").length;
     const qty = Number(QTY).toFixed(stepDecimals);
     const leverage = 5;
@@ -161,14 +171,14 @@ async function main(): Promise<void> {
 
     // ---- A4. REST truth after open ----------------------------------------
     const posRisk = await restSigned("GET", "/fapi/v2/positionRisk", { symbol: SYMBOL });
-    const row = Array.isArray(posRisk.json) ? posRisk.json.find((r: any) => Number(r.positionAmt) !== 0) : undefined;
+    const row = (posRisk.json as PositionRow[]).find((r) => Number(r.positionAmt) !== 0);
     show("A4 REST positionRisk (exact)", row ?? posRisk.json);
-    const orderQ = await restSigned("GET", "/fapi/v1/order", { symbol: SYMBOL, orderId: ack.json.orderId });
+    const orderQ = await restSigned("GET", "/fapi/v1/order", { symbol: SYMBOL, orderId: (ack.json as { orderId: number }).orderId });
     show("A4b REST order status (exact)", orderQ.json);
     const openOrders = await restSigned("GET", "/fapi/v1/openOrders", { symbol: SYMBOL });
     show("A4c REST openOrders (exact)", openOrders.json);
     const account = await restSigned("GET", "/fapi/v2/account");
-    const usdt = account.json.assets?.find((a: any) => a.asset === "USDT");
+    const usdt = (account.json as { assets?: Array<{ asset: string }> }).assets?.find((a) => a.asset === "USDT");
     show("A4d REST income tail (realized so far)", (await restSigned("GET", "/fapi/v1/income", { limit: 5 })).json);
 
     if (!row) { console.log("No position after open — aborting lifecycle (restore not needed)."); return; }
@@ -184,7 +194,7 @@ async function main(): Promise<void> {
     show("B1 add ack (exact)", addAck.json);
     await sleep(1500);
     const posRiskB = await restSigned("GET", "/fapi/v2/positionRisk", { symbol: SYMBOL });
-    const rowB = Array.isArray(posRiskB.json) ? posRiskB.json.find((r: any) => Number(r.positionAmt) !== 0) : undefined;
+    const rowB = (posRiskB.json as PositionRow[]).find((r) => Number(r.positionAmt) !== 0);
     show("B2 REST positionRisk after add (exact)", rowB);
     if (rowB) divergenceReport("B: after add", rowB, appDto(appFromPositionRow(rowB)), appClientRow(appDto(appFromPositionRow(rowB))));
 
@@ -195,17 +205,17 @@ async function main(): Promise<void> {
     show("C1 partial-close ack (exact)", partAck.json);
     await sleep(1800);
     const posRiskC = await restSigned("GET", "/fapi/v2/positionRisk", { symbol: SYMBOL });
-    const rowC = Array.isArray(posRiskC.json) ? posRiskC.json.find((r: any) => Number(r.positionAmt) !== 0) : undefined;
+    const rowC = (posRiskC.json as PositionRow[]).find((r) => Number(r.positionAmt) !== 0);
     show("C2 REST positionRisk after partial close (exact)", rowC);
     const incomeC = await restSigned("GET", "/fapi/v1/income", { symbol: SYMBOL, limit: 5 });
     show("C3 REST income tail after partial close (realized PnL rows)", incomeC.json);
     const fillsC = userEvents.filter((u) => u.ev.e === "ORDER_TRADE_UPDATE" && Number(u.ev.o?.l) > 0);
-    show("C4 all fill events so far (rp per fill)", fillsC.map((f) => ({ tradeId: f.ev.o.t, rp: f.ev.o.rp, l: f.ev.o.l, L: f.ev.o.L, X: f.ev.o.X })));
+    show("C4 all fill events so far (rp per fill)", fillsC.map((f) => ({ tradeId: f.ev.o?.t, rp: f.ev.o?.rp, l: f.ev.o?.l, L: f.ev.o?.L, X: f.ev.o?.X })));
     if (rowC) divergenceReport("C: after partial close", rowC, appDto(appFromPositionRow(rowC)), appClientRow(appDto(appFromPositionRow(rowC))));
 
     // ---- D. FULL CLOSE or RESTORE ------------------------------------------
     const posRiskD = await restSigned("GET", "/fapi/v2/positionRisk", { symbol: SYMBOL });
-    const rowD = Array.isArray(posRiskD.json) ? posRiskD.json.find((r: any) => Number(r.positionAmt) !== 0) : undefined;
+    const rowD = (posRiskD.json as PositionRow[]).find((r) => Number(r.positionAmt) !== 0);
     if (!rowD) return;
     if (PHASE === "full") {
       const closeId = `audit-close-${Date.now().toString(36)}`;
@@ -220,7 +230,7 @@ async function main(): Promise<void> {
       const incomeD = await restSigned("GET", "/fapi/v1/income", { symbol: SYMBOL, limit: 8 });
       show("D3 REST income tail (realized from the full lifecycle)", incomeD.json);
       const fillsAll = userEvents.filter((u) => u.ev.e === "ORDER_TRADE_UPDATE" && Number(u.ev.o?.l) > 0);
-      show("D4 every fill trade of the lifecycle (tradeId, rp)", fillsAll.map((f) => ({ tradeId: f.ev.o.t, rp: f.ev.o.rp })));
+      show("D4 every fill trade of the lifecycle (tradeId, rp)", fillsAll.map((f) => ({ tradeId: f.ev.o?.t, rp: f.ev.o?.rp })));
     } else {
       // restore pre-audit size: sell the added qty, buy back the partial close
       const restore1 = await restSigned("POST", "/fapi/v1/order", { symbol: SYMBOL, side: "SELL", type: "MARKET", quantity: qty, newClientOrderId: `audit-restore1-${Date.now().toString(36)}` });

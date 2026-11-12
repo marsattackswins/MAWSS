@@ -7,8 +7,7 @@ import { serverConfig } from "../env/config";
  * Server-side page authentication guard.
  *
  * Returns true if the request should render protected page content:
- * - Local mode: always authorized (development convenience)
- * - Non-local: requires valid, unexpired, non-revoked operator session
+ * - Requires a valid, unexpired, non-revoked operator session in both modes.
  *
  * Returns false if the page should redirect to /login.
  *
@@ -17,12 +16,6 @@ import { serverConfig } from "../env/config";
 export function isOperatorPageAuthorized(cookieHeader: string | null): boolean {
   const cfg = serverConfig(); // Throws on config error (fail closed)
 
-  // Local mode: unrestricted access for development
-  if (cfg.env === "local") {
-    return true;
-  }
-
-  // Non-local: require valid operator session
   return resolveOperatorSession(cookieHeader, cfg) !== null;
 }
 

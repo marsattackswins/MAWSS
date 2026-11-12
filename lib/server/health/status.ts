@@ -93,60 +93,9 @@ export function buildHealthStatus(cfg: EnvConfig): HealthStatus {
   const circuitBreakersHealthy = unhealthyCircuits.length === 0;
   const positionModeHealthy = signals.positionMode.mode === "one-way" && signals.positionMode.error == null;
 
-  // Local mode: clock should be synced, stream checks market data accessibility
-  if (cfg.env === "local") {
-    const clockHealthy =
-      signals.clock != null &&
-      now - signals.clock.updatedAt < CLOCK_STALE_MS &&
-      Math.abs(signals.clock.offsetMs) <= CLOCK_MAX_OFFSET_MS;
-
-    // In local mode, stream indicates market data accessibility (not user account stream)
-    // We verify connectivity at startup, so "connected" means we can pull data
-    // No continuous events in local mode, so just check connected flag
-    const streamHealthy =
-      signals.stream != null &&
-      signals.stream.connected;
-
-    const reconHealthy = true; // N/A for local mode
-    const managerHealthy = signals.managerRunning && signals.brokerStatus === "ready";
-    const chartOnlyLocal = cfg.activeProfileId === null && !signals.managerRunning;
-
-    const openCircuits = circuitRegistry.getOpenCircuits();
-    const frozenReasons = [...execution.reasons];
-    if (!protectionHealthy) frozenReasons.push(`Unprotected positions: ${unprotectedPositions.join(", ")}`);
-    if (!circuitBreakersHealthy) {
-      frozenReasons.push(`Circuit breakers degraded: ${unhealthyCircuits.join(", ")}`);
-    }
-    const submissionsFrozen = !execution.canSubmit;
-
-    // In local mode, "healthy" means data connectivity is good
-    // Ignore submission freeze (expected in local mode)
-    return {
-      env: cfg.env,
-      brokerConnected: managerHealthy && streamHealthy,
-      signals,
-      execution,
-      clockHealthy,
-      streamHealthy,
-      reconHealthy,
-      positionModeHealthy,
-      circuitBreakersHealthy,
-      openCircuits,
-      circuitBreakerStates,
-      submissionsFrozen,
-      frozenReasons,
-      protectionHealthy,
-      unprotectedPositions,
-      // Chart-only local mode intentionally has no server trading manager,
-      // private stream, or exchange clock signal. Those are unavailable rather
-      // than failed; circuit-breaker state is the only server health concern.
-      healthy: chartOnlyLocal
-        ? circuitBreakersHealthy
-        : managerHealthy && clockHealthy && streamHealthy && reconHealthy && circuitBreakersHealthy && protectionHealthy,
-    };
-  }
-
-  // Non-local modes: require actual clock/stream data
+  // Health requires actual clock/stream data. While Disconnected (no attached
+  // manager) every runtime signal is simply absent, so the report reads
+  // unhealthy for trading components without implying a server failure.
   const clockHealthy =
     signals.clock != null &&
     now - signals.clock.updatedAt < CLOCK_STALE_MS &&
@@ -257,7 +206,7 @@ export function buildAdminHealthStatus(cfg: EnvConfig): AdminHealthStatus {
     clock.status,
     database.status,
   ];
-  if (!operational.reconHealthy || !operational.protectionHealthy || (cfg.env !== "local" && !operational.positionModeHealthy)) {
+  if (!operational.reconHealthy || !operational.protectionHealthy || !operational.positionModeHealthy) {
     componentStatuses.push("degraded");
   }
 

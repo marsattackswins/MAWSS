@@ -203,12 +203,9 @@ export function accountDto(): AccountDto & EquitySourceDto {
 export function accountMetricsDto(): AccountMetricsDto & IncomeTotals {
   try {
     // Read the ledger under the ACTIVE runtime profile, not the boot-time base
-    // config. The coordinator runs the manager under its own profileConfig
-    // (e.g. MAWS_ENV=local booting, then switching to binance-testnet), so
-    // ingestion persists income rows under profile_id='binance-testnet' while
-    // the default activePersistenceProfile() still resolves to 'paper' —
-    // querying the wrong scope returned zeros forever. Mirrors the manager,
-    // which persists under persistenceProfileFromConfig(this.cfg).
+    // config: ingestion persists income rows under the attached profile's id
+    // (the manager persists under persistenceProfileFromConfig(this.cfg)), so
+    // the query must use the same scope. Mirrors the manager.
     const profile = persistenceProfileFromConfig(activeProfileConfig());
     const watermark = incomeWatermark(profile);
     return {

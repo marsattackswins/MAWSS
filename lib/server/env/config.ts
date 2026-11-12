@@ -3,7 +3,7 @@ import "server-only";
 import { compareSecretTokens } from "../auth/token";
 import { verifyOperatorPassword } from "../auth/password";
 
-export type MawsEnv = "local" | "testnet" | "shadow" | "production";
+export type MawsEnv = "testnet" | "production";
 export type BrokerType = "binance";
 export type ProfileId = "binance-testnet" | "binance-production";
 export type ProfileEnvironment = "testnet" | "production";
@@ -91,9 +91,9 @@ export interface SafeProfileMetadata {
 export interface EnvConfig {
   env: MawsEnv;
   brokerType: BrokerType;
-  /** Future profile default; it does not select or switch the startup broker. */
+  /** Future profile default; it does not attach anything at startup. */
   defaultProfile: ProfileId;
-  /** Null for shadow because shadow is an internal server mode, not a browser profile. */
+  /** Null while Disconnected: only an explicit attach sets this. */
   activeProfileId: ProfileId | null;
   profiles: ProfileRegistry;
   dbPath: string;
@@ -156,31 +156,17 @@ export interface EnvConfig {
   };
 }
 
-/**
- * Fixed literal host map. Base URLs are never configurable via environment.
- * local uses production public endpoints (chart only); testnet uses Binance
- * USDⓈ-M Demo Trading; shadow/production use the real USD-M Futures endpoints.
- */
+/** Fixed literal hosts; environment variables cannot override endpoints. */
 export const HOST_MAP: Record<MawsEnv, { rest: string; uds: string; label: string }> = {
-  local: {
-    rest: "https://fapi.binance.com",
-    uds: "wss://fstream.binance.com",
-    label: "Binance USD-M Futures (local, public data only)",
-  },
   testnet: {
     rest: "https://demo-fapi.binance.com",
     uds: "wss://demo-fstream.binance.com",
-    label: "Binance USD-M Futures Demo Trading",
-  },
-  shadow: {
-    rest: "https://fapi.binance.com",
-    uds: "wss://fstream.binance.com",
-    label: "Binance USD-M Futures (shadow, read-only)",
+    label: "Testnet",
   },
   production: {
     rest: "https://fapi.binance.com",
     uds: "wss://fstream.binance.com",
-    label: "Binance USD-M Futures (production)",
+    label: "Live",
   },
 };
 
@@ -247,23 +233,13 @@ function parseDefaultProfile(raw: string | undefined): ProfileId {
   if (value === "binance-testnet" || value === "binance-production") {
     return value;
   }
-  // Legacy "paper" value — treat as no preference (default to testnet).
-  if (value === "paper") return "binance-testnet";
   throw new Error(
-    "MAWS_DEFAULT_PROFILE must be one of binance-testnet|binance-production",
+    "MAWS_DEFAULT_PROFILE must be binance-testnet|binance-production; remove retired local/shadow/paper preferences and select a supported profile",
   );
 }
 
-function profileForEnvironment(env: MawsEnv): ProfileId | null {
-  if (env === "local") return null;
-  if (env === "testnet") return "binance-testnet";
-  if (env === "production") return "binance-production";
-  return null;
-}
-
-function credentialProfileForEnvironment(env: MawsEnv): ProfileId | null {
-  if (env === "shadow") return "binance-production";
-  return profileForEnvironment(env);
+function credentialProfileForEnvironment(env: MawsEnv): ProfileId {
+  return env === "testnet" ? "binance-testnet" : "binance-production";
 }
 
 function profileEndpoints(profileId: ProfileId): { rest: string; uds: string } {
@@ -321,7 +297,7 @@ function buildProfiles(
   return {
     "binance-testnet": makeProfile(
       "binance-testnet",
-      "Binance Demo Trading",
+      "Testnet",
       "testnet",
       testnetCredentials,
       isComplete(testnetCredentials),
@@ -329,7 +305,7 @@ function buildProfiles(
     ),
     "binance-production": makeProfile(
       "binance-production",
-      "Binance Live",
+      "Live",
       "production",
       productionCredentials,
       isComplete(productionCredentials),
@@ -369,44 +345,23 @@ function resolveCredentials(
     "MAWS_BINANCE_PRODUCTION_API_KEY",
     "MAWS_BINANCE_PRODUCTION_API_SECRET",
   );
-  const activeProfileId = profileForEnvironment(env);
-  const credentialProfileId = credentialProfileForEnvironment(env);
-  const activeProfileCredentials =
-    credentialProfileId === "binance-testnet"
-      ? testnet
-      : credentialProfileId === "binance-production"
-        ? production
-        : { apiKey: null, apiSecret: null };
-
-  if (env === "local" && (legacy.apiKey !== null || legacy.apiSecret !== null)) {
-    throw new Error("MAWS_ENV=local does not accept legacy Binance credentials; use profile-specific credentials");
-  }
+  const profileCredentials = env === "testnet" ? testnet : production;
   assertCompletePair(testnet, "MAWS_BINANCE_TESTNET_API_KEY", "MAWS_BINANCE_TESTNET_API_SECRET");
-  assertCompletePair(
-    production,
-    "MAWS_BINANCE_PRODUCTION_API_KEY",
-    "MAWS_BINANCE_PRODUCTION_API_SECRET",
-  );
-  if (env !== "local") assertCompletePair(legacy, "MAWS_BINANCE_API_KEY", "MAWS_BINANCE_API_SECRET");
-
-  if (env === "local") return { activeProfileId, activeCredentials: activeProfileCredentials };
-  if (isComplete(legacy) && isComplete(activeProfileCredentials) && !pairsEqual(legacy, activeProfileCredentials)) {
-    throw new Error(
-      `${PROFILE_CONFIGURATION_ERROR}: legacy credentials conflict with the active profile credentials`,
-    );
+  assertCompletePair(production, "MAWS_BINANCE_PRODUCTION_API_KEY", "MAWS_BINANCE_PRODUCTION_API_SECRET");
+  assertCompletePair(legacy, "MAWS_BINANCE_API_KEY", "MAWS_BINANCE_API_SECRET");
+  if (isComplete(legacy) && isComplete(profileCredentials) && !pairsEqual(legacy, profileCredentials)) {
+    throw new Error(`${PROFILE_CONFIGURATION_ERROR}: legacy credentials conflict with the configured environment's profile credentials`);
   }
-
-  const activeCredentials = isComplete(activeProfileCredentials) ? activeProfileCredentials : legacy;
-  if (!isComplete(activeCredentials)) {
-    throw new Error(`MAWS_BINANCE_API_KEY/MAWS_BINANCE_API_SECRET are required when MAWS_ENV=${env}`);
-  }
-  return { activeProfileId, activeCredentials };
+  return {
+    activeProfileId: null,
+    activeCredentials: isComplete(profileCredentials) ? profileCredentials : legacy,
+  };
 }
 
 function parseEnv(raw: string | undefined): MawsEnv {
-  const v = (raw ?? "local").trim().toLowerCase();
-  if (v === "local" || v === "testnet" || v === "shadow" || v === "production") return v;
-  throw new Error(`MAWS_ENV must be one of local|testnet|shadow|production, got: ${raw}`);
+  const v = (raw ?? "testnet").trim().toLowerCase();
+  if (v === "testnet" || v === "production") return v;
+  throw new Error("MAWS_ENV must be testnet|production; remove retired local/shadow/paper modes. Startup remains disconnected until explicit profile attachment");
 }
 
 function parseBrokerType(raw: string | undefined): BrokerType {
@@ -460,10 +415,9 @@ export function loadEnvConfig(source: NodeJS.ProcessEnv = process.env): EnvConfi
     healthToken: source.MAWS_HEALTH_TOKEN?.trim() || null,
     emergencyToken: source.MAWS_EMERGENCY_TOKEN?.trim() || null,
     reverseEnabled: source.MAWS_ENABLE_REVERSE === "true",
-    // Keep the legacy active fields so all existing broker code retains its
-    // process-startup behavior while credentials migrate to profile variables.
-    binanceApiKey: activeCredentials.apiKey,
-    binanceApiSecret: activeCredentials.apiSecret,
+    // Only the coordinator's attached runtime carries private credentials.
+    binanceApiKey: null,
+    binanceApiSecret: null,
     recvWindowMs: num(source.MAWS_RECV_WINDOW_MS, 5000),
     rateInternalPerMin: num(source.MAWS_RATE_INTERNAL_PER_MIN, 60),
     reconIntervalMs: num(source.MAWS_RECON_INTERVAL_MS, 60_000),
@@ -505,17 +459,10 @@ export function loadEnvConfig(source: NodeJS.ProcessEnv = process.env): EnvConfi
   };
 
   validateAuthTokens(cfg);
-  if (env !== "local") {
-    if (!cfg.operatorAuth) {
-      throw new Error(`MAWS_OPERATOR_AUTH is required when MAWS_ENV=${env}`);
-    }
-    if (!/^[0-9a-f]{16,}:[0-9a-f]{16,}$/i.test(cfg.operatorAuth)) {
-      throw new Error("MAWS_OPERATOR_AUTH must be '<hex salt>:<hex scrypt hash>'");
-    }
+  if (!cfg.operatorAuth) throw new Error("MAWS_OPERATOR_AUTH is required");
+  if (!/^[0-9a-f]{16,}:[0-9a-f]{16,}$/i.test(cfg.operatorAuth)) {
+    throw new Error("MAWS_OPERATOR_AUTH must be '<hex salt>:<hex scrypt hash>'");
   }
-
-  // resolveCredentials above preserves the existing startup credential gate and
-  // keeps shadow internal: it has production endpoints but no selectable profile ID.
 
   if (env === "production") {
     if (cfg.reverseEnabled) {

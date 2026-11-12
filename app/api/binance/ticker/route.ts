@@ -2,6 +2,8 @@ import type { NextRequest } from "next/server";
 import { BINANCE_FAPI_REST } from "@/lib/market/binance-intervals";
 import { mapUpstreamError, upstreamErrorResponse } from "@/lib/server/validation/proxy-error";
 import { tickerAggregator } from "@/lib/server/log/market-logger";
+import { serverConfig } from "@/lib/server/env/config";
+import { resolveOperatorSession } from "@/lib/server/auth/session-guard";
 
 export const dynamic = "force-dynamic";
 
@@ -11,6 +13,19 @@ export const dynamic = "force-dynamic";
  * GET /api/binance/ticker?symbol=X  → one symbol
  */
 export async function GET(req: NextRequest) {
+  let cfg;
+  try {
+    cfg = serverConfig();
+  } catch {
+    return Response.json({ error: "Service unavailable" }, { status: 503 });
+  }
+  if (!resolveOperatorSession(req.headers.get("cookie"), cfg)) {
+    return Response.json(
+      { error: { code: "unauthenticated", message: "Sign in required" } },
+      { status: 401 },
+    );
+  }
+
   const start = Date.now();
   const symbol = (req.nextUrl.searchParams.get("symbol") ?? "").toUpperCase();
   if (symbol && !/^[A-Z0-9]{4,32}$/.test(symbol)) {

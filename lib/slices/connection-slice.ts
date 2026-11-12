@@ -29,20 +29,6 @@ export function createConnectionSlice(set: RootSet): ConnectionSlice {
   return {
     connectedBroker: null,
     setConnectedBroker: (id) => {
-      if (id === "binance") {
-        // Remember which environment was last used so the restore flow knows
-        // to attempt re-authentication on page reload.
-        const { useLiveStore } = require("@/lib/live/store") as typeof import("@/lib/live/store");
-        const env = useLiveStore.getState().environment;
-        if (env === "testnet" || env === "production") {
-          try {
-            const profileId = env === "testnet" ? "binance-testnet" : "binance-production";
-            localStorage.setItem("maws.lastLiveProfile", profileId);
-          } catch {
-            // localStorage not available - ignore
-          }
-        }
-      }
       set({ connectedBroker: id });
     },
   };
@@ -54,14 +40,7 @@ export function createConnectionSlice(set: RootSet): ConnectionSlice {
  * re-confirmed server-side. Migrates any legacy "mock" value to null.
  */
 export function normalizeConnectionRehydrate(state: Store): void {
-  // Paper (mock) was removed. Any saved "mock" value becomes disconnected.
-  // "binance" requires server re-verification (handled by restoreLiveSessionIfAttached).
-  const saved = (state as Store & { connectedBroker?: unknown }).connectedBroker;
-  if (saved === "binance") {
-    // Will be confirmed or cleared by the live bridge on session restore.
-    state.connectedBroker = "binance";
-  } else {
-    // Any other value (null, undefined, legacy "mock") becomes disconnected.
-    state.connectedBroker = null;
-  }
+  // Includes legacy "mock" and "binance" claims. Preferences never authorize
+  // an attachment; only the coordinator can confirm an existing runtime.
+  state.connectedBroker = null;
 }

@@ -25,7 +25,7 @@ export interface StreamStatus {
 }
 
 export interface StreamDeps {
-  cfgEnv: "testnet" | "shadow" | "production";
+  cfgEnv: "testnet" | "production";
   rest: BinanceRestClient;
   lease: StreamOwnerLease;
   /** REST snapshot: applies account/positions/openOrders truth to state. */

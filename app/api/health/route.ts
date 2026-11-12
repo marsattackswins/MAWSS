@@ -20,30 +20,21 @@ export async function GET(req: Request): Promise<Response> {
   }
 
   let healthTokenAuthorized = false;
-  if (cfg.env !== "local") {
-    const sessionCheck = authenticate(req, cfg);
-    const tokenAttempt = verifyRequestToken(req, cfg, "x-maws-health-token", cfg.healthToken, "health");
-    if (isAuthFailure(sessionCheck)) {
-      if (tokenAttempt.rateLimited) return jsonError(429, "token_rate_limited", "Too many invalid token attempts");
-      if (!tokenAttempt.authorized) return sessionCheck.response;
-      healthTokenAuthorized = true;
-    }
+  const sessionCheck = authenticate(req, cfg);
+  const tokenAttempt = verifyRequestToken(req, cfg, "x-maws-health-token", cfg.healthToken, "health");
+  if (isAuthFailure(sessionCheck)) {
+    if (tokenAttempt.rateLimited) return jsonError(429, "token_rate_limited", "Too many invalid token attempts");
+    if (!tokenAttempt.authorized) return sessionCheck.response;
+    healthTokenAuthorized = true;
   }
 
   // Initialize circuit breakers if needed
   const { initializeCircuitBreakers } = await import("@/lib/server/resilience/breakers");
   initializeCircuitBreakers();
 
-  // Ensure the coordinator is started (workaround for instrumentation not running in dev).
-  // Skip in test environment to avoid hanging.
-  let runtimeCfg = cfg;
-  if (process.env.NODE_ENV !== "test") {
-    const coordinator = await import("@/lib/server/profile/coordinator");
-    await coordinator.profileCoordinator().ensureStarted().catch(() => undefined);
-    runtimeCfg = coordinator.activeProfileConfig();
-  }
-
-  const health = buildHealthStatus(runtimeCfg);
+  // No ensureStarted here: startup and this endpoint never attach a profile.
+  // The health report reflects whatever the operator explicitly attached.
+  const health = buildHealthStatus(cfg);
   const metrics = metricsSnapshot();
   const uptimeSeconds = Math.floor((Date.now() - metrics.startTime) / 1000);
 

@@ -16,14 +16,14 @@ let started = false;
 let attachmentEpoch = 0;
 
 const PROFILE_LABELS: Record<LiveProfileId, string> = {
-  "binance-testnet": "Binance Testnet",
-  "binance-production": "Binance Live",
+  "binance-testnet": "Testnet",
+  "binance-production": "Live",
 };
 
 const PROFILE_ERROR_TEXT: Record<string, string> = {
   invalid_profile: "That profile is not available.",
   production_confirmation_required: "Production confirmation is required.",
-  local_profile_switch_disabled: "Binance profiles cannot be attached while MAWS_ENV=local; use a non-local runtime.",
+  not_connected: "Connect Testnet or Live first.",
   profile_switch_in_progress: "Another profile switch is already in progress.",
   exposure_present: "Switching is blocked because open positions or orders exist.",
   exposure_unknown: "Switching is blocked because exposure could not be confirmed.",
@@ -38,30 +38,8 @@ const PROFILE_ERROR_TEXT: Record<string, string> = {
 export type LiveConnectOutcome = "connected" | "unauthenticated" | "error";
 export type ProfileSwitchOutcome = "ready" | "unauthenticated" | "error";
 
-function profileIdForEnvironment(environment: string): LiveProfileId | null {
-  if (environment === "testnet") return "binance-testnet";
-  if (environment === "production") return "binance-production";
-  return null;
-}
-
-function fallbackStatus(meta: {
-  env: string;
-  managerStatus: string;
-  health: HealthDto;
-}): ProfileRuntimeStatusDto {
-  const profileId = profileIdForEnvironment(meta.env);
-  const ready = meta.managerStatus === "ready" && meta.health.streamHealthy;
-  return {
-    profileId,
-    environment: profileId === "binance-testnet" ? "testnet" : profileId === "binance-production" ? "production" : null,
-    phase: ready ? "ready" : "degraded",
-    ready,
-    managerStatus: meta.managerStatus,
-    streamHealthy: meta.health.streamHealthy,
-    executionAllowed: meta.health.execution?.canSubmit ?? ready,
-    generation: 0,
-    reasonCode: ready ? null : "target_start_failed",
-  };
+function hasRuntime(status: ProfileRuntimeStatusDto): boolean {
+  return status.profileId !== null && status.environment !== null && (status.phase === "ready" || status.phase === "degraded");
 }
 
 function isReady(status: ProfileRuntimeStatusDto): boolean {
@@ -93,36 +71,6 @@ function applyProfileStatus(status: ProfileRuntimeStatusDto): void {
   useLiveStore.getState().setProfileRuntime(status);
 }
 
-async function enableAuthenticatedExecution(profileId: LiveProfileId | null): Promise<void> {
-  if (profileId === null) return;
-  try {
-    await liveApi.setGates({ executionEnabled: true });
-    return;
-  } catch {
-    // Refresh the session once so a rotated CSRF token does not leave a newly
-    // authenticated profile waiting for a manual execution action.
-  }
-  try {
-    const session = await liveApi.session();
-    if (!session.authenticated) return;
-    setCsrf(session.csrf ?? null);
-    await liveApi.setGates({ executionEnabled: true });
-  } catch {
-    // Keep the profile attached; health and the admin page surface any
-    // remaining readiness block without hiding the cause.
-  }
-}
-
-/** Preserve client state during temporary errors if positions were previously restored */
-function shouldPreserveClient(): boolean {
-  try {
-    const savedProfileId = localStorage.getItem("maws.lastLiveProfile");
-    return savedProfileId === "binance-testnet" || savedProfileId === "binance-production";
-  } catch {
-    return false;
-  }
-}
-
 function detachClient(clearRuntime = true): void {
   stopSse();
   if (refreshTimer) {
@@ -134,10 +82,7 @@ function detachClient(clearRuntime = true): void {
   live.clearState();
   if (clearRuntime) live.clearProfileRuntime();
 
-  // Don't reset connectedBroker if we expect to restore from localStorage
-  if (!shouldPreserveClient()) {
-    useAppStore.getState().setConnectedBroker(null);
-  }
+  useAppStore.getState().setConnectedBroker(null);
 }
 
 function isCurrentAttachment(status: ProfileRuntimeStatusDto, epoch: number): boolean {
@@ -266,7 +211,9 @@ async function attachConfirmedProfile(status: ProfileRuntimeStatusDto, verifyAft
   useLiveStore.getState().setAttached(true);
   useAppStore.getState().setConnectedBroker("binance");
   useAppStore.getState().setBottomOpen(false);
-  await enableAuthenticatedExecution(confirmed.profileId);
+  // Attachment never enables submissions: the operator enables execution
+  // explicitly through the gates endpoint. Health and the admin page surface
+  // any remaining readiness block without hiding the cause.
   startSse(confirmed, epoch);
   return true;
 }
@@ -283,92 +230,36 @@ async function waitForReady(initial: ProfileRuntimeStatusDto, target: LiveProfil
   return status;
 }
 
-/** Restores only a server-confirmed live profile after page hydration. */
+/** Rejoin an existing explicit runtime. Never creates one or enables execution. */
 export async function restoreServerProfile(): Promise<void> {
+  if (started) return;
+  started = true;
   try {
     const session = await liveApi.session();
     if (!session.authenticated) {
       detachClient();
       return;
     }
-    if (session.env === "local") {
-      // Local/disconnected mode: chart-only. Do not probe protected live APIs
-      // or restore an exchange attachment from a browser claim.
-      detachClient();
-      return;
-    }
     setCsrf(session.csrf ?? null);
-    let status: ProfileRuntimeStatusDto;
-    try {
-      status = await liveApi.profile();
-    } catch (error) {
-      if (error instanceof LiveApiError && error.code === "env_local") return;
-      throw error;
-    }
+    const status = await liveApi.profile();
+    detachClient(false);
     applyProfileStatus(status);
-    if (!isReady(status)) {
-      if (status.profileId && status.phase === "degraded") {
-        detachClient(false);
-        applyProfileStatus(status);
-        useAppStore.getState().setConnectedBroker("binance");
-      } else {
-        detachClient(false);
-        applyProfileStatus(status);
-      }
-      return;
-    }
-    stopSse();
-    if (!(await attachConfirmedProfile(status, true))) {
+    if (hasRuntime(status) && !(await attachConfirmedProfile(status, true))) {
       detachClient(false);
-      applyProfileStatus(status);
     }
   } catch (error) {
-    if (error instanceof LiveAuthError) {
-      detachClient();
-      redirectToLogin();
-      return;
-    }
-    if (error instanceof LiveApiError && error.code === "env_local") return;
-    if (useAppStore.getState().connectedBroker === "binance") detachClient();
-    useLiveStore.getState().notify("error", safeErrorText(error, "Live profile status is unavailable."));
+    detachClient();
+    if (error instanceof LiveAuthError) redirectToLogin();
+    else useLiveStore.getState().notify("error", safeErrorText(error, "Trading profile status is unavailable."));
+  } finally {
+    started = false;
   }
 }
 
-/** Establishes the live attachment after the server manager is connected. */
-export async function connectLiveBroker(): Promise<LiveConnectOutcome> {
-  const store = useLiveStore.getState();
-  try {
-    const session = await liveApi.session();
-    if (!session.authenticated) {
-      detachClient();
-      redirectToLogin();
-      return "unauthenticated";
-    }
-    setCsrf(session.csrf ?? null);
-    store.setEnv(session.env, session.envLabel ?? null);
-    await liveApi.connect();
-    const meta = await liveApi.meta();
-    store.setManager(meta.managerStatus, meta.managerError);
-    const status = fallbackStatus(meta);
-    applyProfileStatus(status);
-    store.setHealth(meta.health);
-    if (!isReady(status) || !(await attachConfirmedProfile(status, false))) {
-      detachClient(false);
-      store.setManager("error", "Live profile is not ready");
-      store.notify("error", "Live profile is not ready.");
-      return "error";
-    }
-    return "connected";
-  } catch (error) {
-    detachClient();
-    if (error instanceof LiveAuthError) {
-      redirectToLogin();
-      return "unauthenticated";
-    }
-    store.setManager("error", safeErrorText(error, "Live broker unavailable."));
-    store.notify("error", safeErrorText(error, "Live broker unavailable."));
-    return "error";
-  }
+/** Compatibility entry point: the target must always come from an explicit choice. */
+export async function connectLiveBroker(target: LiveProfileId, confirmProduction = false): Promise<LiveConnectOutcome> {
+  const outcome = await switchLiveProfile(target, confirmProduction);
+  return outcome === "ready" ? "connected" : outcome;
 }
 
 export async function switchLiveProfile(target: LiveProfileId, confirmProduction = false): Promise<ProfileSwitchOutcome> {
@@ -479,7 +370,7 @@ export function profilePhaseLabel(phase: LiveProfilePhase): string {
   if (phase === "detached") return "Detached / fail-closed";
   if (phase === "failed") return "Unavailable";
   if (phase === "ready") return "Ready";
-  return "Chart only";
+  return "Disconnected";
 }
 
 export function profileErrorMessage(code: string | null): string {

@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { serverConfig, HOST_MAP, safeProfileMetadata } from "@/lib/server/env/config";
+import { serverConfig, HOST_MAP, safeProfileMetadata, type EnvConfig } from "@/lib/server/env/config";
 import { authenticate, isAuthFailure } from "@/lib/server/http/guards";
 
 export const dynamic = "force-dynamic";
@@ -9,12 +9,11 @@ export const dynamic = "force-dynamic";
  * Each key maps to a human-readable description.
  */
 const FIELD_DESCRIPTIONS: Record<string, string> = {
-  env: "Runtime environment (local, testnet, shadow, production)",
-  defaultProfile: "Default profile metadata (does not switch the startup environment)",
-  activeProfileId: "Profile identity derived from the startup environment; shadow is internal-only",
+  env: "Configured trading environment (testnet or production)",
+  defaultProfile: "Default profile preference (does not attach anything at startup)",
+  activeProfileId: "Currently attached profile; null while Disconnected",
   brokerType: "Broker type (currently only 'binance' supported)",
   dbPath: "Path to the SQLite database file",
-  operatorAuth: "Operator authentication credentials (salt:hash format)",
   allowedOrigin: "Allowed CORS origin for browser requests",
   trustProxy: "Whether to trust X-Forwarded-For header for client IP",
 
@@ -45,81 +44,43 @@ const FIELD_DESCRIPTIONS: Record<string, string> = {
 };
 
 /**
- * Pattern to detect sensitive fields that should be redacted.
- * Matches field names containing: key, secret, token, signature, password
+ * Explicit allowlist: the response is built only from these fields, so a
+ * newly added sensitive config field (credentials, auth material, tokens)
+ * cannot leak by default. The profile registry is replaced by
+ * safeProfileMetadata in the response.
  */
-const SENSITIVE_PATTERN = /key|secret|token|signature|password/i;
-
-/**
- * Redacts sensitive string values in an object.
- * Fields matching the SENSITIVE_PATTERN are replaced with "[REDACTED]".
- * Non-string values and Buffer objects are handled specially.
- */
-function redactSensitive<T>(obj: T, path = ""): T {
-  if (obj === null || obj === undefined) {
-    return obj;
-  }
-
-  if (Buffer.isBuffer(obj)) {
-    // Buffers are always redacted (could contain keys)
-    return "[REDACTED]" as T;
-  }
-
-  if (typeof obj === "string") {
-    // Check if the path indicates a sensitive field
-    const fieldName = path.split(".").pop() || "";
-    if (SENSITIVE_PATTERN.test(fieldName)) {
-      return "[REDACTED]" as T;
-    }
-    return obj;
-  }
-
-  if (Array.isArray(obj)) {
-    return obj.map((item, index) =>
-      redactSensitive(item, `${path}[${index}]`)
-    ) as T;
-  }
-
-  if (typeof obj === "object") {
-    const result: Record<string, unknown> = {};
-    for (const [key, value] of Object.entries(obj as Record<string, unknown>)) {
-      const newPath = path ? `${path}.${key}` : key;
-
-      // Check if this key indicates a sensitive field
-      if (SENSITIVE_PATTERN.test(key)) {
-        result[key] = "[REDACTED]";
-      } else if (Buffer.isBuffer(value)) {
-        result[key] = "[REDACTED]";
-      } else if (typeof value === "object" && value !== null) {
-        result[key] = redactSensitive(value, newPath);
-      } else {
-        result[key] = value;
-      }
-    }
-    return result as T;
-  }
-
-  return obj;
-}
-
-/** Keep the server-only profile registry out of the response entirely. */
-function safeConfigResponse(cfg: ReturnType<typeof serverConfig>): unknown {
-  const { profiles, ...configWithoutProfiles } = cfg;
-  void profiles;
-  return redactSensitive(configWithoutProfiles);
+function safeConfigResponse(cfg: EnvConfig): unknown {
+  return {
+    env: cfg.env,
+    defaultProfile: cfg.defaultProfile,
+    activeProfileId: cfg.activeProfileId,
+    brokerType: cfg.brokerType,
+    dbPath: cfg.dbPath,
+    allowedOrigin: cfg.allowedOrigin,
+    trustProxy: cfg.trustProxy,
+    recvWindowMs: cfg.recvWindowMs,
+    rateInternalPerMin: cfg.rateInternalPerMin,
+    reconIntervalMs: cfg.reconIntervalMs,
+    markPriceIntervalMs: cfg.markPriceIntervalMs,
+    historyBackfillMs: cfg.historyBackfillMs,
+    leaseTtlMs: cfg.leaseTtlMs,
+    snapshotMaxAgeMs: cfg.snapshotMaxAgeMs,
+    protectionPendingMaxAgeMs: cfg.protectionPendingMaxAgeMs,
+    alertWebhookUrl: cfg.alertWebhookUrl,
+    risk: { ...cfg.risk },
+    circuitBreaker: { ...cfg.circuitBreaker },
+  };
 }
 
 /**
  * GET /api/admin/config
- * Returns non-secret runtime configuration as JSON.
- *
- * Authentication:
- * - Local mode: No authentication required for safe config/profile metadata
- * - Non-local mode: Requires operator authentication OR health token
+ * Returns non-secret runtime configuration as JSON. Requires operator
+ * authentication.
  *
  * Response shape:
  * {
- *   config: { ... redacted config ... },
+ *   config: { ... allowlisted config ... },
+ *   profileMetadata: [ ... safe profile metadata ... ],
  *   descriptions: { "field.path": "description", ... },
  *   host: { rest: string, uds: string, label: string }
  * }
@@ -135,20 +96,7 @@ export async function GET(req: NextRequest) {
     );
   }
 
-  // Local mode exposes redacted startup config and safe profile metadata.
-  if (cfg.env === "local") {
-    return NextResponse.json({
-      config: safeConfigResponse(cfg),
-      profileMetadata: safeProfileMetadata(cfg.profiles),
-      descriptions: FIELD_DESCRIPTIONS,
-      host: HOST_MAP[cfg.env],
-      note: "Local Chart Only - attach a configured Binance profile from the authenticated UI.",
-    });
-  }
-
-  // Non-local mode: check authentication
   const ctx = authenticate(req, cfg);
-
   if (isAuthFailure(ctx)) {
     return ctx.response;
   }

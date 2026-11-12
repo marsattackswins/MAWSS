@@ -216,7 +216,7 @@ class BinanceFuturesFeed {
   private quotes = new Map<string, Quote>();
   private quoteListeners = new Set<(quotes: Map<string, Quote>) => void>();
   /**
-   * Immediate (non-debounced) quote listeners for the paper-trading engine.
+   * Immediate (non-debounced) quote listeners for trade execution logic.
    * Fired synchronously on every ACCEPTED quote mutation, before the ~150ms
    * UI batching of quoteListeners. UI/chart/watchlist consumers keep using
    * subscribeQuotes and its batching.
@@ -428,7 +428,7 @@ class BinanceFuturesFeed {
   }
 
   /**
-   * Immediate quote channel for the paper-trading engine. Unlike
+   * Immediate quote channel for trade execution logic. Unlike
    * subscribeQuotes (batched ~150ms for UI/render performance), these
    * listeners run synchronously on every ACCEPTED quote mutation, so a TP/SL
    * breach that reverses inside the UI batch window is still evaluated.

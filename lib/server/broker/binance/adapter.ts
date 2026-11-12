@@ -36,6 +36,10 @@ import {
 import { liveManager, type BinanceLiveManager, type ManagerStatus } from "../../binance/manager";
 import { liveState, type LiveState, type LiveOrder, type LivePosition, type LiveAccount, type LiveFill } from "../../binance/state";
 import { BinanceApiError, ERR_INVALID_API_KEY, TransportTimeoutError } from "../../binance/rest";
+import type { AccountResponse, BinanceOrder, PositionRiskRow } from "../../binance/types";
+import type { SymbolConstraints as BinanceSymbolConstraints } from "../../binance/filters";
+import type { SubmitOrderInput } from "../../binance/orders";
+import { toStr } from "../../binance/decimal";
 import type { EnvConfig } from "../../env/config";
 import { serverConfig } from "../../env/config";
 import { CircuitBreakerOpenError } from "../../resilience/circuit-breaker";
@@ -317,11 +321,11 @@ export class BinanceAdapter implements IBroker {
     return status; // They already align: "idle" | "starting" | "ready" | "error"
   }
 
-  private normalizeToBinanceOrderParams(params: OrderParams): any {
+  private normalizeToBinanceOrderParams(params: OrderParams): SubmitOrderInput & { timeInForce?: string } {
     return {
       symbol: params.symbol,
       side: params.side.toUpperCase() as "BUY" | "SELL",
-      type: this.normalizeToBinanceOrderType(params.type),
+      type: this.normalizeToBinanceOrderType(params.type) as SubmitOrderInput["type"],
       qty: params.qty,
       price: params.price,
       stopPrice: params.stopPrice,
@@ -344,7 +348,7 @@ export class BinanceAdapter implements IBroker {
     return map[type] ?? type.toUpperCase();
   }
 
-  private normalizeOrder(binanceOrder: any): Order {
+  private normalizeOrder(binanceOrder: BinanceOrder): Order {
     return {
       clientOrderId: binanceOrder.clientOrderId,
       exchangeOrderId: binanceOrder.orderId,
@@ -364,7 +368,7 @@ export class BinanceAdapter implements IBroker {
     };
   }
 
-  private normalizePosition(row: any): Position {
+  private normalizePosition(row: PositionRiskRow): Position {
     const amt = Number(row.positionAmt);
     const absQty = Math.abs(amt).toString();
     return {
@@ -381,7 +385,7 @@ export class BinanceAdapter implements IBroker {
     };
   }
 
-  private normalizeAccount(account: any): Account {
+  private normalizeAccount(account: AccountResponse): Account {
     return {
       totalWalletBalance: account.totalWalletBalance,
       availableBalance: account.availableBalance,
@@ -391,15 +395,15 @@ export class BinanceAdapter implements IBroker {
     };
   }
 
-  private normalizeConstraints(constraints: any): SymbolConstraints {
+  private normalizeConstraints(constraints: BinanceSymbolConstraints): SymbolConstraints {
     return {
-      minPrice: constraints.minPrice,
-      maxPrice: constraints.maxPrice,
-      tickSize: constraints.tickSize,
-      minQty: constraints.minQty,
-      maxQty: constraints.maxQty,
-      stepSize: constraints.stepSize,
-      minNotional: constraints.minNotional,
+      minPrice: toStr(constraints.minPrice),
+      maxPrice: toStr(constraints.maxPrice),
+      tickSize: toStr(constraints.tickSize),
+      minQty: toStr(constraints.minQty),
+      maxQty: toStr(constraints.maxQty),
+      stepSize: toStr(constraints.stepSize),
+      minNotional: constraints.minNotional === null ? "0" : toStr(constraints.minNotional),
     };
   }
 

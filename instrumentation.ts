@@ -34,12 +34,10 @@ export async function register(): Promise<void> {
     return;
   }
 
-  // Live monitoring starts in all modes (including local for public data):
-  // clock sync, metadata, public market data streams.
-  // In local mode: uses public endpoints only, no credentials required.
-  // In testnet/shadow/production: full account monitoring.
-  // Execution remains gated separately (kill switch + runtime flag + static
-  // gate for production), so starting here never enables trading.
+  // Live monitoring runs only while a profile is attached. Startup itself
+  // touches no exchange: circuit breakers start closed and idle, and the
+  // Binance manager is constructed exclusively by the profile coordinator
+  // when the operator explicitly attaches Testnet/Live.
   log.info("circuit breakers initializing...");
   const { initializeCircuitBreakers } = await import("@/lib/server/resilience/breakers");
   initializeCircuitBreakers();
@@ -49,18 +47,12 @@ export async function register(): Promise<void> {
   const { installGracefulShutdown } = await import("@/lib/server/shutdown");
   installGracefulShutdown();
 
-  log.info("live profile coordinator starting...");
-  const { profileCoordinator } = await import("@/lib/server/profile/coordinator");
-  profileCoordinator()
-    .ensureStarted()
-    .then(() => log.info("live profile coordinator started successfully"))
-    .catch((err) => {
-      log.error(`live profile coordinator failed to start: ${String(err)}`);
-    });
+  // Startup never attaches a Binance profile: every process begins
+  // Disconnected and the operator attaches Testnet/Live explicitly (the
+  // coordinator is the only path that starts a manager).
 
   // Nightly encrypted online backup with restore verification.
-  // Skip in local mode (no sensitive data to back up).
-  if (cfg.env !== "local" && cfg.backupKey) {
+  if (cfg.backupKey) {
     const { createEncryptedBackup } = await import("@/lib/server/db/backup");
     const DAY_MS = 24 * 60 * 60 * 1000;
     const timer = setInterval(() => {
@@ -71,5 +63,5 @@ export async function register(): Promise<void> {
     timer.unref?.();
   }
 
-  log.info("server startup sequence completed");
+  log.info("server startup sequence completed (Disconnected — no profile attached)");
 }

@@ -7,19 +7,13 @@ import { authenticate, isAuthFailure } from "@/lib/server/http/guards";
 /**
  * GET /api/admin/performance
  * Returns trading performance metrics.
- * In local mode: No authentication required.
- * In other modes: Requires operator authentication.
+ * Requires operator authentication.
  */
 export async function GET(req: NextRequest) {
   const cfg = serverConfig();
 
-  // Local mode is unauthenticated, but performance values remain sourced from
-  // the real in-memory collector.
-  if (cfg.env !== "local") {
-    // Non-local mode: check authentication
   const ctx = authenticate(req, cfg);
-    if (isAuthFailure(ctx)) return ctx.response;
-  }
+  if (isAuthFailure(ctx)) return ctx.response;
 
   try {
     const metrics = getMetrics();

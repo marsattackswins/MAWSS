@@ -10,23 +10,20 @@ export const dynamic = "force-dynamic";
 /**
  * GET /api/admin/metrics
  * Returns current metrics snapshot (JSON format).
- * In local mode: No authentication required.
  * A health token receives only non-trading process metrics.
  */
 export async function GET(req: NextRequest) {
   const cfg = serverConfig();
 
   let healthTokenOnly = false;
-  if (cfg.env !== "local") {
-    const ctx = authenticate(req, cfg);
-    const tokenAttempt = verifyRequestToken(req, cfg, "x-maws-health-token", cfg.healthToken, "health");
-    if (isAuthFailure(ctx)) {
-      if (tokenAttempt.rateLimited) {
-        return NextResponse.json({ error: "Too many invalid token attempts" }, { status: 429 });
-      }
-      if (!tokenAttempt.authorized) return ctx.response;
-      healthTokenOnly = true;
+  const ctx = authenticate(req, cfg);
+  const tokenAttempt = verifyRequestToken(req, cfg, "x-maws-health-token", cfg.healthToken, "health");
+  if (isAuthFailure(ctx)) {
+    if (tokenAttempt.rateLimited) {
+      return NextResponse.json({ error: "Too many invalid token attempts" }, { status: 429 });
     }
+    if (!tokenAttempt.authorized) return ctx.response;
+    healthTokenOnly = true;
   }
 
   try {

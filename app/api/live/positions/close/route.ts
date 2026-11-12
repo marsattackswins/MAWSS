@@ -6,7 +6,7 @@ import { runBrokerMutation } from "@/lib/server/response/broker-mutation";
 import { withMutationLog } from "@/lib/server/log/request-log";
 import { observeLiveMutationLatency, LIVE_MUTATION_OPERATIONS } from "@/lib/server/metrics/collector";
 import { checkRateLimit, recordRequest, rateLimitedResponse } from "@/lib/server/rate-limit";
-import { assertProfileRequest, ProfileCoordinatorError, profileErrorStatus } from "@/lib/server/profile/coordinator";
+import { assertProfileMutationRequest, ProfileCoordinatorError, profileErrorStatus } from "@/lib/server/profile/coordinator";
 
 export const dynamic = "force-dynamic";
 
@@ -19,10 +19,10 @@ export async function POST(req: Request): Promise<Response> {
     } catch {
       return jsonError(503, "config", "Server configuration invalid");
     }
-    const ctx = authenticate(req, cfg, { allowLocal: true });
+    const ctx = authenticate(req, cfg);
     if (isAuthFailure(ctx)) return ctx.response;
     try {
-      assertProfileRequest(req);
+      assertProfileMutationRequest(req);
     } catch (error) {
       if (error instanceof ProfileCoordinatorError) return jsonError(profileErrorStatus(error.code), error.code, "Profile runtime changed; retry the request");
       throw error;
@@ -44,7 +44,7 @@ export async function POST(req: Request): Promise<Response> {
     try {
       result = await runBrokerMutation(
         () => {
-          assertProfileRequest(req);
+          assertProfileMutationRequest(req);
           return getBroker().emergencyClosePosition(symbol);
         },
         { symbol },

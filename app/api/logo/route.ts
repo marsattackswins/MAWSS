@@ -1,5 +1,7 @@
 import { logoBase } from "@/lib/maws/asset-logo";
 import { normalizeAppSymbol } from "@/lib/market/resolve-provider";
+import { serverConfig } from "@/lib/server/env/config";
+import { resolveOperatorSession } from "@/lib/server/auth/session-guard";
 import type { NextRequest } from "next/server";
 
 export const dynamic = "force-dynamic";
@@ -137,6 +139,16 @@ async function fetchImage(url: string): Promise<CachedLogo | null> {
  * 2) Crypto marketing/asset logos + static/assets/logos/{BASE}.png
  */
 export async function GET(req: NextRequest) {
+  let cfg;
+  try {
+    cfg = serverConfig();
+  } catch {
+    return new Response("Service unavailable", { status: 503 });
+  }
+  if (!resolveOperatorSession(req.headers.get("cookie"), cfg)) {
+    return new Response("Sign in required", { status: 401 });
+  }
+
   const symbol = normalizeAppSymbol(req.nextUrl.searchParams.get("symbol") ?? "");
   if (!/^[A-Z0-9]{2,32}$/.test(symbol)) {
     return new Response("Invalid symbol", { status: 400 });

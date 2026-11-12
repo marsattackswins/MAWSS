@@ -11,11 +11,7 @@ export async function GET(req: Request): Promise<Response> {
   } catch {
     return jsonError(503, "config", "Server configuration invalid");
   }
-  // Profile metadata contains no credentials and is safe to show from Chart Only.
-  // Binance actions still pass through authenticate() on their mutating routes.
-  if (cfg.env !== "local") {
-    const auth = authenticate(req, cfg);
-    if (isAuthFailure(auth)) return auth.response;
-  }
+  const auth = authenticate(req, cfg);
+  if (isAuthFailure(auth)) return auth.response;
   return jsonOk({ profiles: profileMetadata() });
 }

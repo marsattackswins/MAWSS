@@ -18,7 +18,7 @@ export type MarketDataProvider = {
   subscribe(symbol: string, tf: Timeframe, listener: FeedListener): () => void;
   subscribeQuotes(listener: (quotes: Map<string, Quote>) => void): () => void;
   /**
-   * Immediate (non-debounced) quote channel for the paper-trading engine.
+   * Immediate (non-debounced) quote channel for trade execution logic.
    * Fires synchronously on every accepted quote mutation, before the ~150ms
    * UI batching used by subscribeQuotes consumers.
    */

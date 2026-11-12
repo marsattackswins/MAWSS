@@ -63,8 +63,12 @@ const UNCERTAIN = new Set(["CANCEL_REQUESTED", "CANCEL_UNKNOWN", "TIMEOUT_UNKNOW
  * Backfill window when a symbol has no persisted anchor. Configurable via
  * MAWS_HISTORY_BACKFILL_MS (default 3 days) — it must comfortably exceed the
  * observed 24h-fixed window so positions opened before a restart hydrate.
+ * Read lazily: module scope executes during `next build` route collection,
+ * where no operator configuration exists.
  */
-const DEFAULT_BACKFILL_MS = serverConfig().historyBackfillMs;
+function defaultBackfillMs(): number {
+  return serverConfig().historyBackfillMs;
+}
 
 /** Binance /fapi/v1/userTrades rejects (endTime − startTime) > 7 days with -4165. */
 export const USER_TRADES_MAX_WINDOW_MS = 7 * 24 * 60 * 60 * 1000;
@@ -414,13 +418,13 @@ export class Reconciler {
       .prepare(`SELECT symbol, MIN(created_at) AS start_time FROM order_intents WHERE profile_id = ? GROUP BY symbol`)
       .all(this.persistenceProfile.id) as Array<{ symbol: string; start_time: number | null }>;
     for (const row of intentRows) {
-      startBySymbol.set(row.symbol, row.start_time ?? now - DEFAULT_BACKFILL_MS);
+      startBySymbol.set(row.symbol, row.start_time ?? now - defaultBackfillMs());
     }
     for (const symbol of liveState().positions.keys()) {
-      if (!startBySymbol.has(symbol)) startBySymbol.set(symbol, now - DEFAULT_BACKFILL_MS);
+      if (!startBySymbol.has(symbol)) startBySymbol.set(symbol, now - defaultBackfillMs());
     }
     for (const order of liveState().orders.values()) {
-      if (!startBySymbol.has(order.symbol)) startBySymbol.set(order.symbol, now - DEFAULT_BACKFILL_MS);
+      if (!startBySymbol.has(order.symbol)) startBySymbol.set(order.symbol, now - defaultBackfillMs());
     }
 
     for (const [symbol, anchorStart] of startBySymbol) {

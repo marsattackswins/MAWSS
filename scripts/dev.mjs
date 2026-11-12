@@ -3,8 +3,12 @@ import fs from "node:fs";
 import net from "node:net";
 import path from "node:path";
 import { platform } from "node:os";
+import nextEnv from "@next/env";
 import { APP_PORT } from "./app-port.mjs";
 import { ensureJournalSidecar, stopJournalSidecar } from "./journal-sidecar.mjs";
+import { createDisposableContext, passwordAnnouncement, requireOperatorAuth } from "./disposable-bootstrap.mjs";
+
+const { loadEnvConfig } = nextEnv;
 
 // Pinned to 3000, never env-selected and never "next free port": the browser's
 // saved workspace is keyed by origin, so any other port is a fresh empty
@@ -19,13 +23,14 @@ const dim = "\x1b[2m";
 const reset = "\x1b[0m";
 
 // The environment may ask for another port (launchers often pass PORT=0). Say so
-// once, then serve on APP_PORT anyway — the app has exactly one address.
-const ignoredPorts = [process.env.MAWS_PORT, process.env.PORT].filter(
+// once, without echoing any env value, then serve on APP_PORT anyway — the app
+// has exactly one address.
+const asksOtherPort = [process.env.MAWS_PORT, process.env.PORT].some(
   (value) => value !== undefined && String(value).trim() !== port,
 );
-if (ignoredPorts.length > 0) {
+if (asksOtherPort) {
   console.log(
-    `${dim}  ignoring PORT/MAWS_PORT=${ignoredPorts.join(", ")} — MAWS always serves on ${port} so the browser keeps its saved state.${reset}`,
+    `${dim}  ignoring PORT/MAWS_PORT overrides — MAWS always serves on ${port} so the browser keeps its saved state.${reset}`,
   );
 }
 
@@ -137,19 +142,73 @@ async function killRunningServer(server) {
 
 const restartFlag = process.argv.includes("--restart");
 const reuseFlag = process.argv.includes("--reuse");
+const throwawayFlag = process.argv.includes("--throwaway");
+
+if (throwawayFlag && reuseFlag) {
+  console.error(
+    "--throwaway starts an isolated scratch workspace; there is nothing to reuse.\n  Stop any running dev server, then run `npm run dev:throwaway` on its own.",
+  );
+  process.exit(1);
+}
 
 let existing = await findRunningServer();
+
+// --reuse: hand over an already-running server. Nothing fresh is launched, so
+// no launch-configuration requirements apply on this path.
+if (existing && reuseFlag && !restartFlag) {
+  console.log(`${cyan}Dev server already running at ${bold}${existing.appUrl}${reset}${cyan} — reusing it.${reset}`);
+  exec(platform() === "win32" ? `cmd /c start "" "${existing.appUrl}"` : platform() === "darwin" ? `open "${existing.appUrl}"` : `xdg-open "${existing.appUrl}"`);
+  process.exit(0);
+}
+
+// ── Launch configuration ────────────────────────────────────────────────────
+//
+// Operator auth is required on every fresh dev launch: the whole app sits
+// behind the operator session, so a server without MAWS_OPERATOR_AUTH boots
+// into nothing usable. The explicit throwaway launch instead mints a fresh
+// verifier, prints its password once, and runs against a scratch database.
+//
+// Both paths inspect the EFFECTIVE configuration — .env files loaded through
+// the same loader and precedence Next itself applies — so what we validate is
+// exactly what the server would read. Values are inspected, never printed.
+loadEnvConfig(process.cwd(), true, () => {});
+
+let childEnv;
+let disposable = null;
+if (throwawayFlag) {
+  try {
+    // Refuses when any Live credential component is configured (effective
+    // configuration, .env files included) and when a real operator verifier
+    // would be overwritten. The child env is otherwise fully isolated.
+    disposable = createDisposableContext({ source: { ...process.env }, purpose: "throwaway" });
+    childEnv = { ...disposable.env, PORT: port };
+    // Human terminal only; written exactly once. The password is never stored.
+    passwordAnnouncement(disposable.password, process.stdout)();
+  } catch (error) {
+    disposable?.cleanup();
+    console.error(`\n${bold}Throwaway launch refused.${reset}\n  ${error.message}\n`);
+    process.exit(1);
+  }
+} else {
+  try {
+    requireOperatorAuth(process.env);
+  } catch (error) {
+    console.error(`\n${bold}Dev server cannot start.${reset}\n  ${error.message}\n`);
+    process.exit(1);
+  }
+  childEnv = { ...process.env, PORT: port };
+}
 
 // Always kill stale processes on our port before spawning Next — this prevents
 // Next's silent port-increment behaviour (EADDRINUSE → port+1, up to 10 times)
 // which is what causes the app to start on a different port every run.
-// Use `--reuse` (or set MAWS_DEV_REUSE=1) to skip this and reuse instead.
+// Use `--reuse` to skip this and reuse instead.
 if (existing && (restartFlag || !reuseFlag)) {
   if (restartFlag) {
     console.log(`${dim}Killing existing dev server (${existing.appUrl})…${reset}`);
   } else {
     console.log(`${dim}Stale dev server found at ${existing.appUrl} — clearing it to free port ${port}…${reset}`);
-    console.log(`${dim}(Run \`npm run dev:restart\` to do this explicitly, or set MAWS_DEV_REUSE=1 to reuse instead.)${reset}`);
+    console.log(`${dim}(Run \`npm run dev:restart\` to do this explicitly, or \`npm run dev -- --reuse\` to reuse instead.)${reset}`);
   }
   const killed = await killRunningServer(existing);
   if (!killed) {
@@ -157,13 +216,6 @@ if (existing && (restartFlag || !reuseFlag)) {
     process.exit(1);
   }
   existing = null;
-}
-
-// --reuse: if something is still alive (didn't kill it), hand it over.
-if (existing && reuseFlag) {
-  console.log(`${cyan}Dev server already running at ${bold}${existing.appUrl}${reset}${cyan} — reusing it.${reset}`);
-  exec(platform() === "win32" ? `cmd /c start "" "${existing.appUrl}"` : platform() === "darwin" ? `open "${existing.appUrl}"` : `xdg-open "${existing.appUrl}"`);
-  process.exit(0);
 }
 
 /** Is something already listening on the app port? A CONNECT probe is the reliable
@@ -206,7 +258,7 @@ const child = spawn(process.execPath, [nextBin, "dev", "-p", port], {
   stdio: "inherit",
   // PORT pinned as well as the flag: nothing in the toolchain may read a launcher's
   // PORT=0 and build URLs from it.
-  env: { ...process.env, PORT: port },
+  env: childEnv,
 });
 
 // ── Journal sidecar (vendored LuxAlgo Trade Journal on :3400) ───────────────
@@ -239,6 +291,9 @@ process.once("SIGINT", () => stopChild("SIGINT"));
 process.once("SIGTERM", () => stopChild("SIGTERM"));
 
 child.on("exit", (code, signal) => {
+  // Throwaway runs own a scratch DB/state directory under the OS temp dir;
+  // once the server is gone it must not linger.
+  disposable?.cleanup();
   if (signal) process.kill(process.pid, signal);
   process.exit(code ?? 0);
 });

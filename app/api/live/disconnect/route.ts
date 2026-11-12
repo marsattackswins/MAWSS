@@ -1,17 +1,11 @@
 import { audit } from "@/lib/server/audit/log";
 import { serverConfig } from "@/lib/server/env/config";
-import { activeProfileConfig } from "@/lib/server/profile/coordinator";
-import { persistenceProfileFromConfig } from "@/lib/server/profile/context";
-import { setRuntime, RUNTIME_KEYS } from "@/lib/server/runtime/flags";
+import { profileCoordinator, ProfileCoordinatorError, profileErrorStatus } from "@/lib/server/profile/coordinator";
 import { authenticate, isAuthFailure, jsonError, jsonOk } from "@/lib/server/http/guards";
 
 export const dynamic = "force-dynamic";
 
-/**
- * Detaches the UI from the live broker. The server keeps monitoring the
- * account (stream + reconciliation stay on) because the exchange state is
- * authoritative regardless of which UI is attached.
- */
+/** Stop the attached profile only after the coordinator's exposure checks. */
 export async function POST(req: Request): Promise<Response> {
   let cfg;
   try {
@@ -19,10 +13,16 @@ export async function POST(req: Request): Promise<Response> {
   } catch {
     return jsonError(503, "config", "Server configuration invalid");
   }
-  const ctx = authenticate(req, cfg, { allowLocal: true });
+  const ctx = authenticate(req, cfg);
   if (isAuthFailure(ctx)) return ctx.response;
-  const runtimeProfile = persistenceProfileFromConfig(activeProfileConfig());
-  setRuntime(RUNTIME_KEYS.connectedBroker, "", Date.now(), runtimeProfile);
-  audit("operator", "live.detach", {}, ctx.ip);
-  return jsonOk({ ok: true });
+  try {
+    const status = await profileCoordinator().detach();
+    audit("operator", "live.detach", {}, ctx.ip);
+    return jsonOk(status);
+  } catch (error) {
+    if (error instanceof ProfileCoordinatorError) {
+      return jsonError(profileErrorStatus(error.code), error.code, "Profile operation could not be completed");
+    }
+    return jsonError(503, "detach_failed", "Profile could not be disconnected");
+  }
 }

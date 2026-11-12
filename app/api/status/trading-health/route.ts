@@ -23,10 +23,8 @@ export async function GET(req: Request): Promise<Response> {
     return jsonError(503, "config", "Server configuration invalid");
   }
 
-  if (cfg.env !== "local") {
-    const session = authenticate(req, cfg);
-    if (isAuthFailure(session)) return session.response;
-  }
+  const session = authenticate(req, cfg);
+  if (isAuthFailure(session)) return session.response;
 
   try {
     const runtimeCfg = activeProfileConfig();
@@ -89,9 +87,9 @@ export async function GET(req: Request): Promise<Response> {
 
     const manager = activeProfileManager();
     const rateLimiter = manager ? manager.limiter.state() : null;
-    if (runtimeCfg.env !== "local") initializeCircuitBreakers();
-    const circuits = runtimeCfg.env === "local" ? {} : circuitRegistry.getAllStats();
-    const openCircuits = runtimeCfg.env === "local" ? [] : circuitRegistry.getOpenCircuits();
+    initializeCircuitBreakers();
+    const circuits = circuitRegistry.getAllStats();
+    const openCircuits = circuitRegistry.getOpenCircuits();
 
     const body = aggregateTradingHealth({
       env: runtimeCfg.env,

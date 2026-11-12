@@ -28,9 +28,9 @@ const EMPTY_BOOK: BrokerBook = { orders: [], positions: [] };
  */
 export function getBrokerBook(
   app: Pick<Store, "connectedBroker">,
-  live: Pick<ReturnType<typeof useLiveStore.getState>, "orders" | "positions">,
+  live: Pick<ReturnType<typeof useLiveStore.getState>, "orders" | "positions" | "attached" | "profileId">,
 ): BrokerBook {
-  if (app.connectedBroker === "binance") {
+  if (app.connectedBroker === "binance" && live.attached && live.profileId !== null) {
     return { orders: live.orders as ChartOrder[], positions: live.positions as BookPosition[] };
   }
   return EMPTY_BOOK;
@@ -41,7 +41,9 @@ export function useBrokerBook(): BrokerBook {
   const connectedBroker = useAppStore((s) => s.connectedBroker);
   const liveOrders = useLiveStore((s) => s.orders);
   const livePositions = useLiveStore((s) => s.positions);
-  return getBrokerBook({ connectedBroker }, { orders: liveOrders, positions: livePositions });
+  const attached = useLiveStore((s) => s.attached);
+  const profileId = useLiveStore((s) => s.profileId);
+  return getBrokerBook({ connectedBroker }, { orders: liveOrders, positions: livePositions, attached, profileId });
 }
 
 export type { OrderDto, PositionDto };

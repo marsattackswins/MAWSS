@@ -103,9 +103,9 @@ export class BinanceLiveManager {
   private lifecycleGeneration = 0;
   /**
    * Periodic proactive clock resync. Without it the clock signal goes stale
-   * after CLOCK_STALE_MS (5 min) in EVERY mode that never trips a -1021 skew
-   * error — local mode in particular syncs exactly once at startup, so any
-   * session longer than five minutes showed "clock degraded" on /status.
+   * after CLOCK_STALE_MS (5 min) whenever a session never trips a -1021 skew
+   * error — a one-shot startup sync left any session longer than five minutes
+   * showing "clock degraded" on /status.
    */
   private clockTimer: ReturnType<typeof setInterval> | null = null;
   /**
@@ -130,7 +130,6 @@ export class BinanceLiveManager {
   constructor(cfg?: EnvConfig) {
     this.cfg = cfg ?? serverConfig();
     this.persistenceProfile = persistenceProfileFromConfig(this.cfg);
-    // Note: local mode is now allowed but will only use public endpoints (no credentials)
     this.limiter = new RateLimiter(this.cfg.rateInternalPerMin);
     this.rest = new BinanceRestClient(this.cfg, this.limiter, async () => {
       const generation = this.lifecycleGeneration;
@@ -283,60 +282,8 @@ export class BinanceLiveManager {
       await this.metadata.ensureLoaded(true);
       this.assertGeneration(generation);
 
-      // Local mode: public endpoints only (no credentials required)
-      if (this.cfg.env === "local") {
-        try {
-          await this.rest.getTickerPrice("BTCUSDT");
-          this.assertGeneration(generation);
-          const now = Date.now();
-          setHealthSignal({
-            brokerStatus: "ready",
-            brokerError: null,
-            stream: {
-              connected: true,
-              phase: "live",
-              startedAt: now,
-              lastEventAt: now,
-              lastApplicationEventAt: now,
-              reconnects: 0,
-              listenKeyRenewedAt: null,
-              generation: 0,
-              bufferOverflow: false,
-              circuitState: "closed",
-            },
-          });
-        } catch (err) {
-          this.assertGeneration(generation);
-          log.warn("market data check failed in local mode", { error: String(err) });
-          setHealthSignal({
-            brokerStatus: "ready",
-            brokerError: null,
-            stream: {
-              connected: false,
-              phase: "closed",
-              startedAt: null,
-              lastEventAt: null,
-              lastApplicationEventAt: null,
-              reconnects: 0,
-              listenKeyRenewedAt: null,
-              generation: 0,
-              bufferOverflow: false,
-              circuitState: "closed",
-            },
-          });
-        }
-
-        this.assertGeneration(generation);
-        this.status = "ready";
-        this.startClockRefresh(generation);
-        updateTradingGauges();
-        trackSystemStart(this.cfg.env);
-        audit("system", "live.manager.started", { env: this.cfg.env, mode: "public-data-only" }, undefined, this.persistenceProfile);
-        log.info("live manager ready (public data only)", { env: this.cfg.env });
-        return;
-      }
-
-      // Non-local modes: full authenticated monitoring. Position mode is an
+      // The manager is constructed only with an attached profile config, so
+      // startup always runs the full authenticated path. Position mode is an
       // account invariant: keep monitoring if the check fails, but leave the
       // mode unverified so the execution gate remains closed.
       try {
@@ -365,7 +312,7 @@ export class BinanceLiveManager {
       await this.snapshot(generation);
       this.assertGeneration(generation);
       startupStream = new UserDataStream({
-        cfgEnv: this.cfg.env as "testnet" | "shadow" | "production",
+        cfgEnv: this.cfg.env,
         rest: this.rest,
         lease: this.lease,
         takeSnapshot: () => this.snapshot(generation),
@@ -473,13 +420,12 @@ export class BinanceLiveManager {
   }
 
   /**
-   * Periodic clock resync, shared by all modes.
+   * Periodic clock resync.
    *
    * Runs at half the staleness threshold so the signal can never go stale
    * between runs. Failures are swallowed (the stale signal itself is the
    * operator-visible symptom; -1021 skew errors still trigger on-demand
-   * resyncs in the REST layer). In local mode a successful resync also
-   * re-probes market data so the stream signal stays honest.
+   * resyncs in the REST layer).
    */
   private startClockRefresh(generation: number): void {
     if (this.clockTimer) clearInterval(this.clockTimer);
@@ -488,31 +434,6 @@ export class BinanceLiveManager {
       void (async () => {
         try {
           await this.syncClockForGeneration(generation);
-          if (!this.isGenerationCurrent(generation)) return;
-          if (this.cfg.env === "local") {
-            try {
-              await this.rest.getTickerPrice("BTCUSDT");
-              if (!this.isGenerationCurrent(generation)) return;
-              const now = Date.now();
-              setHealthSignal({
-                stream: {
-                  connected: true,
-                  phase: "live",
-                  startedAt: now,
-                  lastEventAt: now,
-                  lastApplicationEventAt: now,
-                  reconnects: 0,
-                  listenKeyRenewedAt: null,
-                  generation: 0,
-                  bufferOverflow: false,
-                  circuitState: "closed",
-                },
-              });
-            } catch {
-              // Leave the previous stream signal in place; a degraded probe
-              // is transient and the next interval will retry.
-            }
-          }
         } catch (err) {
           if (this.isGenerationCurrent(generation)) {
             log.warn("periodic clock resync failed", { error: String(err) });
@@ -834,33 +755,6 @@ export class BinanceLiveManager {
     const eventId = eventRow.lastInsertRowid;
 
     try {
-      if (this.cfg.env === "shadow") {
-        const now = Date.now();
-        const evtTime = typeof ev.E === "number" ? ev.E : null;
-        const payload = redactJson(ev);
-        if (ev.e === "ORDER_TRADE_UPDATE") {
-          const o = (ev as OrderTradeUpdateEvent).o;
-          const hasFill = Number(o.l) > 0;
-          db.prepare(
-            `INSERT INTO shadow_events (profile_id, ts, event_time, event_type, symbol, side, qty, price, realized_pnl, client_order_id, exchange_order_id, payload)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-          ).run(
-            this.persistenceProfile.id,
-            now, evtTime, ev.e, o.s,
-            hasFill ? o.S : null,
-            hasFill ? o.l : null,
-            hasFill ? o.L : null,
-            hasFill ? o.rp : null,
-            o.c, String(o.i), payload,
-          );
-        } else {
-          db.prepare(
-            `INSERT INTO shadow_events (profile_id, ts, event_time, event_type, symbol, side, qty, price, realized_pnl, client_order_id, exchange_order_id, payload)
-             VALUES (?, ?, ?, ?, NULL, NULL, NULL, NULL, NULL, NULL, NULL, ?)`,
-          ).run(this.persistenceProfile.id, now, evtTime, ev.e, payload);
-        }
-      }
-
       if (ev.e === "ORDER_TRADE_UPDATE") {
         const orderEv = ev as OrderTradeUpdateEvent;
         const o = orderEv.o;

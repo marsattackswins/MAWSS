@@ -1,5 +1,8 @@
 import { BINANCE_FAPI_REST } from "@/lib/market/binance-intervals";
 import { mapUpstreamError, upstreamErrorResponse } from "@/lib/server/validation/proxy-error";
+import { serverConfig } from "@/lib/server/env/config";
+import { resolveOperatorSession } from "@/lib/server/auth/session-guard";
+import type { NextRequest } from "next/server";
 import type { SymbolInfo } from "@/types";
 
 export const dynamic = "force-dynamic";
@@ -28,7 +31,20 @@ function precisionFromTick(tick: string | undefined, fallback: number): number {
  * Slim list of tradable Binance USDT-M perpetuals (crypto + TradFi).
  * GET /api/binance/symbols
  */
-export async function GET() {
+export async function GET(req: NextRequest) {
+  let cfg;
+  try {
+    cfg = serverConfig();
+  } catch {
+    return Response.json({ error: "Service unavailable" }, { status: 503 });
+  }
+  if (!resolveOperatorSession(req.headers.get("cookie"), cfg)) {
+    return Response.json(
+      { error: { code: "unauthenticated", message: "Sign in required" } },
+      { status: 401 },
+    );
+  }
+
   try {
     const res = await fetch(`${BINANCE_FAPI_REST}/fapi/v1/exchangeInfo`, {
       headers: { Accept: "application/json" },

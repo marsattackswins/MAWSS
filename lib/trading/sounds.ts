@@ -1,7 +1,7 @@
 import { useAppStore } from "@/lib/store";
 
 /**
- * trading-sounds.ts — execution feedback sounds for the paper/live trading
+ * trading-sounds.ts — execution feedback sounds for the trading
  * HMI, driven by the persisted `executionSound` / `executionSoundName`
  * chart settings. WebAudio oscillator beeps: no audio assets needed.
  */

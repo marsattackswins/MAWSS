@@ -29,7 +29,7 @@ export interface ProfileMetadataDto {
 export interface SessionInfo {
   authenticated: boolean;
   csrf?: string;
-  env: string;
+  env: LiveProfileEnvironment | null;
   envLabel?: string;
   connectedBroker?: string;
   sessionExpiresAt?: number;
@@ -114,7 +114,7 @@ export interface LiveStateDto {
 }
 
 export interface ExecutionDecisionDto {
-  env: string;
+  env: LiveProfileEnvironment | null;
   envAllowsSubmissions: boolean;
   profileExecutionEnabled: boolean;
   runtimeEnabled: boolean;
@@ -131,7 +131,7 @@ export interface ExecutionDecisionDto {
 }
 
 export interface HealthDto {
-  env: string;
+  env: LiveProfileEnvironment | null;
   brokerConnected: boolean;
   execution: ExecutionDecisionDto;
   clockHealthy: boolean;
@@ -158,7 +158,7 @@ export interface HealthDto {
 }
 
 export interface MetaDto {
-  env: string;
+  env: LiveProfileEnvironment | null;
   envLabel: string;
   connectedBroker: string;
   managerStatus: string;

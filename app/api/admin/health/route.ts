@@ -9,41 +9,35 @@ import { verifyRequestToken } from "@/lib/server/auth/token-attempts";
 /**
  * GET /api/admin/health
  * Returns health status of all components.
- * In local mode: No authentication required.
  * A health token receives component health only; operator sessions receive
  * the full trading health response.
  */
 export async function GET(req: NextRequest) {
   const cfg = serverConfig();
 
-  // Local mode is intentionally unauthenticated, but it still reports the
-  // real manager, stream, database, and metrics state below.
-  if (cfg.env !== "local") {
-    // Non-local mode: check authentication
-    const ctx = authenticate(req, cfg);
-    const tokenAttempt = verifyRequestToken(req, cfg, "x-maws-health-token", cfg.healthToken, "health");
-    if (isAuthFailure(ctx)) {
-      if (tokenAttempt.rateLimited) {
-        return NextResponse.json({ error: "Too many invalid token attempts" }, { status: 429 });
-      }
-      if (!tokenAttempt.authorized) return ctx.response;
-      try {
-        const health = buildAdminHealthStatus(cfg);
-        return NextResponse.json({
-          overall: health.overall,
-          components: Object.fromEntries(
-            Object.entries(health.components).map(([name, component]) => [
-              name,
-              { status: component.status, lastCheck: component.lastCheck },
-            ]),
-          ),
-          uptime: health.uptime,
-          lastUpdated: health.lastUpdated,
-        });
-      } catch (error) {
-        console.error("Health check error:", error);
-        return NextResponse.json({ overall: "down" }, { status: 500 });
-      }
+  const ctx = authenticate(req, cfg);
+  const tokenAttempt = verifyRequestToken(req, cfg, "x-maws-health-token", cfg.healthToken, "health");
+  if (isAuthFailure(ctx)) {
+    if (tokenAttempt.rateLimited) {
+      return NextResponse.json({ error: "Too many invalid token attempts" }, { status: 429 });
+    }
+    if (!tokenAttempt.authorized) return ctx.response;
+    try {
+      const health = buildAdminHealthStatus(cfg);
+      return NextResponse.json({
+        overall: health.overall,
+        components: Object.fromEntries(
+          Object.entries(health.components).map(([name, component]) => [
+            name,
+            { status: component.status, lastCheck: component.lastCheck },
+          ]),
+        ),
+        uptime: health.uptime,
+        lastUpdated: health.lastUpdated,
+      });
+    } catch (error) {
+      console.error("Health check error:", error);
+      return NextResponse.json({ overall: "down" }, { status: 500 });
     }
   }
 

@@ -54,7 +54,17 @@ const scrub = (s: string) => s.replaceAll(KEY, "<API_KEY>").replaceAll(SECRET, "
 const show = (label: string, v: unknown) => console.log(`\n=== ${label} ===\n${scrub(typeof v === "string" ? v : JSON.stringify(v, null, 2))}`);
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
-type Parsed = { status: number; json: any; localRecvMs: number; at: number };
+type PositionRow = {
+  symbol: string;
+  positionAmt: string;
+  entryPrice: string;
+  markPrice: string;
+  unRealizedProfit: string;
+  updateTime?: number;
+  positionSide?: string;
+};
+type StreamEvent = { e?: string };
+type Parsed = { status: number; json: unknown; localRecvMs: number; at: number };
 
 async function restPublic(path: string): Promise<Parsed> {
   const t0 = Date.now();
@@ -106,10 +116,10 @@ function formatUsd(value: number, digits = 2): string {
 
 async function collectStreams() {
   const marks: Array<{ raw: string; p: string; E: number; recvAt: number }> = [];
-  const users: Array<{ raw: string; ev: any; recvAt: number }> = [];
+  const users: Array<{ raw: string; ev: StreamEvent; recvAt: number }> = [];
 
   const lk = await restSigned("POST", "/fapi/v1/listenKey");
-  const listenKey = lk.json.listenKey as string;
+  const listenKey = (lk.json as { listenKey: string }).listenKey;
 
   const wsMark = new WebSocket(`${UDS}/stream?streams=${SYMBOL.toLowerCase()}@markPrice@1s`);
   const wsUser = new WebSocket(`${UDS}/ws/${listenKey}`);
@@ -160,7 +170,7 @@ async function captureOnce(streams: Awaited<ReturnType<typeof collectStreams>>, 
   const ticker = await restPublic(`/fapi/v1/ticker/price?symbol=${SYMBOL}`);
   const t1 = Date.now();
 
-  const row = Array.isArray(posRisk.json) ? posRisk.json.find((r: any) => Number(r.positionAmt) !== 0) : undefined;
+  const row = (posRisk.json as PositionRow[]).find((r) => Number(r.positionAmt) !== 0);
   show(`[${tag}] L1 REST /fapi/v2/positionRisk (raw, full row)`, row ?? posRisk.json);
   show(`[${tag}] L1c REST premiumIndex (raw)`, premium.json);
   show(`[${tag}] L1d REST ticker/price (raw)`, ticker.json);
@@ -188,10 +198,10 @@ async function captureOnce(streams: Awaited<ReturnType<typeof collectStreams>>, 
       layer: "L1 Binance REST positionRisk (exchange truth)",
       endpoint: `${REST}/fapi/v2/positionRisk?symbol=${SYMBOL}`,
       symbol: row.symbol, positionSide: row.positionSide, positionAmt: row.positionAmt,
-      entryPrice: row.entryPrice, markPrice: row.markPrice, lastPrice: ticker.json.price,
+      entryPrice: row.entryPrice, markPrice: row.markPrice, lastPrice: (ticker.json as { price: string }).price,
       unRealizedProfit: row.unRealizedProfit,
       qtyUsedByApp: L.absQty, sideFactor: L.side === "short" ? -1 : 1,
-      exchangeUpdateTime: row.updateTime, localAgeMs: localNow - row.updateTime,
+      exchangeUpdateTime: row.updateTime, localAgeMs: row.updateTime === undefined ? null : localNow - row.updateTime,
       capturedAtLocal: localNow,
     },
     {
@@ -254,12 +264,18 @@ async function captureOnce(streams: Awaited<ReturnType<typeof collectStreams>>, 
 
   // Account-level context (hypotheses H/I) — aggregates only, no giant dump.
   const acct = await restSigned("GET", "/fapi/v2/account");
+  const acctJson = acct.json as {
+    totalUnrealizedProfit?: string;
+    totalMarginBalance?: string;
+    totalWalletBalance?: string;
+    assets?: Array<{ asset: string; unrealizedProfit?: string }>;
+  };
   console.log(`\n=== [${tag}] account aggregates (H/I context) ===`);
   console.log(scrub(JSON.stringify({
-    totalUnrealizedProfit: acct.json.totalUnrealizedProfit,
-    totalMarginBalance: acct.json.totalMarginBalance,
-    totalWalletBalance: acct.json.totalWalletBalance,
-    usdtAssetUnrealizedProfit: acct.json.assets?.find((a: any) => a.asset === "USDT")?.unrealizedProfit,
+    totalUnrealizedProfit: acctJson.totalUnrealizedProfit,
+    totalMarginBalance: acctJson.totalMarginBalance,
+    totalWalletBalance: acctJson.totalWalletBalance,
+    usdtAssetUnrealizedProfit: acctJson.assets?.find((a) => a.asset === "USDT")?.unrealizedProfit,
   }, null, 2)));
 }
 
@@ -288,7 +304,7 @@ async function main(): Promise<void> {
     if (FILL_TEST) {
       // Force an ACCOUNT_UPDATE: partial close of the current position.
       const pre = await restSigned("GET", "/fapi/v2/positionRisk", { symbol: SYMBOL });
-      const preRow = Array.isArray(pre.json) ? pre.json.find((r: any) => Number(r.positionAmt) !== 0) : undefined;
+      const preRow = (pre.json as PositionRow[]).find((r) => Number(r.positionAmt) !== 0);
       if (!preRow) throw new Error("fill-test: no open position");
       const closeSide = Number(preRow.positionAmt) < 0 ? "BUY" : "SELL";
       console.log(`\n--fill-test: partial close ${closeSide} ${QTY} ${SYMBOL} (position ${preRow.positionAmt})`);
@@ -314,7 +330,7 @@ async function main(): Promise<void> {
 
     if (!NO_OPEN) {
       const pos = await restSigned("GET", "/fapi/v2/positionRisk", { symbol: SYMBOL });
-      const row = Array.isArray(pos.json) ? pos.json.find((r: any) => Number(r.positionAmt) !== 0) : undefined;
+      const row = (pos.json as PositionRow[]).find((r) => Number(r.positionAmt) !== 0);
       if (row) {
         const closeSide = Number(row.positionAmt) < 0 ? "BUY" : "SELL";
         const close = await restSigned("POST", "/fapi/v1/order", {

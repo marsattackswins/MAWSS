@@ -10,6 +10,7 @@ import { BrokerConfigError } from "./errors";
 import { serverConfig, type EnvConfig } from "../env/config";
 import { resetLiveManagerForTests } from "../binance/manager";
 import { initializeCircuitBreakers } from "../resilience/breakers";
+import { ProfileCoordinatorError } from "../profile/admission";
 
 type BrokerType = "binance";
 
@@ -17,8 +18,9 @@ let brokerInstance: IBroker | null = null;
 let circuitBreakersInitialized = false;
 
 /**
- * Get the broker instance (singleton).
- * Currently only supports Binance, but designed for multi-broker support.
+ * The coordinator-owned broker. Only a profile explicitly attached through the
+ * coordinator installs one; there is no config-derived fallback. Callers that
+ * can run while detached must assert attachment first (not_connected).
  */
 export function getBroker(): IBroker {
   // Initialize circuit breakers on first access
@@ -26,9 +28,9 @@ export function getBroker(): IBroker {
     initializeCircuitBreakers();
     circuitBreakersInitialized = true;
   }
-  
+
   if (!brokerInstance) {
-    brokerInstance = createBroker();
+    throw new ProfileCoordinatorError("not_connected");
   }
   return brokerInstance;
 }
@@ -58,23 +60,6 @@ export function resetBrokerForTests(next?: IBroker): void {
   }
   resetLiveManagerForTests();
   brokerInstance = next ?? null;
-}
-
-/**
- * Create a new broker instance based on config.
- */
-function createBroker(cfg?: EnvConfig): IBroker {
-  const config = cfg ?? serverConfig();
-
-  // Read broker type from config (defaults to "binance")
-  const brokerType = config.brokerType;
-
-  switch (brokerType) {
-    case "binance":
-      return new BinanceAdapter(config);
-    default:
-      throw new BrokerConfigError(brokerType, `Unsupported broker type: ${brokerType}`);
-  }
 }
 
 /**

@@ -16,16 +16,6 @@ export async function GET(req: Request): Promise<Response> {
     return jsonError(503, "config", "Server configuration invalid");
   }
 
-  // In local mode, circuit breakers may not be initialized
-  if (cfg.env === "local") {
-    return jsonOk({
-      env: "local",
-      circuits: {},
-      openCircuits: [],
-      hasOpenCircuits: false,
-    });
-  }
-
   const ctx = authenticate(req, cfg);
   if (isAuthFailure(ctx)) return ctx.response;
 

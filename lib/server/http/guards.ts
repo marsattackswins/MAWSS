@@ -17,7 +17,7 @@ export function jsonOk(data: unknown, init?: { status?: number; headers?: Record
     status: init?.status ?? 200,
     headers: {
       "content-type": "application/json",
-      "cache-control": "no-store",
+      "cache-control": "private, no-store",
       ...(init?.headers ?? {}),
     },
   });
@@ -26,7 +26,7 @@ export function jsonOk(data: unknown, init?: { status?: number; headers?: Record
 export function jsonError(status: number, code: string, message: string): Response {
   return new Response(JSON.stringify({ error: { code, message } }), {
     status,
-    headers: { "content-type": "application/json", "cache-control": "no-store" },
+    headers: { "content-type": "application/json", "cache-control": "private, no-store" },
   });
 }
 
@@ -55,17 +55,12 @@ type AuthFailure = { response: Response };
 export function authenticate(
   req: Request,
   cfg: EnvConfig,
-  options: { allowLocal?: boolean } = {},
 ): HandlerContext | AuthFailure {
   const guardReq: GuardRequest = {
     method: req.method,
     url: req.url,
     headers: { get: (name: string) => req.headers.get(name) },
   };
-
-  if (cfg.env === "local" && options.allowLocal !== true) {
-    return { response: jsonError(403, "env_local", "Live trading is unavailable when MAWS_ENV=local") };
-  }
 
   const originCheck = checkOriginAndHost(guardReq, cfg);
   if (!originCheck.ok) {

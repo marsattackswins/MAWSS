@@ -30,7 +30,7 @@ interface LiveStore {
   executionAllowed: boolean;
   generation: number;
   reasonCode: string | null;
-  env: string | null;
+  env: LiveProfileEnvironment | null;
   envLabel: string | null;
   managerStatus: string;
   managerError: string | null;
@@ -49,7 +49,7 @@ interface LiveStore {
   setProfileRuntime(status: ProfileRuntimeStatusDto): void;
   beginProfileSwitch(): void;
   clearProfileRuntime(): void;
-  setEnv(env: string | null, label: string | null): void;
+  setEnv(env: LiveProfileEnvironment | null, label: string | null): void;
   setManager(status: string, error: string | null): void;
   applyState(state: { account: AccountDto; accountMetrics: AccountMetricsDto | null; positions: PositionDto[]; orders: OrderDto[]; fills: FillDto[] }): void;
   clearState(): void;
@@ -92,14 +92,14 @@ export const useLiveStore = create<LiveStore>()((set) => ({
       profileId: status.profileId,
       environment: status.environment,
       phase: status.phase,
-      ready: status.ready,
-      executionAllowed: status.executionAllowed,
+      ready: status.profileId !== null && status.ready === true,
+      executionAllowed: status.profileId !== null && status.phase === "ready" && status.ready === true && status.executionAllowed === true,
       generation: status.generation,
       reasonCode: status.reasonCode,
       managerStatus: status.managerStatus,
       managerError: status.managerError ?? null,
       env: status.environment,
-      envLabel: status.environment === "testnet" ? "Binance Testnet" : status.environment === "production" ? "Binance Live" : null,
+      envLabel: status.environment === "testnet" ? "Testnet" : status.environment === "production" ? "Live" : null,
       health: status.phase === "ready" && state.profileId === status.profileId && state.generation === status.generation ? state.health : null,
       stream: status.streamHealthy == null ? null : { connected: status.streamHealthy, leaseOwned: status.streamHealthy, phase: status.streamHealthy ? "live" : "degraded", reconnects: 0 },
     })),

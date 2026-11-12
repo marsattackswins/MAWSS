@@ -26,14 +26,11 @@ export async function GET(req: Request): Promise<Response> {
     return jsonError(503, "config", "Server configuration invalid");
   }
 
-  // Local mode: allow anonymous access (development convenience)
-  if (cfg.env !== "local") {
-    const sessionCheck = authenticate(req, cfg);
-    const tokenAttempt = verifyRequestToken(req, cfg, "x-maws-health-token", cfg.healthToken, "health");
-    if (isAuthFailure(sessionCheck)) {
-      if (tokenAttempt.rateLimited) return jsonError(429, "token_rate_limited", "Too many invalid token attempts");
-      if (!tokenAttempt.authorized) return sessionCheck.response;
-    }
+  const sessionCheck = authenticate(req, cfg);
+  const tokenAttempt = verifyRequestToken(req, cfg, "x-maws-health-token", cfg.healthToken, "health");
+  if (isAuthFailure(sessionCheck)) {
+    if (tokenAttempt.rateLimited) return jsonError(429, "token_rate_limited", "Too many invalid token attempts");
+    if (!tokenAttempt.authorized) return sessionCheck.response;
   }
 
   const result = await pingBroker(cfg);

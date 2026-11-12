@@ -26,15 +26,13 @@ export async function GET(req: NextRequest) {
     );
   }
 
-  // Require operator session outside local mode
-  if (cfg.env !== "local") {
-    const session = resolveOperatorSession(req.headers.get("cookie"), cfg);
-    if (!session) {
-      return Response.json(
-        { error: { code: "unauthenticated", message: "Sign in required" } },
-        { status: 401, headers: { "Cache-Control": "no-store" } },
-      );
-    }
+  // Require operator session
+  const session = resolveOperatorSession(req.headers.get("cookie"), cfg);
+  if (!session) {
+    return Response.json(
+      { error: { code: "unauthenticated", message: "Sign in required" } },
+      { status: 401, headers: { "Cache-Control": "no-store" } },
+    );
   }
 
   const sp = req.nextUrl.searchParams;

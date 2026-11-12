@@ -14,7 +14,8 @@ import type { Timeframe } from "@/types";
  */
 
 export function isLiveBrokerConnected(): boolean {
-  return useAppStore.getState().connectedBroker === "binance";
+  const live = useLiveStore.getState();
+  return useAppStore.getState().connectedBroker === "binance" && live.attached && live.profileId !== null && live.environment !== null;
 }
 
 function notifyError(text: string): void {
@@ -43,12 +44,13 @@ export function tradingHaltReason(): string | null {
     return liveState.reasonCode ?? "profile_runtime_unavailable";
   }
   const { health } = liveState;
-  if (!health) return null;
+  if (!health) return "execution status unavailable";
   const ex = health.execution;
   if (ex.killSwitch) return "kill switch engaged";
   if (ex.frozen) return ex.frozenReason || "execution frozen";
   if (!ex.canSubmit) return ex.reasons[0] || "execution not allowed";
   if (health.submissionsFrozen) return health.frozenReasons[0] || "submissions frozen";
+  if (!liveState.executionAllowed) return "execution not allowed";
   return null;
 }
 
@@ -166,7 +168,11 @@ export async function dispatchClosePositionFraction(
   _idOrSymbol: string,
   _fraction: number,
 ): Promise<{ ok: boolean; error?: string }> {
-  notifyError("Partial close is not available for live accounts");
+  if (!isLiveBrokerConnected()) {
+    notifyError("Connect Testnet or Live to close positions");
+    return { ok: false, error: "not_connected" };
+  }
+  notifyError("Partial close is not available for exchange accounts");
   return { ok: false, error: "partial_close_unavailable" };
 }
 
@@ -177,9 +183,8 @@ export async function dispatchReversePosition(input: {
   qty: number;
 }): Promise<{ ok: boolean; error?: string }> {
   if (!isLiveBrokerConnected()) {
-    const message = "Reverse is disabled. Close the position, then open the opposite side.";
-    notifyError(message);
-    return { ok: false, error: message };
+    notifyError("Connect Testnet or Live to reverse a position");
+    return { ok: false, error: "not_connected" };
   }
   const halt = tradingHaltReason();
   if (halt !== null) {

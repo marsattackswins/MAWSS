@@ -15,7 +15,7 @@ export async function GET(req: Request): Promise<Response> {
   } catch {
     return jsonError(503, "config", "Server configuration invalid");
   }
-  const ctx = authenticate(req, cfg, { allowLocal: true });
+  const ctx = authenticate(req, cfg);
   if (isAuthFailure(ctx)) return ctx.response;
   const runtimeCfg = activeProfileConfig();
   const profile = persistenceProfileFromConfig(runtimeCfg);
@@ -38,7 +38,7 @@ export async function POST(req: Request): Promise<Response> {
   } catch {
     return jsonError(503, "config", "Server configuration invalid");
   }
-  const ctx = authenticate(req, cfg, { allowLocal: true });
+  const ctx = authenticate(req, cfg);
   if (isAuthFailure(ctx)) return ctx.response;
 
   const runtimeCfg = activeProfileConfig();
@@ -51,9 +51,6 @@ export async function POST(req: Request): Promise<Response> {
     audit("operator", body.killSwitch ? "killswitch.engaged" : "killswitch.disengaged", {}, ctx.ip);
   }
   if (typeof body.executionEnabled === "boolean") {
-    if (runtimeCfg.env === "shadow" || runtimeCfg.env === "local") {
-      return jsonError(409, "env", "Runtime execution flag cannot open submissions in this environment");
-    }
     if (body.executionEnabled && !executionDecision(runtimeCfg).profileExecutionEnabled) {
       return jsonError(409, "profile_configuration", "Binance credentials are not configured for the active profile");
     }

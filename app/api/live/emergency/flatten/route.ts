@@ -5,7 +5,7 @@ import { authenticate, isAuthFailure, jsonError, jsonOk } from "@/lib/server/htt
 import { clientIp } from "@/lib/server/auth/guard";
 import { verifyRequestToken } from "@/lib/server/auth/token-attempts";
 import { runBrokerMutation } from "@/lib/server/response/broker-mutation";
-import { assertProfileRequest, ProfileCoordinatorError, profileErrorStatus } from "@/lib/server/profile/coordinator";
+import { assertProfileMutationRequest, ProfileCoordinatorError, profileErrorStatus } from "@/lib/server/profile/coordinator";
 
 export const dynamic = "force-dynamic";
 
@@ -18,18 +18,22 @@ export async function POST(req: Request): Promise<Response> {
     return jsonError(503, "config", "Server configuration invalid");
   }
 
-  const auth = authenticate(req, cfg, { allowLocal: true });
-  try {
-    assertProfileRequest(req);
-  } catch (error) {
-    if (error instanceof ProfileCoordinatorError) return jsonError(profileErrorStatus(error.code), error.code, "Profile runtime changed; retry the request");
-    throw error;
-  }
+  const auth = authenticate(req, cfg);
   const tokenAttempt = verifyRequestToken(req, cfg, "x-maws-emergency-token", cfg.emergencyToken, "emergency");
   const emergencyTokenAuthorized = tokenAttempt.authorized;
+  // Authorization comes first so an anonymous caller cannot learn attachment
+  // state (409 not_connected) before proving a session or emergency token.
   if (isAuthFailure(auth)) {
     if (tokenAttempt.rateLimited) return jsonError(429, "token_rate_limited", "Too many invalid token attempts");
     if (!emergencyTokenAuthorized) return auth.response;
+  }
+  try {
+    // Emergency actions bypass the freeze/kill-switch gates but still require
+    // an attached profile: while Disconnected this rejects with 409 not_connected.
+    assertProfileMutationRequest(req);
+  } catch (error) {
+    if (error instanceof ProfileCoordinatorError) return jsonError(profileErrorStatus(error.code), error.code, "Profile runtime changed; retry the request");
+    throw error;
   }
   const authorizedBy = isAuthFailure(auth) ? "emergency_token" : "session";
   const triggeredBy = isAuthFailure(auth) ? "system:emergency-token" : `operator:${auth.sessionId}`;
@@ -41,7 +45,7 @@ export async function POST(req: Request): Promise<Response> {
   try {
     result = await runBrokerMutation(
       () => {
-        assertProfileRequest(req);
+        assertProfileMutationRequest(req);
         return getBroker().emergencyFlatten(triggeredBy);
       },
     );

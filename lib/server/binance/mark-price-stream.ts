@@ -62,7 +62,7 @@ export class MarkPriceStream {
   private symbols: string[] = [];
 
   constructor(
-    private readonly cfgEnv: "testnet" | "shadow" | "production" | "local",
+    private readonly cfgEnv: "testnet" | "production",
     private readonly onStatusChange: () => void = () => undefined,
   ) {}
 

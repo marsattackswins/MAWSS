@@ -7,7 +7,7 @@ import { intentsInUncertainStates } from "../binance/intents";
 import { healthSignals, resetHealthSignals } from "../health/state";
 import { buildHealthStatus } from "../health/status";
 import { BinanceAdapter } from "../broker/binance/adapter";
-import { getBroker, replaceBrokerForCoordinator, clearBrokerForCoordinator } from "../broker/factory";
+import { replaceBrokerForCoordinator, clearBrokerForCoordinator } from "../broker/factory";
 import {
   PROFILE_IDS,
   serverConfig,
@@ -21,10 +21,14 @@ import {
   allowNormalMutations,
   blockNormalMutations,
   normalMutationBlock,
+  ProfileCoordinatorError,
+  type ProfileErrorCode,
   type ProfileMutationBlockReason,
 } from "./admission";
 import { persistenceProfileFromConfig } from "./context";
 
+export { ProfileCoordinatorError };
+export type { ProfileErrorCode };
 
 export type ProfilePhase = "idle" | "switching" | "ready" | "degraded" | "detached" | "failed";
 
@@ -40,28 +44,6 @@ export type ProfileRuntimeStatus = {
   generation: number;
   reasonCode: string | null;
 };
-
-export type ProfileErrorCode =
-  | "invalid_profile"
-  | "production_confirmation_required"
-  | "local_profile_switch_disabled"
-  | "production_risk_limits_invalid"
-  | "profile_switch_in_progress"
-  | "exposure_present"
-  | "exposure_unknown"
-  | "in_flight_mutation"
-  | "reconciliation_drift"
-  | "target_start_failed"
-  | "rollback_failed"
-  | "configuration_unavailable"
-  | "stale_profile";
-
-export class ProfileCoordinatorError extends Error {
-  constructor(readonly code: ProfileErrorCode, message: string = code) {
-    super(message);
-    this.name = "ProfileCoordinatorError";
-  }
-}
 
 export type ProfileSwitchRequest = {
   profileId: unknown;
@@ -81,10 +63,6 @@ function isProfileId(value: unknown): value is ProfileId {
 function environmentForProfile(profileId: ProfileId): EnvConfig["env"] {
   if (profileId === "binance-testnet") return "testnet";
   return "production";
-}
-
-function publicProfileId(config: EnvConfig): ProfileId | null {
-  return config.env === "shadow" ? null : config.activeProfileId;
 }
 
 function safeEnvironment(config: EnvConfig): ProfileRuntimeStatus["environment"] {
@@ -165,24 +143,21 @@ function reasonForHealth(config: EnvConfig, manager: BinanceLiveManager | null):
     if (stream.phase === "connecting") return "stream_connecting";
     return stream.connected ? "stream_stale" : "stream_disconnected";
   }
-  if (config.env !== "local") {
-    // Clock drift does not block signing: requests already carry
-    // offset-corrected timestamps and a -1021 resyncs + retries. A large raw
-    // drift only disqualifies production, where wall-clock truth matters.
-    if (config.env === "production" && !health.clockHealthy) return "clock_unhealthy";
-    if (!health.signals.snapshot || Date.now() - health.signals.snapshot.fetchedAt > config.snapshotMaxAgeMs) return "snapshot_stale";
-    if (!health.positionModeHealthy) return "position_mode_invalid";
-    if (!health.reconHealthy) return health.signals.recon.lastResult === "drift" ? "reconciliation_drift" : "reconciliation_failed";
-  }
+  // Clock drift does not block signing: requests already carry
+  // offset-corrected timestamps and a -1021 resyncs + retries. A large raw
+  // drift only disqualifies production, where wall-clock truth matters.
+  if (config.env === "production" && !health.clockHealthy) return "clock_unhealthy";
+  if (!health.signals.snapshot || Date.now() - health.signals.snapshot.fetchedAt > config.snapshotMaxAgeMs) return "snapshot_stale";
+  if (!health.positionModeHealthy) return "position_mode_invalid";
+  if (!health.reconHealthy) return health.signals.recon.lastResult === "drift" ? "reconciliation_drift" : "reconciliation_failed";
   if (health.execution.frozen) return "execution_frozen";
   return null;
 }
 
 export function profileErrorStatus(code: ProfileErrorCode): number {
   if (code === "invalid_profile" || code === "production_confirmation_required") return 400;
-  if (code === "local_profile_switch_disabled") return 403;
   if (code === "target_start_failed") return 502;
-  if (code === "rollback_failed" || code === "configuration_unavailable") return 503;
+  if (code === "rollback_failed" || code === "configuration_unavailable" || code === "production_risk_limits_invalid") return 503;
   return 409;
 }
 
@@ -205,7 +180,6 @@ export class ProfileCoordinator {
   private runtimeConfig: EnvConfig | null = null;
   private phase: ProfilePhase = "idle";
   private generation = 0;
-  private startPromise: Promise<void> | null = null;
   private switchPromise: Promise<ProfileRuntimeStatus> | null = null;
   private failureReason: ProfileErrorCode | null = null;
   private failureMessage: string | null = null;
@@ -218,10 +192,10 @@ export class ProfileCoordinator {
     }
     const config = this.runtimeConfig ?? (this.phase === "idle" ? serverConfig() : null);
     const manager = this.manager;
-    const profileId = config ? publicProfileId(config) : null;
+    const profileId = config ? config.activeProfileId : null;
     const reasonCode = this.phase === "switching" ? "profile_switch_in_progress" : this.failureReason ?? (this.phase === "idle" ? null : config ? reasonForHealth(config, manager) : null);
     const ready = this.phase === "ready" && reasonCode === null;
-    const decision = config ? executionDecision(config) : null;
+    const decision = manager && config ? executionDecision(config) : null;
     const stream = healthSignals().stream;
     return {
       profileId,
@@ -263,55 +237,9 @@ export class ProfileCoordinator {
     });
   }
 
-  async ensureStarted(): Promise<void> {
-    if (this.switchPromise) return;
-    const base = serverConfig();
-    if (base.env === "local" && base.activeProfileId === null && !this.manager && !this.runtimeConfig) return;
-    if (this.manager?.status === "ready" && this.phase === "ready") return;
-    if (this.startPromise) return this.startPromise;
-    const startup = this.startInitial();
-    const tracked = startup.finally(() => {
-      if (this.startPromise === tracked) this.startPromise = null;
-    });
-    this.startPromise = tracked;
-    return tracked;
-  }
-
-  private async startInitial(): Promise<void> {
-    const base = serverConfig();
-    this.phase = "switching";
-    this.failureReason = null;
-    this.failureMessage = null;
-    blockNormalMutations("profile_switch_in_progress");
-    this.generation += 1;
-    const broker = getBroker();
-    this.manager = liveManager();
-    this.runtimeConfig = this.manager.cfg;
-    try {
-      await broker.connect();
-      await waitForReady(this.runtimeConfig, this.manager);
-      this.phase = "ready";
-      this.failureMessage = null;
-      allowNormalMutations();
-    } catch {
-      this.failureMessage = this.manager?.error ?? "Binance profile startup failed";
-      this.phase = "failed";
-      this.failureReason = "target_start_failed";
-      blockNormalMutations("profile_runtime_unavailable");
-      throw new ProfileCoordinatorError("target_start_failed");
-    }
-    if (!this.runtimeConfig) this.runtimeConfig = base;
-  }
-
   async switchProfile(request: ProfileSwitchRequest): Promise<ProfileRuntimeStatus> {
     if (this.switchPromise) throw new ProfileCoordinatorError("profile_switch_in_progress");
     if (!isProfileId(request.profileId)) throw new ProfileCoordinatorError("invalid_profile");
-    if (serverConfig().env === "local") {
-      throw new ProfileCoordinatorError(
-        "local_profile_switch_disabled",
-        "MAWS_ENV=local is Chart Only; set MAWS_ENV=testnet or MAWS_ENV=production to attach a Binance profile",
-      );
-    }
     if (request.profileId === "binance-production" && request.confirmProduction !== true) {
       throw new ProfileCoordinatorError("production_confirmation_required");
     }
@@ -360,14 +288,11 @@ export class ProfileCoordinator {
         : new ProfileCoordinatorError("target_start_failed");
     }
 
+    // Disconnected means no runtime at all: the base configuration stays
+    // loaded (it never carries credentials), and no manager/broker exists
+    // until the operator explicitly attaches a profile again.
     this.manager = null;
-    this.runtimeConfig = {
-      ...base,
-      env: "local",
-      activeProfileId: null,
-      binanceApiKey: null,
-      binanceApiSecret: null,
-    };
+    this.runtimeConfig = null;
     clearBrokerForCoordinator();
     clearLiveManagerForCoordinator();
     clearLiveState();
@@ -384,7 +309,7 @@ export class ProfileCoordinator {
     const targetConfig = profileConfig(base, target);
     const previousManager = this.manager;
     const previousConfig = this.runtimeConfig ?? (previousManager?.cfg ?? base);
-    const previousProfile = publicProfileId(previousConfig);
+    const previousProfile = previousConfig.activeProfileId;
     if (previousProfile === target && this.phase === "ready") return this.getStatus();
 
     this.phase = "switching";
@@ -506,7 +431,7 @@ export class ProfileCoordinator {
   }
 
   private async checkExposure(manager: BinanceLiveManager | null, config: EnvConfig): Promise<void> {
-    if (!manager || config.env === "local") return;
+    if (!manager) return;
     try {
       await manager.snapshot();
       const persistenceProfile = persistenceProfileFromConfig(config);
@@ -538,7 +463,7 @@ export class ProfileCoordinator {
   assertRequest(assertion: ProfileAssertion): void {
     if (this.phase === "switching") throw new ProfileCoordinatorError("profile_switch_in_progress");
     const config = this.runtimeConfig ?? (this.phase === "idle" ? serverConfig() : null);
-    const currentProfile = config ? publicProfileId(config) : null;
+    const currentProfile = config ? config.activeProfileId : null;
     if (assertion.profileId !== undefined && assertion.profileId !== currentProfile) throw new ProfileCoordinatorError("stale_profile");
     if (assertion.generation !== undefined) {
       const generation = typeof assertion.generation === "number" ? assertion.generation : Number(assertion.generation);
@@ -547,9 +472,12 @@ export class ProfileCoordinator {
   }
 
   assertNormalMutation(assertion: ProfileAssertion = {}): void {
-    this.assertRequest(assertion);
     const blocked = normalMutationBlock();
     if (blocked === "profile_switch_in_progress") throw new ProfileCoordinatorError("profile_switch_in_progress");
+    // Detached / never attached: the server holds no exchange runtime, so
+    // every submission is rejected with not_connected until an explicit attach.
+    if (!this.manager || !this.runtimeConfig) throw new ProfileCoordinatorError("not_connected");
+    this.assertRequest(assertion);
     if (blocked === "profile_runtime_unavailable") throw new ProfileCoordinatorError("stale_profile");
   }
 
@@ -578,7 +506,6 @@ export class ProfileCoordinator {
 
   resetForTests(): void {
     this.switchPromise = null;
-    this.startPromise = null;
     this.manager = null;
     this.runtimeConfig = null;
     this.phase = "idle";

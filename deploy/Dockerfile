@@ -23,4 +23,8 @@ COPY --from=build /app/.next/standalone ./
 COPY --from=build /app/.next/static ./.next/static
 COPY --from=build /app/public ./public
 EXPOSE 3000
+# Anonymous liveness endpoint ({"status":"ok"}); container is "starting" until
+# the HTTP server answers, "healthy" once it does.
+HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \
+  CMD wget -q -O /dev/null http://127.0.0.1:3000/api/liveness || exit 1
 CMD ["node", "server.js"]

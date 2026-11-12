@@ -39,7 +39,7 @@ export async function connectBroker(id: BrokerId): Promise<void> {
   const broker = brokerById(id);
   if (!broker?.enabled) return;
   if (id === "binance") {
-    const { connectLiveBroker } = await import("@/lib/live/bridge");
-    await connectLiveBroker();
+    const { useAppStore } = await import("@/lib/store");
+    useAppStore.getState().setBrokerDialogOpen(true);
   }
 }

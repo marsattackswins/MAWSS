@@ -9,7 +9,7 @@
  * Responsibilities
  *  - Spawn the standalone server (scripts/start-standalone.mjs) as a child and
  *    forward its output to this terminal untouched.
- *  - Liveness-check GET /api/health. Any HTTP response (even 401/503) means
+ *  - Liveness-check GET /api/liveness. Any HTTP response (even 401/503) means
  *    the server is alive; only network failure counts as dead. A child that
  *    stays unreachable past START_TIMEOUT_MS is replaced.
  *  - If the child exits unexpectedly, restart it after a short backoff (up to
@@ -61,7 +61,7 @@ const CONTROL_PORT = Number(process.env.MAWS_CONTROL_PORT || 3001);
 // The takeover listener serves the same external surface as the app itself,
 // which binds HOSTNAME || 0.0.0.0 in the standalone server.
 const TAKEOVER_HOST = process.env.MAWS_SUPERVISOR_BIND?.trim() || "0.0.0.0";
-const HEALTH_PATH = "/api/health";
+const HEALTH_PATH = "/api/liveness";
 const POLL_MS = 2_000;
 const START_TIMEOUT_MS = 60_000;
 const RESTART_BACKOFF_MS = 3_000;

@@ -1,3 +1,5 @@
+import { useLiveStore } from "./store";
+
 import type {
   LiveProfileId,
   LiveStateDto,
@@ -35,7 +37,18 @@ export class LiveApiError extends Error {
 async function call<T>(path: string, init: { method?: string; body?: unknown } = {}): Promise<T> {
   const headers: Record<string, string> = {};
   if (init.body !== undefined) headers["content-type"] = "application/json";
-  if (init.method && init.method !== "GET" && csrfToken) headers["x-maws-csrf"] = csrfToken;
+  if (init.method && init.method !== "GET") {
+    if (csrfToken) headers["x-maws-csrf"] = csrfToken;
+    if (path.startsWith("/api/live/")) {
+      const live = useLiveStore.getState();
+      if (live.profileId !== null) {
+        headers["x-maws-profile-id"] = live.profileId;
+        headers["x-maws-profile-generation"] = String(live.generation);
+      } else if (path !== "/api/live/profile/switch") {
+        throw new LiveApiError("not_connected", "Connect Testnet or Live first.", 409);
+      }
+    }
+  }
   const res = await fetch(path, {
     method: init.method ?? "GET",
     headers,
@@ -69,9 +82,6 @@ export const liveApi = {
   },
   logout(): Promise<{ ok: boolean }> {
     return call("/api/auth/logout", { method: "POST", body: {} });
-  },
-  connect(): Promise<{ ok: boolean; status: string }> {
-    return call("/api/live/connect", { method: "POST", body: {} });
   },
   disconnect(): Promise<{ ok: boolean }> {
     return call("/api/live/disconnect", { method: "POST", body: {} });

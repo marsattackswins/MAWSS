@@ -3,7 +3,7 @@ import { accountDto, ordersDto, positionsDto } from "@/lib/server/binance/dto";
 import { realizedSinceUtcMidnight } from "@/lib/server/binance/risk";
 import { aggregateRiskCockpit } from "@/lib/server/risk/cockpit";
 import { serverConfig } from "@/lib/server/env/config";
-import { activeProfileConfig } from "@/lib/server/profile/coordinator";
+import { activeProfileConfig, activeProfileManager } from "@/lib/server/profile/coordinator";
 import { authenticate, isAuthFailure } from "@/lib/server/http/guards";
 
 export const dynamic = "force-dynamic";
@@ -11,19 +11,17 @@ export const dynamic = "force-dynamic";
 /**
  * GET /api/admin/risk
  * Returns a read-only risk and exposure snapshot from server-owned live state.
- * Local mode intentionally returns configured limits without trading state.
+ * While Disconnected it returns configured limits without trading state.
  */
 export async function GET(req: NextRequest) {
   const cfg = serverConfig();
   const runtimeCfg = activeProfileConfig();
 
-  if (cfg.env !== "local") {
-    const ctx = authenticate(req, cfg);
-    if (isAuthFailure(ctx)) return ctx.response;
-  }
+  const ctx = authenticate(req, cfg);
+  if (isAuthFailure(ctx)) return ctx.response;
 
   try {
-    const sourceAvailable = runtimeCfg.env !== "local";
+    const sourceAvailable = activeProfileManager() !== null;
     const snapshot = aggregateRiskCockpit({
       env: runtimeCfg.env,
       risk: runtimeCfg.risk,
