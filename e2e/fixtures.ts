@@ -27,7 +27,13 @@ async function loginOperator(page: import("@playwright/test").Page): Promise<voi
   if (!password) {
     throw new Error("MAWS_E2E_OPERATOR_PASSWORD is missing — e2e must run through playwright.config.ts");
   }
-  const login = await page.request.post("/api/auth/login", { data: { password } });
+  // APIRequestContext is not a browser fetch: it sends no Origin header, and
+  // the login route requires one for every mutation. Pin the same origin the
+  // disposable server was configured with.
+  const login = await page.request.post("/api/auth/login", {
+    headers: { origin: "http://localhost:3001" },
+    data: { password },
+  });
   if (login.status() !== 200) {
     throw new Error(`Operator login failed (${login.status()}) — the disposable server rejected the generated password`);
   }
