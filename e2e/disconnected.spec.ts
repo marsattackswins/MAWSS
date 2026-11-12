@@ -180,7 +180,7 @@ test("disconnected startup: profile menu and API list exactly Testnet and Live",
     await expect(page.getByRole("button", { name: /USDT-M Futures \(Live\)/ })).toBeVisible();
 
     // The two-mode product has no paper option anywhere in the menu.
-    await expect(page.locator('[role="menu"]')).not.toContainText("Paper");
+    await expect(page.locator('[role="menu"][data-dropdown-open="true"]')).not.toContainText("Paper");
 
     // And the server metadata agrees: exactly the two profiles, authenticated.
     const profilesResp = await page.request.get("/api/live/profiles");
