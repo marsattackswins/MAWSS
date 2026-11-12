@@ -6,6 +6,7 @@ import { mawsFeed } from "@/lib/maws/feed";
 import { useAppStore } from "@/lib/store";
 import { resolveSymbolTrading } from "@/lib/trading/symbol-settings";
 import type { UiOrderInput } from "./ui-orders";
+import type { Timeframe } from "@/types";
 
 /**
  * Broker dispatch boundary. All trading actions require an active, verified
@@ -51,14 +52,30 @@ export function tradingHaltReason(): string | null {
   return null;
 }
 
+/**
+ * The submitted order can target a symbol that is not the active pane (a
+ * watchlist row, a second chart). The subscription that gates it belongs to the
+ * pane showing that symbol, so resolve the time frame from there and only fall
+ * back to the active pane. Without this a live market looked `idle` — and the
+ * order was blocked — whenever the chart in front of the user showed another market.
+ */
+function timeframeForFeed(
+  panes: ReadonlyArray<{ id: string; symbol: string; timeframe: Timeframe }>,
+  activePaneId: string,
+  symbol: string,
+): Timeframe {
+  const matching = panes.find((p) => p.symbol === symbol);
+  if (matching) return matching.timeframe;
+  return panes.find((p) => p.id === activePaneId)?.timeframe ?? "1D";
+}
+
 export async function dispatchSubmitOrder(input: UiOrderInput): Promise<{ ok: boolean; error?: string }> {
   if (!isLiveBrokerConnected()) {
     notifyError("Connect to a Binance profile to submit orders");
     return { ok: false, error: "not_connected" };
   }
   const state = useAppStore.getState();
-  const pane = state.panes.find((p) => p.id === state.activePaneId);
-  const tf = pane?.timeframe ?? "1D";
+  const tf = timeframeForFeed(state.panes, state.activePaneId, input.symbol);
   const feedStatus = mawsFeed.getKlineStatus(input.symbol, tf);
   if (feedStatus !== "live") {
     notifyError(`Trading halted: market data ${feedStatus}`);

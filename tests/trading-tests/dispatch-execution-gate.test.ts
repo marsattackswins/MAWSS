@@ -253,6 +253,7 @@ describe("dispatchSubmitOrder execution gate (live broker)", () => {
 describe("dispatchSubmitOrder feed gate", () => {
   beforeEach(() => {
     submitOrderMock.mockReset();
+    klineStatusMock.mockReturnValue("live");
     useAppStore.setState({ connectedBroker: "binance" });
     useLiveStore.setState({ health: makeHealth(), notices: [] });
   });
@@ -267,6 +268,23 @@ describe("dispatchSubmitOrder feed gate", () => {
     expectHaltedToast("Trading halted: market data delayed");
   });
 
+
+  test("order for a market shown in another pane gates on that pane's time frame", async () => {
+    useAppStore.setState({
+      panes: [
+        { id: "pane-eth", symbol: "ETHUSDT", timeframe: "1h", drawings: [] },
+        { id: "pane-btc", symbol: "BTCUSDT", timeframe: "1D", drawings: [] },
+      ] as unknown as ReturnType<typeof useAppStore.getState>["panes"],
+      activePaneId: "pane-eth",
+    });
+    submitOrderMock.mockResolvedValue({ ok: true } as never);
+
+    const res = await dispatchSubmitOrder(INPUT);
+
+    // The altitude that gates the order is the BTC pane's, not the ETH chart in front.
+    expect(klineStatusMock).toHaveBeenCalledWith("BTCUSDT", "1D");
+    expect(res).toEqual({ ok: true });
+  });
   test("idle feed (no subscription): fails closed instead of trading blind", async () => {
     klineStatusMock.mockReturnValue("idle");
 
