@@ -1,0 +1,26 @@
+# The runtime image only takes .next/standalone, .next/static and public
+# (see deploy/Dockerfile), so VCS history, installed deps, local service state
+# and docs never need to enter the build context.
+.git
+node_modules
+vendor
+.next
+.next-e2e
+.maws
+.cloud-attachments
+obsidian-vault
+.vscode
+.zed
+.freebuff
+docs
+e2e
+*.log
+test-results
+tsconfig.tsbuildinfo
+.env*
+
+# tests/ is dev-only, but scripts/testnet-smoke.ts imports two integration
+# helpers and `next build` typechecks scripts/, so that folder stays.
+tests/**
+!tests/integration
+!tests/integration/**
