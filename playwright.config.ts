@@ -1,3 +1,4 @@
+import path from "node:path";
 import { defineConfig, devices } from "@playwright/test";
 
 const FAKE_WS_PORT = 8787;
@@ -33,6 +34,12 @@ Object.assign(webServerEnv, {
   MAWS_NEXT_DIST_DIR: ".next-e2e",
   NEXT_PUBLIC_BINANCE_FAPI_WS: `ws://127.0.0.1:${FAKE_WS_PORT}`,
   NEXT_PUBLIC_BINANCE_FAPI_WS_FALLBACK: `ws://127.0.0.1:${FAKE_WS_PORT}`,
+  // The browser guard in e2e/fixtures.ts cannot see the Next server's own
+  // outbound calls (proxy routes, the Binance live manager, ws streams).
+  // Preload a guard into the server process — and, via NODE_OPTIONS, into any
+  // child process the Next CLI spawns — so a real exchange call fails loudly
+  // instead of reaching the network. e2e/server-guard.spec.ts proves it is on.
+  NODE_OPTIONS: `--require ${path.resolve("e2e/server-network-guard.cjs")}`,
 });
 for (const name of OS_PASSTHROUGH) {
   const value = process.env[name];
