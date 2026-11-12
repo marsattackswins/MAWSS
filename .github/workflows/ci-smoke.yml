@@ -1,5 +1,10 @@
 name: CI - Live Smoke Test
 
+# DISABLED: this workflow is turned off in the repository settings. It is kept
+# correct so that re-enabling it cannot produce a red run: without the SMOKE_*
+# secrets it exits green and records "skipped: secrets not set" in the job
+# summary.
+
 on:
   # Manual trigger with optional live execution
   workflow_dispatch:
@@ -22,19 +27,26 @@ on:
   schedule:
     - cron: '30 2 * * *' # 2:30 AM UTC daily, offset from the integration run
 
+permissions:
+  contents: read
+
+concurrency:
+  group: smoke-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   smoke:
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
 
     steps:
       - name: Checkout code
-        uses: actions/checkout@v5
+        uses: actions/checkout@v7
 
       - name: Setup Node.js
-        uses: actions/setup-node@v5
+        uses: actions/setup-node@v7
         with:
-          node-version: '20'
+          node-version: '22'
           cache: 'npm'
 
       - name: Install dependencies
@@ -51,6 +63,8 @@ jobs:
       # Live smoke, gated in the shell (secrets are unreliable in if:
       # expressions). Exits 0 with a notice when secrets are absent or the
       # run was dispatched with live=false; a real failure exits non-zero.
+      # SMOKE_BASE_URL points at the deployment origin, which talks to the
+      # Binance Demo Trading hosts.
       - name: Live smoke against testnet deployment
         env:
           SMOKE_BASE_URL: ${{ secrets.SMOKE_BASE_URL }}
@@ -60,13 +74,16 @@ jobs:
           SMOKE_LIVE: ${{ inputs.live == '' && 'true' || inputs.live }}
         run: |
           if [ "$SMOKE_LIVE" != "true" ]; then
+            echo "### Live smoke: skipped (dispatched with live=false)" >> "$GITHUB_STEP_SUMMARY"
             echo "Dispatched with live=false — live smoke skipped."
             exit 0
           fi
           if [ -z "$SMOKE_BASE_URL" ] || [ -z "$SMOKE_SESSION" ]; then
+            echo "### Live smoke: skipped: secrets not set" >> "$GITHUB_STEP_SUMMARY"
+            echo "Configure repository secrets SMOKE_BASE_URL (deployment origin) and" >> "$GITHUB_STEP_SUMMARY"
+            echo "SMOKE_SESSION (64-hex operator session id) to enable the live check." >> "$GITHUB_STEP_SUMMARY"
+            echo "::notice title=Live smoke::skipped: secrets not set"
             echo "SMOKE_BASE_URL/SMOKE_SESSION secrets not configured — live smoke skipped."
-            echo "Configure repository secrets SMOKE_BASE_URL (deployment origin) and"
-            echo "SMOKE_SESSION (64-hex operator session id) to enable the live check."
             exit 0
           fi
           npx tsx scripts/smoke-live.ts

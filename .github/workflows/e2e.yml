@@ -6,11 +6,14 @@ name: CI - E2E Browser Tests
 # against a local Next.js dev server on port 3001 (isolated from the dev
 # workspace on 3000). No exchange credentials are injected — playwright.config.ts
 # blanks all MAWS_* env vars and the webServer starts with MAWS_ENV=local.
+# e2e/fixtures.ts aborts any request to a real Binance host, so a spec that
+# silently reached the network fails fast instead of passing on live data.
 #
 # Specs in CI:
 #   - e2e/smoke.spec.ts         — chart connect/feed health / drawing tools
 #   - e2e/disconnected.spec.ts  — disconnected startup, rejected trading,
 #                                  failed attachment, controlled Testnet fixture
+#   - e2e/toolbar.spec.ts       — drawing-bar reachability at 1440/1280/1024
 #
 # Skipped (not in CI, pending rewrite for authenticated Testnet flow):
 #   - e2e/order-lifecycle.spec.ts — all tests are test.skip()
@@ -34,19 +37,26 @@ on:
 
   workflow_dispatch: {}
 
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-e2e-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   e2e:
-    runs-on: ubuntu-latest
-    timeout-minutes: 20
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
 
     steps:
       - name: Checkout code
-        uses: actions/checkout@v5
+        uses: actions/checkout@v7
 
       - name: Setup Node.js
-        uses: actions/setup-node@v5
+        uses: actions/setup-node@v7
         with:
-          node-version: '20'
+          node-version: '22'
           cache: 'npm'
 
       - name: Install dependencies
@@ -55,7 +65,8 @@ jobs:
       # `--with-deps` shells out to apt, and runner DNS/archive mirrors fail
       # intermittently ("Temporary failure resolving security.ubuntu.com"), which
       # fails the whole job before a single test runs. Retry the install instead
-      # of re-running the whole workflow.
+      # of re-running the whole workflow. Ubuntu 24.04 keeps the apt package set
+      # this action expects.
       - name: Install Playwright browsers
         run: |
           for attempt in 1 2 3; do
@@ -83,10 +94,23 @@ jobs:
           MAWS_BINANCE_API_SECRET: ""
           MAWS_OPERATOR_AUTH: ""
 
-      - name: Upload Playwright report on failure
-        if: failure()
-        uses: actions/upload-artifact@v4
+      # Always upload, and ignore an empty directory: uploading only on failure
+      # both hid the report on flakes that passed on retry and produced a
+      # "No files were found with the provided path" warning on green runs.
+      - name: Upload Playwright report
+        if: always()
+        uses: actions/upload-artifact@v7
         with:
           name: playwright-report
           path: playwright-report/
           retention-days: 7
+          if-no-files-found: ignore
+
+      - name: Upload Playwright test results
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: playwright-test-results
+          path: test-results/
+          retention-days: 7
+          if-no-files-found: ignore

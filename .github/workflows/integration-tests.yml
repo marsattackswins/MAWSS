@@ -1,5 +1,12 @@
 name: Integration Tests
 
+# DISABLED: this workflow is turned off in the repository settings. It is kept
+# correct so that re-enabling it cannot produce a red run:
+#   - it exits green with a visible "skipped: secrets not set" summary when the
+#     Testnet secrets are absent (the default state of this repository),
+#   - it drives the current runner (`npm run test:integration`),
+#   - it talks to the Demo Trading hosts only (demo-fapi.binance.com).
+
 on:
   # Run on PRs that touch server code
   pull_request:
@@ -22,9 +29,16 @@ on:
         required: false
         default: 'false'
 
+permissions:
+  contents: read
+
+concurrency:
+  group: integration-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   integration:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 20
 
     outputs:
@@ -36,66 +50,93 @@ jobs:
 
     steps:
       - name: Checkout code
-        uses: actions/checkout@v5
+        uses: actions/checkout@v7
 
       - name: Setup Node.js
-        uses: actions/setup-node@v5
+        uses: actions/setup-node@v7
         with:
-          node-version: '20'
+          node-version: '22'
           cache: 'npm'
 
       - name: Install dependencies
         run: npm ci
 
-      - name: Check Binance Testnet availability
+      # Credentials are matched in the shell (secrets are unreliable inside
+      # `if:` expressions). Without them the run is a no-op that stays green and
+      # says so in the job summary, instead of failing on the first signed call.
+      - name: Check Testnet secrets
+        id: gate
+        env:
+          TESTNET_API_KEY: ${{ secrets.TESTNET_API_KEY }}
+          TESTNET_API_SECRET: ${{ secrets.TESTNET_API_SECRET }}
         run: |
-          echo "Checking Binance testnet connectivity..."
-          curl -f https://demo-fapi.binance.com/fapi/v1/ping || exit 1
+          if [ -z "$TESTNET_API_KEY" ] || [ -z "$TESTNET_API_SECRET" ]; then
+            echo "skipped=true" >> "$GITHUB_OUTPUT"
+            echo "### Integration tests: skipped: secrets not set" >> "$GITHUB_STEP_SUMMARY"
+            echo "TESTNET_API_KEY / TESTNET_API_SECRET are not configured; nothing was run." >> "$GITHUB_STEP_SUMMARY"
+            echo "::notice title=Integration tests::skipped: secrets not set"
+            exit 0
+          fi
+          echo "skipped=false" >> "$GITHUB_OUTPUT"
+
+      # Informational only: the Demo Trading endpoints are flaky from hosted
+      # runners and a DNS hiccup must not fail a suite that otherwise passes.
+      - name: Check Binance Demo Trading availability
+        if: steps.gate.outputs.skipped != 'true'
+        run: |
+          echo "Checking Binance Demo Trading connectivity..."
+          curl -sS --max-time 10 -f https://demo-fapi.binance.com/fapi/v1/ping \
+            || echo "demo-fapi.binance.com did not answer; continuing (tests will report the real error)"
 
       - name: Run integration tests
         id: run-tests
+        if: steps.gate.outputs.skipped != 'true'
         env:
           MAWS_BINANCE_API_KEY: ${{ secrets.TESTNET_API_KEY }}
           MAWS_BINANCE_API_SECRET: ${{ secrets.TESTNET_API_SECRET }}
           MAWS_TEST_VERBOSE: ${{ github.event.inputs.verbose || 'false' }}
         run: |
           START_TIME=$(date +%s)
-          npm run test:integration -- --json --outputFile=test-results.json 2>&1 | tee test-output.log || true
+          set -o pipefail
+          npm run test:integration 2>&1 | tee test-output.log
           END_TIME=$(date +%s)
-          DURATION=$((END_TIME - START_TIME))
-          echo "duration=$DURATION" >> $GITHUB_OUTPUT
+          echo "duration=$((END_TIME - START_TIME))" >> "$GITHUB_OUTPUT"
 
-          # Parse test results
-          if [ -f test-results.json ]; then
-            PASSED=$(jq '.success' test-results.json 2>/dev/null || echo "0")
-            FAILED=$(jq '.numFailedTestSuites' test-results.json 2>/dev/null || echo "0")
-            TOTAL=$(jq '.numTotalTestSuites' test-results.json 2>/dev/null || echo "0")
-          else
-            # Fallback: parse from output
-            PASSED=$(grep -oP '\d+(?= passed)' test-output.log | tail -1 || echo "0")
-            FAILED=$(grep -oP '\d+(?= failed)' test-output.log | tail -1 || echo "0")
-            TOTAL=$(grep -oP '\d+(?= total)' test-output.log | tail -1 || echo "0")
-          fi
+          PASSED=$(grep -oE '[0-9]+ passed' test-output.log | tail -1 | grep -oE '[0-9]+' || echo "0")
+          FAILED=$(grep -oE '[0-9]+ failed' test-output.log | tail -1 | grep -oE '[0-9]+' || echo "0")
+          TOTAL=$((PASSED + FAILED))
 
-          echo "passed=$PASSED" >> $GITHUB_OUTPUT
-          echo "failed=$FAILED" >> $GITHUB_OUTPUT
-          echo "total=$TOTAL" >> $GITHUB_OUTPUT
+          echo "passed=$PASSED" >> "$GITHUB_OUTPUT"
+          echo "failed=$FAILED" >> "$GITHUB_OUTPUT"
+          echo "total=$TOTAL" >> "$GITHUB_OUTPUT"
 
       - name: Generate summary
         id: summary
         if: always()
         run: |
-          STATUS="${{ steps.run-tests.outcome == 'success' && 'pass' || 'fail' }}"
+          if [ "${{ steps.gate.outputs.skipped }}" = "true" ]; then
+            STATUS="skipped"
+          elif [ "${{ steps.run-tests.outcome }}" = "success" ]; then
+            STATUS="pass"
+          else
+            STATUS="fail"
+          fi
           DURATION="${{ steps.run-tests.outputs.duration || '0' }}"
           PASSED="${{ steps.run-tests.outputs.passed || '0' }}"
           FAILED="${{ steps.run-tests.outputs.failed || '0' }}"
           TOTAL="${{ steps.run-tests.outputs.total || '0' }}"
 
-          echo "status=$STATUS" >> $GITHUB_OUTPUT
-          echo "duration=$DURATION" >> $GITHUB_OUTPUT
-          echo "passed=$PASSED" >> $GITHUB_OUTPUT
-          echo "failed=$FAILED" >> $GITHUB_OUTPUT
-          echo "total=$TOTAL" >> $GITHUB_OUTPUT
+          echo "status=$STATUS" >> "$GITHUB_OUTPUT"
+          echo "duration=$DURATION" >> "$GITHUB_OUTPUT"
+          echo "passed=$PASSED" >> "$GITHUB_OUTPUT"
+          echo "failed=$FAILED" >> "$GITHUB_OUTPUT"
+          echo "total=$TOTAL" >> "$GITHUB_OUTPUT"
+
+          if [ "$STATUS" = "skipped" ]; then
+            echo "### Integration tests: skipped: secrets not set" >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "### Integration tests: $STATUS (${PASSED} passed, ${FAILED} failed)" >> "$GITHUB_STEP_SUMMARY"
+          fi
 
           # Log summary as JSON line
           SUMMARY=$(cat <<EOF
@@ -106,21 +147,22 @@ jobs:
           echo "$SUMMARY" >> integration-summary.jsonl
 
       - name: Upload test results
-        if: failure()
+        if: always()
         uses: actions/upload-artifact@v7
         with:
           name: integration-test-results
           path: |
-            coverage/
-            *.log
-            test-results.json
+            test-output.log
             integration-summary.jsonl
+          retention-days: 7
+          if-no-files-found: ignore
 
       - name: Post webhook notification
-        if: always() && env.WEBHOOK_URL != ''
+        if: always()
         env:
           WEBHOOK_URL: ${{ secrets.WEBHOOK_URL }}
         run: |
+          if [ -z "$WEBHOOK_URL" ]; then echo "No webhook configured; skipping."; exit 0; fi
           STATUS="${{ steps.summary.outputs.status }}"
           DURATION="${{ steps.summary.outputs.duration }}"
           PASSED="${{ steps.summary.outputs.passed }}"
@@ -153,27 +195,16 @@ jobs:
             "$WEBHOOK_URL" \
             --fail-with-body || echo "Webhook notification failed (non-blocking)"
 
-      - name: Notify on failure (optional)
-        if: failure() && github.event_name == 'schedule'
-        uses: slackapi/slack-github-action@v3.0.1
-        with:
-          webhook: ${{ secrets.SLACK_WEBHOOK }}
-          webhook-type: incoming-webhook
-          payload: |
-            {
-              "text": "Integration tests failed on master branch",
-              "status": "${{ job.status }}"
-            }
-
   # Validate workflow YAML as a dry-run step
   validate-workflow:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
     needs: integration
     if: always()
 
     steps:
       - name: Checkout code
-        uses: actions/checkout@v5
+        uses: actions/checkout@v7
 
       - name: Validate workflow YAML syntax
         run: |
@@ -184,7 +215,7 @@ jobs:
       - name: Check required triggers
         run: |
           echo "Checking workflow triggers..."
-          grep -q "cron: '0 2 * * *'" .github/workflows/integration-tests.yml && echo "✓ Nightly cron schedule found"
-          grep -q "workflow_dispatch:" .github/workflows/integration-tests.yml && echo "✓ Manual trigger found"
-          grep -q "pull_request:" .github/workflows/integration-tests.yml && echo "✓ PR trigger found"
+          grep -q "cron: '0 2 \* \* \*'" .github/workflows/integration-tests.yml && echo "Nightly cron schedule found"
+          grep -q "workflow_dispatch:" .github/workflows/integration-tests.yml && echo "Manual trigger found"
+          grep -q "pull_request:" .github/workflows/integration-tests.yml && echo "PR trigger found"
           echo "All required triggers present"
