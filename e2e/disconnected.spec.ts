@@ -37,9 +37,31 @@ async function stubRest(page: import("@playwright/test").Page) {
 }
 
 const FEED_STATE = {
-  connecting: { label: "Connecting", color: "rgb(120, 123, 134)" },
-  live: { label: "Live", color: "rgb(8, 153, 129)" },
+  connecting: { label: "Connecting", token: "--app-muted", fallback: "#787b86" },
+  live: { label: "Live", token: "--app-up", fallback: "#089981" },
 } as const;
+
+/** Resolve a theme colour token to the `rgb()` string the browser computes, so the
+ *  dot is asserted against the palette it actually paints with. */
+async function resolveTokenColor(
+  page: import("@playwright/test").Page,
+  token: string,
+  fallback: string,
+): Promise<string> {
+  return page.evaluate(
+    ({ token, fallback }: { token: string; fallback: string }) => {
+      const raw =
+        getComputedStyle(document.documentElement).getPropertyValue(token).trim() || fallback;
+      const probe = document.createElement("span");
+      probe.style.backgroundColor = raw;
+      document.body.appendChild(probe);
+      const rgb = getComputedStyle(probe).backgroundColor;
+      probe.remove();
+      return rgb;
+    },
+    { token, fallback },
+  );
+}
 
 async function expectFeedDot(
   page: import("@playwright/test").Page,
@@ -50,7 +72,8 @@ async function expectFeedDot(
     `span[role="status"][aria-label="Market feed status: ${FEED_STATE[state].label}"]`,
   );
   await expect(dot).toBeVisible({ timeout });
-  await expect(dot).toHaveCSS("background-color", FEED_STATE[state].color);
+  const { token, fallback } = FEED_STATE[state];
+  await expect(dot).toHaveCSS("background-color", await resolveTokenColor(page, token, fallback));
 }
 
 async function waitForKlineClient(feed: FakeBinanceFeed) {
