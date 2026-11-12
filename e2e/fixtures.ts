@@ -1,4 +1,4 @@
-import { expect, test as base } from "@playwright/test";
+import { expect, test as base, type BrowserContext } from "@playwright/test";
 
 /**
  * Shared Playwright fixture with a network guard and operator login.
@@ -22,7 +22,16 @@ const BLOCKED_HOST =
 /** Every page is behind the operator session: without a login the proxy
  *  redirects to /login before any spec assertion can run. The password is the
  *  one minted for this run by playwright.config.ts; it never appears on disk. */
+// One session per worker: the login route rate-limits real attempts (5 per
+// 15 minutes), and repeat-each runs would otherwise exhaust it before the suite
+// finishes. The cookie stays in memory for this run only.
+let cachedCookies: Awaited<ReturnType<BrowserContext["cookies"]>> | null = null;
+
 async function loginOperator(page: import("@playwright/test").Page): Promise<void> {
+  if (cachedCookies) {
+    await page.context().addCookies(cachedCookies);
+    return;
+  }
   const password = process.env.MAWS_E2E_OPERATOR_PASSWORD;
   if (!password) {
     throw new Error("MAWS_E2E_OPERATOR_PASSWORD is missing — e2e must run through playwright.config.ts");
@@ -37,6 +46,7 @@ async function loginOperator(page: import("@playwright/test").Page): Promise<voi
   if (login.status() !== 200) {
     throw new Error(`Operator login failed (${login.status()}) — the disposable server rejected the generated password`);
   }
+  cachedCookies = await page.context().cookies();
 }
 
 export const test = base.extend({
