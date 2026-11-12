@@ -17,6 +17,7 @@ import { createSession, sessionCookieName } from "@/lib/server/auth/session";
 import { secureCookieContext } from "@/lib/server/http/guards";
 import { resetServerConfigForTests } from "@/lib/server/env/config";
 import { getBroker, resetBrokerForTests } from "@/lib/server/broker/factory";
+import { profileCoordinator, resetProfileCoordinatorForTests } from "@/lib/server/profile/coordinator";
 import { RUNTIME_KEYS, setRuntime } from "@/lib/server/runtime/flags";
 import { POST as POST_orders } from "@/app/api/live/orders/route";
 import { POST as POST_cancel } from "@/app/api/live/orders/cancel/route";
@@ -79,7 +80,7 @@ afterEach(() => {
   (process.stdout as unknown as { write: (...a: unknown[]) => unknown }).write =
     stdoutWrite as unknown as (...a: unknown[]) => unknown;
   resetBrokerForTests();
-  delete process.env.MAWS_ENV;
+  resetProfileCoordinatorForTests();
 });
 
 // ---------------------------------------------------------------------------
@@ -152,9 +153,15 @@ async function bootBroker(http: FakeHttp, opts: { withPosition?: boolean } = {})
   setRuntime(RUNTIME_KEYS.executionEnabled, "true");
   installFakes(http);
   standardFakes(http, opts);
-  await getBroker().connect();
+  // Attach through the coordinator: routes assert coordinator ownership
+  // (assertProfileMutationRequest) before ever reaching the broker.
+  const attaching = profileCoordinator().switchProfile({ profileId: "binance-testnet", requestId: "log-test-attach" });
+  for (let i = 0; i < 500 && FakeWs.instances.length === 0; i += 1) await flush();
   // Open every socket the manager created (user-data stream, public
   // mark-price stream); the harness must not depend on stream ordering.
+  for (const ws of FakeWs.instances) ws.emitOpen();
+  await flush();
+  await attaching;
   for (const ws of FakeWs.instances) ws.emitOpen();
   await flush();
   return cfg;
@@ -310,11 +317,10 @@ describe("POST /api/live/orders logs structured request lines", () => {
 describe("POST /api/live/orders/cancel logs structured request lines", () => {
   test("logs ok with symbol and clientOrderId after a successful cancel", async () => {
     const http = new FakeHttp();
-    freshEnv(makeCfg());
     http.route("/fapi/v1/order", () =>
       jsonRes(orderFixture({ clientOrderId: "cid-cancel-ok", status: "CANCELED", type: "LIMIT", price: "50000" })),
     );
-    installFakes(http);
+    await bootBroker(http);
     // Cancel only proceeds when the exchange knows the order, i.e. an intent exists.
     createIntent({
       clientOrderId: "cid-cancel-ok",

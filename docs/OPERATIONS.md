@@ -61,15 +61,17 @@ step is expensive to undo once the server has started.
 ### Required Variables
 
 #### MAWS_ENV
-**Description**: Deployment environment mode
-**Values**: `local` | `testnet` | `shadow` | `production`
-**Default**: `local`
-**Purpose**: Selects the server deployment context and risk enforcement. The active trading profile is selected from the UI.
+**Description**: Trading configuration selection, not attachment authorization
+**Values**: `testnet` | `production`
+**Default**: `testnet`
+**Purpose**: Selects configuration and unambiguous legacy-credential mapping. The operator explicitly selects the attached profile from the UI.
 
-- `local`: Chart Only startup; Testnet and Production can be attached from the UI when configured and authenticated
-- `testnet`: Binance USD-M Futures Demo Trading startup context (REST `demo-fapi.binance.com`, WebSocket `demo-fstream.binance.com`), requires auth and demo credentials. Demo and live keys are separate; algo-order and margin-field behavior on demo is unverified until the integration smoke test runs.
-- `shadow`: Production market data with read-only account, zero submissions
-- `production`: Real trading, requires all risk limits and execution gates
+- **Testnet** (`testnet`): Binance Futures Demo, REST `demo-fapi.binance.com` and WebSocket `demo-fstream.binance.com`.
+- **Live** (`production`): Binance production, REST `fapi.binance.com` and WebSocket `fstream.binance.com`; explicit confirmation and Live safety checks are required before attachment.
+
+Both profiles may be unconfigured. Every cold start is **Disconnected**, with no active profile, private stream, or broker manager. Configured credentials, saved preferences, login, hydration, and health polling never authorize attachment or execution. Disconnected is the absence of an attachment, not a third trading mode. Authenticated charts continue using public data.
+
+Retired `local`, `shadow`, and `paper` selections fail with actionable migration errors; they are never silently converted.
 
 #### MAWS_DEFAULT_PROFILE
 **Description**: Optional preferred profile metadata
@@ -80,8 +82,8 @@ step is expensive to undo once the server has started.
 #### MAWS_OPERATOR_AUTH
 **Description**: Operator credential for authentication
 **Format**: `<hex salt>:<hex scrypt hash>`
-**Required**: For non-local environments and whenever Binance profiles are attached from local Chart Only
-**Purpose**: Password-based authentication for operator access and live-profile switching
+**Required**: Every normal launch, including keyless development and disconnected operation
+**Purpose**: Real password-based operator login. Only the explicit `npm run dev -- --throwaway` launcher generates a disposable credential; it does not bypass authentication.
 
 **Generate with**:
 ```bash
@@ -97,26 +99,24 @@ The server keeps Testnet and Production credentials separate so the UI can switc
 | `binance-production` | `MAWS_BINANCE_PRODUCTION_API_KEY` | `MAWS_BINANCE_PRODUCTION_API_SECRET` |
 
 A key and secret must be supplied together. Missing values leave that profile
-unconfigured; credentials are never copied between profiles. After operator
-authentication and profile connection, MAWS enables normal submissions
-automatically. Health, stream, account, reconciliation, position-mode,
-freeze, kill-switch, and risk gates still block unsafe submissions. Withdrawal
-permission MUST be disabled, and none of these variables may use a
-`NEXT_PUBLIC_` prefix.
+unconfigured; credentials are never copied between profiles. Configuration,
+attachment, and execution permission are separate. Explicit attachment does not
+automatically enable submissions; the operator must enable execution. Health,
+stream, account, reconciliation, position-mode, freeze, kill-switch, and risk gates
+still block unsafe submissions. Withdrawal permission MUST be disabled, and none
+of these variables may use a `NEXT_PUBLIC_` prefix.
 
 #### Legacy Binance credentials
 `MAWS_BINANCE_API_KEY` and `MAWS_BINANCE_API_SECRET` remain supported during
 migration. They apply only to the profile mapped from `MAWS_ENV`:
 
-- `local` -> Chart Only
 - `testnet` -> `binance-testnet`
 - `production` -> `binance-production`
-- `shadow` -> internal shadow mode using production endpoints; it is not a selectable profile
 
-If legacy and active profile-specific credentials are both supplied and differ,
+If legacy and selected profile-specific credentials are both supplied and differ,
 startup fails closed with `MAWS_PROFILE_CONFIGURATION_INVALID`. Legacy
-credentials do not populate an unrelated profile. Local Chart Only rejects legacy
-Binance credentials; use the separate profile-specific variables instead.
+credentials do not populate an unrelated profile and never authorize automatic
+attachment. Prefer the separate profile-specific variables.
 
 ### Optional Variables
 
@@ -206,8 +206,8 @@ node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"
 All nine variables below must be explicitly configured with positive finite
 values when `MAWS_ENV=production` or when attaching the Production profile.
 Production startup or profile attachment fails with the names of any missing
-variables. Testnet and local modes continue to use the documented defaults
-when these values are omitted.
+variables. Testnet continues to use the documented defaults when these values are
+omitted.
 
 #### MAWS_RISK_MAX_ORDER_NOTIONAL
 **Description**: Maximum order notional value (USD)
@@ -925,7 +925,7 @@ node scripts/restore-backup.mjs .maws/backups/<file>.db.enc
 ### Profile-Scoped Database Migration
 
 The browser profile selector is enabled for authenticated operators. Server-side profile switching is protected by the live profile API and coordinator. The profile-scoped schema migration separates
-Binance Testnet, Binance Live, and shadow persistence (the `paper` key remains as a legacy DB key for historical data only). Existing rows without
+Testnet and Live persistence; the retired `paper` and `shadow` keys remain as legacy DB keys for historical data only. Existing rows without
 provenance are preserved under `profile_id = 'legacy-unknown'`; MAWS never classifies them
 from the current environment, credentials, symbols, timestamps, or IDs. Quarantined rows
 are excluded from active live queries, risk checks, P&L, reconciliation, health, selected
@@ -1197,14 +1197,29 @@ The admin dashboard is available at `http://localhost:3000/admin` and refreshes 
 
 ### Authentication and environment behavior
 
-- In `MAWS_ENV=local` (the default), `/api/health` and `/api/admin/health` allow anonymous access. Local startup is Chart Only; charting remains available without credentials.
-- When Binance profile credentials are configured, attaching Testnet or Production from Chart Only requires `MAWS_OPERATOR_AUTH` and an authenticated operator session. The profile chooser exposes only safe metadata.
-- Outside local mode, `/api/health`, `/api/health/broker`, `/api/admin/health`, and `/api/admin/metrics` allow a valid operator session or the read-only `x-maws-health-token`. Admin configuration, logs, risk, performance, and `/api/status/trading-health` require an operator session. Health-token responses are sanitized and never include account, position, or order data.
-- `MAWS_HEALTH_TOKEN` no longer authorizes emergency flatten. To migrate, configure a distinct `MAWS_EMERGENCY_TOKEN` if token-based flatten is required; otherwise flatten requires an operator session. Both configured tokens must be at least 32 characters and differ from each other and the operator password.
-- To use a session, sign in at `/login` and then return to `/admin`.
+- There is no anonymous environment: every operator page, admin API, and public-data proxy requires a real login session in both `testnet` and `production`.
+- The only anonymous endpoints are `GET /api/liveness` (exactly `{"status":"ok"}`, with no configuration, database, environment, or broker side effects), `POST /api/auth/login`, `POST /api/auth/logout`, `GET /api/auth/session` (minimal bootstrap), and the login page.
+- Both modes start **Disconnected**. Startup, login, hydration, and health reads never attach a profile. Attaching requires `MAWS_OPERATOR_AUTH`, a valid session, CSRF/origin checks, configured profile credentials, and readiness/exposure gates. The profile chooser exposes only safe metadata.
+- `/api/health`, `/api/health/broker`, `/api/admin/health`, and `/api/admin/metrics` allow a valid operator session or the read-only `x-maws-health-token`. Admin configuration, logs, risk, performance, `/api/status/trading-health`, and the public-data proxies require an operator session. Health-token responses are sanitized and never include account, position, or order data.
+- `MAWS_HEALTH_TOKEN` does not authorize emergency flatten. Configure a distinct `MAWS_EMERGENCY_TOKEN` if token-based flatten is required; flatten also requires an attached profile. Both tokens must be at least 32 characters and differ from each other and the operator password.
+- A `401` always means no accepted credential. A `403` means the origin/host, CSRF, or profile gate rejected the request — never that the environment is anonymous.
+
+#### Emergency flatten while Disconnected
+
+`POST /api/live/emergency/flatten` returns `409 not_connected` when no profile is attached; it never starts a broker or guesses a profile. After a server restart the operator must reattach the profile from the UI and then flatten, or run the flatten on Binance directly. Exchange-side stop and conditional orders placed earlier remain in place until cancelled — a restart does not remove them.
+
+#### Migrating a `.env.local` local-mode setup
+
+If an existing `.env.local` sets `MAWS_ENV=local`, `shadow`, or `paper`:
+
+1. Change `MAWS_ENV` to `testnet` (or `production`).
+2. Keep the profile-scoped credentials you already use. Legacy `MAWS_BINANCE_API_KEY`/`MAWS_BINANCE_API_SECRET` map to the profile selected by `MAWS_ENV`; if both legacy and profile credentials are set they must match.
+3. Ensure `MAWS_OPERATOR_AUTH` is set — it is now always required.
+4. Remove `MAWS_ALLOW_LOCAL`, shadow/paper preferences, and any `MAWS_DEFAULT_PROFILE` value other than `binance-testnet` or `binance-production`; startup rejects them instead of converting.
+5. Start the server (it comes up Disconnected), sign in at `/login`, and attach the profile from the Trade screen.
 
 ```bash
-# Session-independent, read-only monitoring access (non-local modes)
+# Session-independent, read-only monitoring access in both modes
 curl -H "x-maws-health-token: <token>" \
   http://localhost:3000/api/health
 
@@ -1212,29 +1227,27 @@ curl -H "x-maws-health-token: <token>" \
   http://localhost:3000/api/admin/health
 ```
 
-A `401` response in a non-local environment means that neither authentication method was accepted. A `401` should not occur solely because the server is in local mode.
-
 ### Common dashboard errors
 
 | Symptom | Likely cause | Action |
 |---|---|---|
 | `Failed to fetch metrics` or a network error | The development server is stopped, the port is wrong, or the request failed before reaching the API | Run `npm run dev`, confirm the port in the terminal, then retry `/admin` |
 | `Not authenticated` or `401` | Missing/expired operator session, or a health token used outside its read-only monitoring endpoints | Log in at `/login`; use `x-maws-health-token` only on the documented monitoring endpoints and never put it in a URL |
-| `Local mode` or empty/zero live metrics | `MAWS_ENV=local` with no active profile, or no live manager/broker is configured | This is expected for Chart Only. Attach a configured Testnet or Production profile from the UI after authenticating; no restart is required for switching |
+| `Disconnected` or empty/zero live metrics | No profile is attached (the expected state after startup), or no live manager/broker is configured | Attach Testnet or Live from the UI after signing in; no restart is required for switching |
 | `500` from a health endpoint | Server-side configuration or health-check failure | Inspect the server terminal logs and validate environment configuration |
 | `Connection refused` | No process is listening on the configured port | Start MAWS with `npm run dev` and use the displayed URL |
 
 ### Direct diagnostic checklist
 
 1. Confirm the server reports `Ready` and note its actual port.
-2. Call `curl http://localhost:3000/api/health` in local mode, or include the health-token header in non-local mode.
+2. Call `curl http://localhost:3000/api/liveness` anonymously; for `/api/health`, include a session cookie or the health-token header.
 3. Call `/api/admin/health` to inspect component status and `/api/admin/metrics` for the in-memory metrics snapshot.
 4. Check the browser DevTools Console and Network tabs for failed requests.
 5. If the server does not compile or the response is a server error, run `npx tsc --noEmit --pretty false` and inspect the development-server logs.
 
 ### Testing the dashboard without live trading
 
-Keep `MAWS_ENV=local` and omit broker credentials. The dashboard and health APIs remain available for UI, authentication-flow, and response-shape testing without connecting to Binance or submitting real orders. Uptime and in-memory state reset when the server restarts.
+Keep `MAWS_ENV=testnet`, configure `MAWS_OPERATOR_AUTH`, and do not attach a profile. The dashboard and health APIs remain available while Disconnected for UI, authentication-flow, and response-shape testing without contacting Binance or submitting orders. `npm run dev -- --throwaway` starts a scratch database with a random password printed once and refuses to start when any Live credential is configured. Uptime and in-memory state reset when the server restarts.
 
 #### Key Metrics to Monitor
 - `gauge.open_orders` - Should be within expected range

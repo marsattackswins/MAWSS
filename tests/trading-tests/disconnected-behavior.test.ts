@@ -88,6 +88,24 @@ function lastNotice(): { id: number; tone: string; text: string } | undefined {
   return notices[notices.length - 1];
 }
 
+/**
+ * Simulates a confirmed server attachment: connectedBroker alone is not
+ * enough — the live store must carry the attached runtime (profileId,
+ * environment) for any trading action to pass the connection gate.
+ */
+function attachTestnetRuntime(): void {
+  useAppStore.setState({ connectedBroker: "binance" } as Partial<Store>);
+  useLiveStore.setState({
+    attached: true,
+    profileId: "binance-testnet",
+    environment: "testnet",
+    phase: "ready",
+    ready: true,
+    executionAllowed: true,
+    generation: 1,
+  });
+}
+
 beforeEach(() => {
   useAppStore.setState({ connectedBroker: null } as Partial<Store>);
   useLiveStore.setState({
@@ -148,9 +166,13 @@ describe("trading actions are rejected while disconnected", () => {
     expect(liveApi.closePosition).not.toHaveBeenCalled();
   });
 
-  test("dispatchClosePositionFraction always returns unavailable", async () => {
+  test("dispatchClosePositionFraction: not_connected while disconnected, partial_close_unavailable when attached", async () => {
     const res = await dispatchClosePositionFraction("BTCUSDT", 0.5);
-    expect(res).toEqual({ ok: false, error: "partial_close_unavailable" });
+    expect(res).toEqual({ ok: false, error: "not_connected" });
+
+    attachTestnetRuntime();
+    const attachedRes = await dispatchClosePositionFraction("BTCUSDT", 0.5);
+    expect(attachedRes).toEqual({ ok: false, error: "partial_close_unavailable" });
   });
 
   test("dispatchProtect returns not_connected and never hits the API", async () => {
@@ -167,10 +189,10 @@ describe("legacy paper state migrates safely", () => {
     expect(state.connectedBroker).toBeNull();
   });
 
-  test("connectedBroker=binance is preserved for server re-verification", () => {
+  test("connectedBroker=binance claim from storage is never trusted (server re-verifies)", () => {
     const state = { connectedBroker: "binance" as unknown } as Store;
     normalizeConnectionRehydrate(state);
-    expect(state.connectedBroker).toBe("binance");
+    expect(state.connectedBroker).toBeNull();
   });
 
   test("connectedBroker=null stays null", () => {
@@ -190,7 +212,7 @@ describe("Testnet and Production requests cannot cross-route", () => {
   test("broker book is empty when not connected to binance", () => {
     const book = getBrokerBook(
       { connectedBroker: null },
-      { orders: [], positions: [] },
+      { orders: [], positions: [], attached: true, profileId: "binance-testnet" },
     );
     expect(book.orders).toEqual([]);
     expect(book.positions).toEqual([]);
@@ -201,7 +223,7 @@ describe("Testnet and Production requests cannot cross-route", () => {
     const livePos = { id: "p1", symbol: "BTCUSDT", side: "long" as const, entry: 50000, qty: 1, tp: null, sl: null, leverage: 10, liq: null, mark: 50000, unrealized: 0, openedAt: 0 };
     const book = getBrokerBook(
       { connectedBroker: "binance" as const },
-      { orders: [liveOrder], positions: [livePos] },
+      { orders: [liveOrder], positions: [livePos], attached: true, profileId: "binance-testnet" },
     );
     expect(book.orders).toHaveLength(1);
     expect(book.positions).toHaveLength(1);
@@ -212,7 +234,7 @@ describe("Testnet and Production requests cannot cross-route", () => {
     const livePos = { id: "p1", symbol: "BTCUSDT", side: "long" as const, entry: 50000, qty: 1, tp: null, sl: null, leverage: 10, liq: null, mark: 50000, unrealized: 0, openedAt: 0 };
     const book = getBrokerBook(
       { connectedBroker: null },
-      { orders: [liveOrder], positions: [livePos] },
+      { orders: [liveOrder], positions: [livePos], attached: false, profileId: null },
     );
     expect(book.orders).toHaveLength(0);
     expect(book.positions).toHaveLength(0);
@@ -234,7 +256,7 @@ describe("failed switching leaves no executable stale session/commands", () => {
   });
 
   test("when connectedBroker is binance but phase is failed, halt reason carries the failure", () => {
-    useAppStore.setState({ connectedBroker: "binance" } as Partial<Store>);
+    attachTestnetRuntime();
     useLiveStore.setState({
       phase: "failed",
       ready: false,
@@ -248,12 +270,10 @@ describe("failed switching leaves no executable stale session/commands", () => {
 
 describe("existing risk gates remain enforced", () => {
   test("kill switch blocks live submissions even when connected", async () => {
-    useAppStore.setState({ connectedBroker: "binance" } as Partial<Store>);
+    attachTestnetRuntime();
     useLiveStore.setState({
       phase: "ready",
       ready: true,
-      profileId: "binance-testnet",
-      generation: 1,
       health: {
         env: "testnet",
         brokerConnected: true,
@@ -314,7 +334,7 @@ describe("no fabricated data when disconnected", () => {
   test("broker book is empty (no fake orders or positions)", () => {
     const book = getBrokerBook(
       { connectedBroker: null },
-      { orders: [], positions: [] },
+      { orders: [], positions: [], attached: true, profileId: "binance-testnet" },
     );
     expect(book.orders).toHaveLength(0);
     expect(book.positions).toHaveLength(0);
@@ -330,7 +350,7 @@ describe("no fabricated data when disconnected", () => {
 describe("cross-environment routing: Testnet and Production cannot interfere", () => {
   test("switching to binance-production while Testnet is active goes through the halt gate", async () => {
     // In the switching phase, all mutations are blocked on the dispatch side.
-    useAppStore.setState({ connectedBroker: "binance" } as Partial<Store>);
+    attachTestnetRuntime();
     useLiveStore.setState({
       phase: "switching",
       ready: false,
@@ -347,14 +367,14 @@ describe("cross-environment routing: Testnet and Production cannot interfere", (
 
   test("detached phase after a failed cross-environment switch blocks dispatch", async () => {
     // detached means the previous profile was stopped but the target could not
-    // start and rollback also failed. All mutations must be blocked.
-    useAppStore.setState({ connectedBroker: "binance" } as Partial<Store>);
+    // start and rollback also failed. All mutations must be blocked. The old
+    // attachment lingers (rollback failed), so the gate reports the failure.
+    attachTestnetRuntime();
     useLiveStore.setState({
       phase: "detached",
       ready: false,
       reasonCode: "rollback_failed",
       health: null,
-      profileId: null,
     });
     const reason = tradingHaltReason();
     expect(reason).toBe("rollback_failed");
@@ -368,7 +388,7 @@ describe("cross-environment routing: Testnet and Production cannot interfere", (
     // Callers embed profileId + generation in request headers. If the server
     // detects a generation mismatch it throws stale_profile. Verify the
     // dispatch halt reason surfaces this — simulated here via a degraded state.
-    useAppStore.setState({ connectedBroker: "binance" } as Partial<Store>);
+    attachTestnetRuntime();
     useLiveStore.setState({
       phase: "degraded",
       ready: false,

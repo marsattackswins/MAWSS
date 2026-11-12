@@ -29,12 +29,17 @@ describe("integration testnet safety guard", () => {
     expect(() => assertTestnetSafety(testnetConfig(), source(), process.cwd())).not.toThrow();
   });
 
-  test("refuses to run unless MAWS_ENV resolves to testnet", () => {
-    for (const rawEnv of [undefined, "", "local", "production", "shadow"]) {
-      expect(() =>
-        assertTestnetSafety(testnetConfig(), source({ MAWS_ENV: rawEnv }), process.cwd()),
-      ).toThrow(/MAWS_ENV=testnet/);
+  test("refuses to run unless the source environment is explicitly testnet", () => {
+    expect(() =>
+      assertTestnetSafety(testnetConfig(), source({ MAWS_ENV: undefined }), process.cwd()),
+    ).toThrow(/MAWS_ENV=testnet/);
+  });
+
+  test("retired and production MAWS_ENV values never reach the guard", () => {
+    for (const rawEnv of ["", "local", "shadow", "paper"]) {
+      expect(() => testnetConfig({ MAWS_ENV: rawEnv })).toThrow(/MAWS_ENV must be testnet\|production/);
     }
+    expect(() => testnetConfig({ MAWS_ENV: "production" })).toThrow(/explicitly configured/);
   });
 
   test("refuses production credentials in the environment", () => {

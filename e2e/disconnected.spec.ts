@@ -2,17 +2,19 @@
  * E2E: Disconnected startup and rejected trading.
  *
  * Covers:
- *   1. Startup without credentials shows "Disconnected" in the topbar trading
- *      strip — Buy/Sell buttons are absent, no account data is displayed.
- *   2. Trading actions dispatched while disconnected are server-rejected
- *      (dispatch returns not_connected; the topbar shows no Sell/Buy buttons).
+ *   1. Startup without an attached profile shows "Disconnected" in the topbar
+ *      trading strip — Buy/Sell buttons are absent, no account data, and the
+ *      profile menu lists exactly Testnet and Live (no Paper option).
+ *   2. Trading actions dispatched while disconnected are server-rejected with
+ *      409 not_connected.
  *   3. A failed/detached live profile keeps the bottom panel hidden and blocks
  *      order submission.
- *   4. Controlled Testnet connection fixture: with a stubbed session and profile
- *      API that reports a ready Testnet profile, the UI shows the connected state.
+ *   4. Controlled Testnet connection fixture: with a stubbed profile API that
+ *      reports a ready Testnet profile, the UI shows the connected state.
  *
- * All tests use the local (no credentials) server mode: MAWS_* vars are
- * blanked by playwright.config.ts, so no real exchange traffic ever occurs.
+ * Every test logs in through the real /api/auth/login route (the shared
+ * fixture does it) against the disposable server from playwright.config.ts,
+ * so no real exchange traffic ever occurs.
  */
 
 import { expect, test } from "./fixtures";
@@ -161,11 +163,7 @@ test("disconnected startup: bottom trading panel is hidden (no positions/orders 
   }
 });
 
-// fixme: `/api/live/profiles` authenticates in every non-local runtime and
-// returns 401 under the e2e blank-credential policy, so this test's profile
-// metadata (and the dialog that consumes it) is never available. Profile
-// filtering has unit coverage instead.
-test.fixme("disconnected startup: broker dialog shows two profiles, no Paper Trading option", async ({
+test("disconnected startup: profile menu and API list exactly Testnet and Live", async ({
   page,
 }) => {
   const feed = new FakeBinanceFeed(8787);
@@ -175,31 +173,23 @@ test.fixme("disconnected startup: broker dialog shows two profiles, no Paper Tra
     await waitForKlineClient(feed);
     await broadcastPriceUntilLive(page, feed, 100);
 
-    // Open the broker chooser.
+    // Open the topbar profile menu from the Disconnected label.
     await page.locator('[data-testid="topbar-disconnected"]').click();
-    // Wait for the dialog — or open it via the broker button if there is one.
-    // The dialog opens when the disconnected label is clicked, or when the
-    // topbar trade button opens it (BuySellStrip does not open it directly).
-    // Either the dialog is already open, or we look for a way to open it.
-    // In the current design, clicking the disconnected label alone may not
-    // open the dialog — so we use the positions panel "Connect to a broker" path.
-    // Instead: the broker dialog is opened via setBrokerDialogOpen. Let's close
-    // whatever is open and use the menu.
-    await page.keyboard.press("Escape");
+    await expect(page.getByText("Trading Profiles")).toBeVisible({ timeout: 10_000 });
+    await expect(page.getByText("Testnet", { exact: true })).toBeVisible();
+    await expect(page.getByText("Live", { exact: true })).toBeVisible();
 
-    // Verify that "Paper Trading" is NOT an option in the broker dialog.
-    // Open via the broker button in the bottom area or the profile chooser.
-    // The easiest way: look for the broker dialog trigger from within the app.
-    // We know the dialog is accessible via the Broker button.
-    // Check the profiles API response (local mode) has only 2 profiles.
-    const profilesResp = await page.evaluate(async () => {
-      const r = await fetch("/api/live/profiles");
-      const d = await r.json() as { profiles: Array<{ profileId: string }> };
-      return d.profiles.map((p) => p.profileId);
-    });
-    expect(profilesResp).not.toContain("paper");
-    expect(profilesResp).toContain("binance-testnet");
-    expect(profilesResp).toContain("binance-production");
+    // The two-mode product has no paper option anywhere in the menu.
+    await expect(page.locator('[role="menu"]')).not.toContainText("Paper");
+
+    // And the server metadata agrees: exactly the two profiles, authenticated.
+    const profilesResp = await page.request.get("/api/live/profiles");
+    expect(profilesResp.status()).toBe(200);
+    const body = (await profilesResp.json()) as { profiles: Array<{ profileId: string }> };
+    expect(body.profiles.map((p) => p.profileId).sort()).toEqual([
+      "binance-production",
+      "binance-testnet",
+    ]);
   } finally {
     await feed.close();
   }
@@ -209,11 +199,7 @@ test.fixme("disconnected startup: broker dialog shows two profiles, no Paper Tra
 // 2. Rejected trading while disconnected
 // ---------------------------------------------------------------------------
 
-// fixme: the browser cannot resolve the `@/lib/trading/dispatch` alias inside
-// page.evaluate (webpack resolves aliases at build time), and the UI renders no
-// order control while disconnected. The dispatcher's not_connected gate is
-// covered by tests/trading-tests/disconnected-behavior.test.ts.
-test.fixme("dispatch rejects order when disconnected (server returns not_connected)", async ({
+test("order submission while disconnected is rejected with 409 not_connected", async ({
   page,
 }) => {
   const feed = new FakeBinanceFeed(8787);
@@ -223,21 +209,25 @@ test.fixme("dispatch rejects order when disconnected (server returns not_connect
     await waitForKlineClient(feed);
     await broadcastPriceUntilLive(page, feed, 100);
 
-    // Verify that the dispatch layer rejects the order in the browser.
-    const result = await page.evaluate(async () => {
-      const { dispatchSubmitOrder } = await import("@/lib/trading/dispatch");
-      return dispatchSubmitOrder({
+    // Authenticated operator session (from the shared fixture login) + CSRF,
+    // yet no profile is attached: the server must reject the submission
+    // outright instead of attempting an exchange call.
+    const session = (await (await page.request.get("/api/auth/session")).json()) as {
+      csrf?: string;
+    };
+    const response = await page.request.post("/api/live/orders", {
+      headers: { "x-maws-csrf": session.csrf ?? "" },
+      data: {
         symbol: "BTCUSDT",
-        side: "buy",
-        type: "market",
-        price: 100,
-        qty: 0.001,
-        clientOrderId: "e2e-disconnected-test",
-      });
+        side: "BUY",
+        type: "MARKET",
+        qty: "0.001",
+        clientOrderId: "e2e-disconnected-order",
+      },
     });
 
-    expect(result.ok).toBe(false);
-    expect(result.error).toBe("not_connected");
+    expect(response.status()).toBe(409);
+    expect(await response.json()).toMatchObject({ error: { code: "not_connected" } });
   } finally {
     await feed.close();
   }
@@ -268,16 +258,6 @@ test("failed live profile phase keeps bottom panel hidden", async ({ page }) => 
         },
       }),
     );
-    // Stub session as authenticated testnet.
-    await page.route("**/api/auth/session", (route) =>
-      route.fulfill({
-        json: {
-          authenticated: true,
-          env: "testnet",
-          csrf: "test-csrf",
-        },
-      }),
-    );
 
     await page.goto("/");
     await waitForKlineClient(feed);
@@ -304,18 +284,6 @@ test("controlled fixture: ready Testnet profile shows connected state and bottom
   const feed = new FakeBinanceFeed(8787);
   try {
     await stubRest(page);
-
-    // Stub the session endpoint to report authenticated testnet.
-    await page.route("**/api/auth/session", (route) =>
-      route.fulfill({
-        json: {
-          authenticated: true,
-          env: "testnet",
-          envLabel: "Binance USD-M Futures Testnet",
-          csrf: "test-csrf-token",
-        },
-      }),
-    );
 
     // Stub the profile status to return a ready Testnet profile.
     const readyStatus = {
@@ -392,18 +360,9 @@ test("switching from Testnet to Production goes through exposure and mutation ch
   try {
     await stubRest(page);
 
-    // Deliberately unauthenticated: an authenticated testnet session against
-    // this local-env server makes the app reload itself before the page can
-    // settle, and the switch contract below is served by the route stub, so no
-    // real session is needed.
-    await page.route("**/api/auth/session", (route) =>
-      route.fulfill({
-        json: { authenticated: false, env: "local" },
-      }),
-    );
-
-    // Stub the profile switch to simulate an exposure_present rejection —
-    // the server must block a switch when positions are open.
+    // The operator session is real (shared fixture login); the profile switch
+    // itself is stubbed to simulate an exposure_present rejection — the server
+    // must block a switch when positions are open.
     await page.route("**/api/live/profile/switch", (route) =>
       route.fulfill({
         status: 409,

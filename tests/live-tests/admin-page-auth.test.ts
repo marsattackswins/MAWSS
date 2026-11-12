@@ -1,12 +1,12 @@
 import { describe, test, expect, beforeEach } from "@jest/globals";
 import { isAdminPageAuthorized, isOperatorPageAuthorized } from "@/lib/server/auth/page-guard";
-import { createSession, revokeSession, sessionCookieName, SESSION_TTL_MS } from "@/lib/server/auth/session";
+import { createSession, revokeSession, sessionCookieName } from "@/lib/server/auth/session";
 import { secureCookieContext } from "@/lib/server/http/guards";
 import { freshEnv, makeCfg } from "./helpers";
 
 // The shared operator-page guard is exercised for every page that renders
-// operator content (main terminal AND admin dashboard). Both entry points
-// must agree on local-anonymous / non-local-session semantics.
+// operator content (main terminal AND admin dashboard). Every supported
+// environment requires a valid session; there is no local-anonymous mode.
 const GUARDS = [
   { name: "isOperatorPageAuthorized", check: isOperatorPageAuthorized },
   { name: "isAdminPageAuthorized (deprecated alias)", check: isAdminPageAuthorized },
@@ -19,18 +19,17 @@ describe("operator page authorization", () => {
 
   for (const { name, check } of GUARDS) {
     describe(name, () => {
-      test("local env allows access without session", () => {
-        const localCfg = makeCfg({ env: "local" });
-        freshEnv(localCfg);
+      test("no environment allows access without a session", () => {
+        freshEnv(makeCfg());
 
         // No cookie header at all
-        expect(check(null)).toBe(true);
+        expect(check(null)).toBe(false);
 
         // Empty cookie header
-        expect(check("")).toBe(true);
+        expect(check("")).toBe(false);
       });
 
-      test("non-local env with valid session allows access", () => {
+      test("testnet env with valid session allows access", () => {
         const testCfg = makeCfg(); // defaults to testnet
         freshEnv(testCfg);
 
@@ -41,7 +40,7 @@ describe("operator page authorization", () => {
         expect(check(cookieHeader)).toBe(true);
       });
 
-      test("non-local env without session denies access", () => {
+      test("testnet env without session denies access", () => {
         const testCfg = makeCfg();
         freshEnv(testCfg);
 
@@ -52,22 +51,16 @@ describe("operator page authorization", () => {
         expect(check("")).toBe(false);
       });
 
-      test("local env /status page allows anonymous access (no session required)", () => {
-        // This test verifies the auth gate for /status specifically
-        const localCfg = makeCfg({ env: "local" });
-        freshEnv(localCfg);
+      test("status page requires a session like every operator page", () => {
+        const testCfg = makeCfg();
+        freshEnv(testCfg);
 
-        // In local mode, no session is required
-        // The isOperatorPageAuthorized helper returns true for any cookie (or none)
-        expect(check(null)).toBe(true);
-        expect(check("")).toBe(true);
-        expect(check("random_cookie=value")).toBe(true);
-
-        // This means the /status page would render (not redirect to /login)
-        // when MAWS_ENV=local, even without any session cookie
+        expect(check(null)).toBe(false);
+        expect(check("")).toBe(false);
+        expect(check("random_cookie=value")).toBe(false);
       });
 
-      test("non-local env with revoked session denies access", () => {
+      test("testnet env with revoked session denies access", () => {
         const testCfg = makeCfg();
         freshEnv(testCfg);
 
@@ -86,7 +79,7 @@ describe("operator page authorization", () => {
         expect(check(cookieHeader)).toBe(false);
       });
 
-      test("non-local env with malformed session ID denies access", () => {
+      test("testnet env with malformed session ID denies access", () => {
         const testCfg = makeCfg();
         freshEnv(testCfg);
 
@@ -107,7 +100,7 @@ describe("operator page authorization", () => {
         }
       });
 
-      test("non-local env with wrong cookie name denies access", () => {
+      test("testnet env with wrong cookie name denies access", () => {
         const testCfg = makeCfg();
         freshEnv(testCfg);
 
@@ -155,7 +148,7 @@ describe("operator page authorization", () => {
         expect(check(`${cookieName}=${sessionId}`)).toBe(true);
       });
 
-      test("non-local production env requires valid session", () => {
+      test("production env requires a valid session", () => {
         const prodCfg = makeCfg({ env: "production" });
         freshEnv(prodCfg);
 
@@ -165,20 +158,6 @@ describe("operator page authorization", () => {
         // Valid session succeeds
         const { sessionId } = createSession("test-ua");
         const cookieName = sessionCookieName(secureCookieContext(prodCfg));
-        const cookieHeader = `${cookieName}=${sessionId}`;
-        expect(check(cookieHeader)).toBe(true);
-      });
-
-      test("non-local shadow env requires valid session", () => {
-        const shadowCfg = makeCfg({ env: "shadow" });
-        freshEnv(shadowCfg);
-
-        // No session fails
-        expect(check(null)).toBe(false);
-
-        // Valid session succeeds
-        const { sessionId } = createSession("test-ua");
-        const cookieName = sessionCookieName(secureCookieContext(shadowCfg));
         const cookieHeader = `${cookieName}=${sessionId}`;
         expect(check(cookieHeader)).toBe(true);
       });

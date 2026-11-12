@@ -82,39 +82,43 @@ describe("profile API", () => {
     expect((await confirmation.json()).error.code).toBe("production_confirmation_required");
   });
 
-  test("local Chart Only exposes safe metadata", async () => {
-    const localCfg = makeCfg({ env: "local", activeProfileId: null, binanceApiKey: null, binanceApiSecret: null });
-    freshEnv(localCfg);
+  test("disconnected base configuration exposes safe metadata", async () => {
+    const baseCfg = makeCfg({ activeProfileId: null, binanceApiKey: null, binanceApiSecret: null });
+    freshEnv(baseCfg);
+    session = createSession("profile-api-base-test");
 
-    const publicMetadata = await getProfiles(new Request("http://localhost:3000/api/live/profiles"));
+    const publicMetadata = await getProfiles(authenticatedRequest("/api/live/profiles"));
     expect(publicMetadata.status).toBe(200);
     expect((await publicMetadata.json()).profiles).toHaveLength(2);
   });
 
-  test.each(["binance-testnet", "binance-production"] as const)(
-    "local Chart Only rejects switching to %s at the route",
-    async (profileId) => {
-      const localCfg = makeCfg({ env: "local", activeProfileId: null, binanceApiKey: null, binanceApiSecret: null });
-      freshEnv(localCfg);
-      session = createSession("profile-api-local-test");
-      const switchSpy = jest.spyOn(profileCoordinator(), "switchProfile");
+  test("disconnected base configuration attaches through the route", async () => {
+    const baseCfg = makeCfg({ activeProfileId: null, binanceApiKey: null, binanceApiSecret: null });
+    freshEnv(baseCfg);
+    session = createSession("profile-api-base-attach-test");
+    const switchSpy = jest.spyOn(profileCoordinator(), "switchProfile").mockResolvedValue({
+      profileId: "binance-testnet",
+      environment: "testnet",
+      phase: "ready",
+      ready: true,
+      managerStatus: "ready",
+      streamHealthy: true,
+      executionAllowed: false,
+      generation: 1,
+      reasonCode: null,
+    });
 
-      const response = await switchProfile(authenticatedRequest("/api/live/profile/switch", {
-        method: "POST",
-        body: JSON.stringify({ profileId, confirmProduction: true }),
-        headers: { "content-type": "application/json" },
-      }, session.csrfToken));
+    const response = await switchProfile(authenticatedRequest("/api/live/profile/switch", {
+      method: "POST",
+      body: JSON.stringify({ profileId: "binance-testnet" }),
+      headers: { "content-type": "application/json" },
+    }, session.csrfToken));
 
-      expect(response.status).toBe(403);
-      expect((await response.json()).error).toMatchObject({
-        code: "local_profile_switch_disabled",
-        message: expect.stringContaining("Chart Only"),
-      });
-      expect(switchSpy).not.toHaveBeenCalled();
-    },
-  );
+    expect(response.status).toBe(200);
+    expect(switchSpy).toHaveBeenCalledWith({ profileId: "binance-testnet" });
+  });
 
-  test("non-local profile API continues to allow a configured profile switch", async () => {
+  test("profile API delegates a configured profile switch to the coordinator", async () => {
     const switchSpy = jest.spyOn(profileCoordinator(), "switchProfile").mockResolvedValue({
       profileId: "binance-testnet",
       environment: "testnet",
@@ -170,7 +174,7 @@ describe("profile API", () => {
 
   test("returns no-store safe metadata and excludes internal profiles and secrets", async () => {
     const profiles = await getProfiles(authenticatedRequest("/api/live/profiles"));
-    expect(profiles.headers.get("cache-control")).toBe("no-store");
+    expect(profiles.headers.get("cache-control")).toBe("private, no-store");
     const profileBody = (await profiles.json()) as { profiles: Array<Record<string, unknown>> };
     expect(profileBody.profiles.map((profile) => profile.profileId)).toEqual([
       "binance-testnet",
@@ -181,7 +185,7 @@ describe("profile API", () => {
     expect(JSON.stringify(profileBody)).not.toContain("https://");
 
     const current = await getProfile(authenticatedRequest("/api/live/profile"));
-    expect(current.headers.get("cache-control")).toBe("no-store");
+    expect(current.headers.get("cache-control")).toBe("private, no-store");
     expect((await current.json()).phase).toBe("idle");
   });
 });

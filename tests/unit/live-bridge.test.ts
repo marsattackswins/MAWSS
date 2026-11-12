@@ -53,6 +53,22 @@ class FakeEventSource {
   close(): void {}
 }
 
+const READY_TESTNET: ProfileRuntimeStatusDto = {
+  profileId: "binance-testnet",
+  environment: "testnet",
+  phase: "ready",
+  ready: true,
+  managerStatus: "ready",
+  streamHealthy: true,
+  executionAllowed: true,
+  generation: 7,
+  reasonCode: null,
+};
+
+function emptyState() {
+  return { account: null, positions: [], orders: [], fills: [] };
+}
+
 describe("live broker attachment", () => {
   beforeEach(() => {
     (globalThis as unknown as { EventSource: typeof FakeEventSource }).EventSource = FakeEventSource;
@@ -88,8 +104,8 @@ describe("live broker attachment", () => {
     mockLiveApi.setGates.mockReset();
   });
 
-  test("local mode restores chart-only state without probing live profile APIs", async () => {
-    mockLiveApi.session.mockResolvedValue({ authenticated: true, csrf: "csrf", env: "local" });
+  test("an unauthenticated session detaches without probing live profile APIs", async () => {
+    mockLiveApi.session.mockResolvedValue({ authenticated: false });
 
     await restoreServerProfile();
 
@@ -98,38 +114,44 @@ describe("live broker attachment", () => {
     expect(useLiveStore.getState().attached).toBe(false);
   });
 
-  test("failed live connect clears the app broker and live state", async () => {
+  test("a failed attachment clears the app broker and live state", async () => {
     useAppStore.setState({ connectedBroker: "binance" });
     useLiveStore.setState({ attached: true, positions: [{ id: "p", symbol: "BTCUSDT" } as never] });
     mockLiveApi.session.mockResolvedValue({ authenticated: true, csrf: "csrf", env: "testnet" });
-    mockLiveApi.connect.mockRejectedValue(new Error("manager unavailable"));
+    mockLiveApi.switchProfile.mockRejectedValue(new Error("manager unavailable"));
+    mockLiveApi.profile.mockResolvedValue({
+      profileId: null,
+      environment: null,
+      phase: "idle",
+      ready: false,
+      managerStatus: "idle",
+      streamHealthy: null,
+      executionAllowed: false,
+      generation: 0,
+      reasonCode: null,
+    });
 
-    await expect(connectLiveBroker()).resolves.toBe("error");
+    await expect(connectLiveBroker("binance-testnet")).resolves.toBe("error");
 
     expect(useAppStore.getState().connectedBroker).toBeNull();
     expect(useLiveStore.getState().attached).toBe(false);
     expect(useLiveStore.getState().positions).toEqual([]);
-    expect(useLiveStore.getState().managerStatus).toBe("error");
+    expect(useLiveStore.getState().phase).toBe("idle");
   });
 
-  test("live is attached only after healthy server confirmation and state load", async () => {
+  test("a profile is attached only after healthy server confirmation and state load", async () => {
     mockLiveApi.session.mockResolvedValue({ authenticated: true, csrf: "csrf", env: "testnet" });
-    mockLiveApi.connect.mockResolvedValue({ ok: true, status: "ready" });
-    mockLiveApi.meta.mockResolvedValue({
-      env: "testnet",
-      envLabel: "Testnet",
-      connectedBroker: "binance",
-      managerStatus: "ready",
-      managerError: null,
-      execution: { canSubmit: true, reasons: [] },
-      health: { streamHealthy: true, managerReady: true },
-    });
-    mockLiveApi.state.mockResolvedValue({ account: null, positions: [], orders: [], fills: [] });
+    mockLiveApi.switchProfile.mockResolvedValue(READY_TESTNET);
+    mockLiveApi.profile.mockResolvedValue(READY_TESTNET);
+    mockLiveApi.state.mockResolvedValue(emptyState());
 
-    await expect(connectLiveBroker()).resolves.toBe("connected");
+    await expect(connectLiveBroker("binance-testnet")).resolves.toBe("connected");
 
     expect(useAppStore.getState().connectedBroker).toBe("binance");
     expect(useLiveStore.getState().attached).toBe(true);
+    expect(useLiveStore.getState().profileId).toBe("binance-testnet");
+    // Attachment never enables submissions on its own.
+    expect(mockLiveApi.setGates).not.toHaveBeenCalled();
   });
 
   test("disconnect detaches live and clears the app broker", async () => {
@@ -145,20 +167,9 @@ describe("live broker attachment", () => {
   });
 
   test("restores only a server-confirmed ready profile and opens its event stream", async () => {
-    const status = {
-      profileId: "binance-testnet",
-      environment: "testnet",
-      phase: "ready",
-      ready: true,
-      managerStatus: "ready",
-      streamHealthy: true,
-      executionAllowed: true,
-      generation: 7,
-      reasonCode: null,
-    };
     mockLiveApi.session.mockResolvedValue({ authenticated: true, csrf: "csrf", env: "testnet" });
-    mockLiveApi.profile.mockResolvedValue(status);
-    mockLiveApi.state.mockResolvedValue({ account: null, positions: [], orders: [], fills: [] });
+    mockLiveApi.profile.mockResolvedValue(READY_TESTNET);
+    mockLiveApi.state.mockResolvedValue(emptyState());
 
     await restoreServerProfile();
 
@@ -170,7 +181,7 @@ describe("live broker attachment", () => {
       phase: "ready",
     }));
     expect(FakeEventSource.instances).toHaveLength(1);
-    expect(mockLiveApi.setGates).toHaveBeenCalledWith({ executionEnabled: true });
+    expect(mockLiveApi.setGates).not.toHaveBeenCalled();
   });
 
   test("does not restore a stale binance claim when the server has no active profile", async () => {
@@ -195,20 +206,9 @@ describe("live broker attachment", () => {
   });
 
   test("ignores events from a fenced attachment", async () => {
-    const status = {
-      profileId: "binance-testnet",
-      environment: "testnet",
-      phase: "ready",
-      ready: true,
-      managerStatus: "ready",
-      streamHealthy: true,
-      executionAllowed: true,
-      generation: 3,
-      reasonCode: null,
-    };
     mockLiveApi.session.mockResolvedValue({ authenticated: true, csrf: "csrf", env: "testnet" });
-    mockLiveApi.profile.mockResolvedValue(status);
-    mockLiveApi.state.mockResolvedValue({ account: null, positions: [], orders: [], fills: [] });
+    mockLiveApi.profile.mockResolvedValue({ ...READY_TESTNET, generation: 3 });
+    mockLiveApi.state.mockResolvedValue(emptyState());
 
     await restoreServerProfile();
     const source = FakeEventSource.instances[0];
@@ -221,17 +221,7 @@ describe("live broker attachment", () => {
   });
 
   test("keeps the confirmed profile visible while switching and sends only the typed target", async () => {
-    const previous: ProfileRuntimeStatusDto = {
-      profileId: "binance-testnet",
-      environment: "testnet",
-      phase: "ready",
-      ready: true,
-      managerStatus: "ready",
-      streamHealthy: true,
-      executionAllowed: true,
-      generation: 3,
-      reasonCode: null,
-    };
+    const previous: ProfileRuntimeStatusDto = { ...READY_TESTNET, generation: 3 };
     const target: ProfileRuntimeStatusDto = { ...previous, profileId: "binance-production", environment: "production", generation: 4 };
     let resolveSwitch: (value: unknown) => void = () => undefined;
     const switchPromise = new Promise<unknown>((resolve) => {
@@ -240,7 +230,7 @@ describe("live broker attachment", () => {
     mockLiveApi.session.mockResolvedValue({ authenticated: true, csrf: "csrf", env: "testnet" });
     mockLiveApi.profile.mockResolvedValue(target);
     mockLiveApi.switchProfile.mockReturnValue(switchPromise);
-    mockLiveApi.state.mockResolvedValue({ account: null, positions: [], orders: [], fills: [] });
+    mockLiveApi.state.mockResolvedValue(emptyState());
     useLiveStore.getState().setProfileRuntime(previous);
     useLiveStore.getState().setAttached(true);
     useAppStore.setState({ connectedBroker: "binance" });

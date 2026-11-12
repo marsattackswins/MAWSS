@@ -148,7 +148,7 @@ describe("/api/admin/config", () => {
         },
       });
 
-      const res = await GET(req as any);
+      const res = await GET(req as never);
       expect(res.status).toBe(200);
 
       const data = await res.json();
@@ -168,7 +168,7 @@ describe("/api/admin/config", () => {
         },
       });
 
-      const res = await GET(req as any);
+      const res = await GET(req as never);
       const data = await res.json();
 
       // Check that descriptions object exists and has entries
@@ -191,7 +191,7 @@ describe("/api/admin/config", () => {
         },
       });
 
-      const res = await GET(req as any);
+      const res = await GET(req as never);
       const data = await res.json();
 
       expect(data.host).toHaveProperty("rest");
@@ -211,10 +211,11 @@ describe("/api/admin/config", () => {
         },
       });
 
-      const res = await GET(req as any);
+      const res = await GET(req as never);
       const data = await res.json();
 
-      expect(data.config.binanceApiKey).toBe("[REDACTED]");
+      expect(data.config).not.toHaveProperty("binanceApiKey");
+      expect(JSON.stringify(data)).not.toContain("test-api-key-12345");
     });
 
     test("profile metadata contains no credential fields", async () => {
@@ -227,7 +228,7 @@ describe("/api/admin/config", () => {
         },
       });
 
-      const res = await GET(req as any);
+      const res = await GET(req as never);
       const data = await res.json();
       const serialized = JSON.stringify(data.profileMetadata);
 
@@ -251,10 +252,11 @@ describe("/api/admin/config", () => {
         },
       });
 
-      const res = await GET(req as any);
+      const res = await GET(req as never);
       const data = await res.json();
 
-      expect(data.config.binanceApiSecret).toBe("[REDACTED]");
+      expect(data.config).not.toHaveProperty("binanceApiSecret");
+      expect(JSON.stringify(data)).not.toContain("test-api-secret-67890");
     });
 
     test("redacts healthToken", async () => {
@@ -267,10 +269,11 @@ describe("/api/admin/config", () => {
         },
       });
 
-      const res = await GET(req as any);
+      const res = await GET(req as never);
       const data = await res.json();
 
-      expect(data.config.healthToken).toBe("[REDACTED]");
+      expect(data.config).not.toHaveProperty("healthToken");
+      expect(JSON.stringify(data)).not.toContain("test-health-token-secret");
     });
 
     test("redacts backupKey (Buffer)", async () => {
@@ -283,10 +286,11 @@ describe("/api/admin/config", () => {
         },
       });
 
-      const res = await GET(req as any);
+      const res = await GET(req as never);
       const data = await res.json();
 
-      expect(data.config.backupKey).toBe("[REDACTED]");
+      expect(data.config).not.toHaveProperty("backupKey");
+      expect(JSON.stringify(data)).not.toContain("test-backup-key");
     });
 
     test("redacts alertWebhookUrl (contains 'webhook' which matches pattern)", async () => {
@@ -299,7 +303,7 @@ describe("/api/admin/config", () => {
         },
       });
 
-      const res = await GET(req as any);
+      const res = await GET(req as never);
       const data = await res.json();
 
       // Note: 'alertWebhookUrl' contains 'webhook' but not the sensitive pattern
@@ -319,7 +323,7 @@ describe("/api/admin/config", () => {
         },
       });
 
-      const res = await GET(req as any);
+      const res = await GET(req as never);
       const data = await res.json();
 
       // These should NOT be redacted
@@ -345,7 +349,7 @@ describe("/api/admin/config", () => {
         method: "GET",
       });
 
-      const res = await GET(req as any);
+      const res = await GET(req as never);
       expect(res.status).toBe(401);
     });
 
@@ -364,7 +368,7 @@ describe("/api/admin/config", () => {
         },
       });
 
-      const res = await GET(req as any);
+      const res = await GET(req as never);
       expect(res.status).toBe(200);
 
       // Reset mock

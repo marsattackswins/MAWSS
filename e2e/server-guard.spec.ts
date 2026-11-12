@@ -21,11 +21,13 @@ function guardLog(): string {
   }
 }
 
-test("server network guard blocks the app's own Binance proxy call", async ({ request }) => {
-  // /api/binance/ticker fetches fapi.binance.com from the server process. With
-  // the guard loaded the upstream call is blocked, so the route answers with its
-  // generic upstream failure (502) rather than live market data.
-  const response = await request.get("/api/binance/ticker?symbol=BTCUSDT");
+test("server network guard blocks the app's own Binance proxy call", async ({ page }) => {
+  // /api/binance/ticker fetches fapi.binance.com from the server process. The
+  // shared fixture has logged the operator in (the proxy route requires a
+  // session), so the request reaches the route handler; with the guard loaded
+  // the upstream call is blocked, so the route answers with its generic
+  // upstream failure (502) rather than live market data.
+  const response = await page.request.get("/api/binance/ticker?symbol=BTCUSDT");
   expect(response.status()).toBe(502);
   expect(await response.json()).toEqual({ error: "Upstream service unavailable" });
 

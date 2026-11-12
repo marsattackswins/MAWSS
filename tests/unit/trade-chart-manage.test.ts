@@ -23,6 +23,7 @@ import {
   dispatchReversePosition,
 } from "@/lib/trading/dispatch";
 import { useAppStore } from "@/lib/store";
+import { useLiveStore } from "@/lib/live/store";
 import { liveApi } from "@/lib/live/api";
 import { DEFAULT_CHART_SETTINGS } from "@/types";
 
@@ -38,6 +39,7 @@ beforeEach(() => {
   useAppStore.setState({
     connectedBroker: null,
   });
+  useLiveStore.setState({ attached: false, profileId: null });
 });
 
 afterEach(() => {
@@ -87,11 +89,15 @@ describe("clampCloseFraction", () => {
 
 describe("dispatchClosePositionFraction", () => {
   test("partial close is not available for live accounts", async () => {
+    useAppStore.setState({ connectedBroker: "binance" });
+    useLiveStore.setState({ attached: true, profileId: "binance-testnet", environment: "testnet" });
     const result = await dispatchClosePositionFraction("BTCUSDT", 0.25);
     expect(result).toEqual({ ok: false, error: "partial_close_unavailable" });
   });
 
   test("a zero fraction is also rejected as unavailable", async () => {
+    useAppStore.setState({ connectedBroker: "binance" });
+    useLiveStore.setState({ attached: true, profileId: "binance-testnet", environment: "testnet" });
     const result = await dispatchClosePositionFraction("BTCUSDT", 0);
     expect(result).toEqual({ ok: false, error: "partial_close_unavailable" });
   });
@@ -109,7 +115,7 @@ describe("dispatchReversePosition", () => {
       qty: 2,
     });
     expect(result.ok).toBe(false);
-    expect(result.error).toBe("Reverse is disabled. Close the position, then open the opposite side.");
+    expect(result.error).toBe("not_connected");
     expect(close).not.toHaveBeenCalled();
     expect(submit).not.toHaveBeenCalled();
     expect(reverse).not.toHaveBeenCalled();
@@ -117,6 +123,19 @@ describe("dispatchReversePosition", () => {
 
   test("a connected reverse uses only the dedicated reverse endpoint", async () => {
     useAppStore.setState({ connectedBroker: "binance" });
+    useLiveStore.setState({
+      attached: true,
+      profileId: "binance-testnet",
+      environment: "testnet",
+      phase: "ready",
+      ready: true,
+      executionAllowed: true,
+      health: {
+        submissionsFrozen: false,
+        frozenReasons: [],
+        execution: { killSwitch: false, frozen: false, canSubmit: true, reasons: [] },
+      } as never,
+    });
     const close = jest.spyOn(liveApi, "closePosition");
     const submit = jest.spyOn(liveApi, "submitOrder");
     const reverse = jest.spyOn(liveApi, "reversePosition").mockResolvedValue({

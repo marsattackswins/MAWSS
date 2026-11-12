@@ -1710,11 +1710,11 @@ describe("execution gates inside OrderService", () => {
     expect(res.error).toContain("drift");
   });
 
-  test("shadow env can never submit", async () => {
-    const h = setup({ env: "shadow" });
+  test("a detached profile can never submit", async () => {
+    const h = setup({ activeProfileId: null, binanceApiKey: null, binanceApiSecret: null });
     const res = await h.svc.submitOrder({ symbol: "BTCUSDT", side: "BUY", type: "MARKET", qty: "0.001", clientOrderId: "sh1" });
     expect(res.ok).toBe(false);
-    expect(res.error).toContain("shadow mode is read-only");
+    expect(res.error).toMatch(/credentials are not configured/i);
   });
 
 });

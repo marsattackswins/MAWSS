@@ -31,10 +31,12 @@ cp .env.example .env
 # For local development, you can use defaults
 ```
 
-**Local Development Defaults**:
-- `MAWS_ENV=local` starts in Chart Only with no active broker profile
-- No credentials are needed for charting
-- Add separate Testnet/Production profile credentials and `MAWS_OPERATOR_AUTH` only when attaching Binance from the UI
+**Development Defaults**:
+- `MAWS_ENV=testnet` is the default; `production` is the only other accepted value
+- The server always starts Disconnected — startup never attaches a profile
+- `MAWS_OPERATOR_AUTH` is required in every mode; charting is available after sign-in
+- `npm run dev -- --throwaway` starts a scratch database with a random password printed once and refuses to start when any Live credential is configured
+- Add profile credentials only when you intend to attach that profile
 - Keep all broker credentials server-side; never use a `NEXT_PUBLIC_` prefix
 
 ### Running Development Server

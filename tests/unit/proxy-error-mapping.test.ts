@@ -4,16 +4,14 @@ import { GET as tickerGET } from "@/app/api/binance/ticker/route";
 import { GET as symbolsGET } from "@/app/api/binance/symbols/route";
 import { GET as xoomarGET } from "@/app/api/calendar/xoomar/route";
 import type { NextRequest } from "next/server";
+import { serverConfig } from "@/lib/server/env/config";
+import { createSession, sessionCookieName } from "@/lib/server/auth/session";
+import { secureCookieContext } from "@/lib/server/http/guards";
 
 /**
  * Focused tests for safe upstream error mapping.
  * Ensures provider error bodies and network error messages are never exposed to clients.
  */
-
-// Mock server config to bypass auth
-jest.mock("@/lib/server/env/config", () => ({
-  serverConfig: jest.fn(() => ({ env: "local" })),
-}));
 
 // Mock fetch to control upstream responses
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -24,7 +22,20 @@ beforeAll(() => {
   (global as any).fetch = mockFetch;
 });
 
+/** Proxy routes require an authenticated operator session. */
+function operatorCookie(): string {
+  const { sessionId } = createSession("proxy-error-mapping");
+  return `${sessionCookieName(secureCookieContext(serverConfig()))}=${sessionId}`;
+}
+
 function makeRequest(url: string): NextRequest {
+  return {
+    nextUrl: new URL(url),
+    headers: new Headers({ cookie: operatorCookie() }),
+  } as unknown as NextRequest;
+}
+
+function anonymousRequest(url: string): NextRequest {
   return {
     nextUrl: new URL(url),
     headers: new Headers(),
@@ -43,6 +54,23 @@ describe("Proxy Error Mapping", () => {
   afterEach(() => {
     jest.clearAllMocks();
     dateNowSpy.mockRestore();
+  });
+
+  describe("authentication", () => {
+    test("all four proxy routes reject unauthenticated requests with 401", async () => {
+      const routes = [
+        ["klines", klinesGET, "http://localhost:3000/api/binance/klines?symbol=BTCUSDT&interval=15m"],
+        ["ticker", tickerGET, "http://localhost:3000/api/binance/ticker?symbol=BTCUSDT"],
+        ["symbols", symbolsGET, "http://localhost:3000/api/binance/symbols"],
+        ["xoomar", xoomarGET, "http://localhost:3000/api/calendar/xoomar?from=2025-06-15&to=2025-06-21"],
+      ] as const;
+      for (const [label, handler, url] of routes) {
+        const res = await handler(anonymousRequest(url));
+        expect(res.status).toBe(401);
+        expect(await res.json()).toMatchObject({ error: { code: "unauthenticated" } });
+        expect(mockFetch).not.toHaveBeenCalled();
+      }
+    });
   });
 
   describe("binance/klines", () => {
@@ -224,7 +252,7 @@ describe("Proxy Error Mapping", () => {
         }),
       });
 
-      const res = await symbolsGET();
+      const res = await symbolsGET(makeRequest("http://localhost:3000/api/binance/symbols"));
       expect(res.status).toBe(429);
 
       const body = await res.json();
@@ -240,7 +268,7 @@ describe("Proxy Error Mapping", () => {
         text: async () => JSON.stringify({ code: -1000, msg: "Server error" }),
       });
 
-      const res = await symbolsGET();
+      const res = await symbolsGET(makeRequest("http://localhost:3000/api/binance/symbols"));
       expect(res.status).toBe(502);
 
       const body = await res.json();
@@ -257,7 +285,7 @@ describe("Proxy Error Mapping", () => {
         },
       });
 
-      const res = await symbolsGET();
+      const res = await symbolsGET(makeRequest("http://localhost:3000/api/binance/symbols"));
       expect(res.status).toBe(502);
 
       const body = await res.json();
@@ -269,7 +297,7 @@ describe("Proxy Error Mapping", () => {
     test("network error returns generic 502 body without err.message", async () => {
       mockFetch.mockRejectedValue(new Error("socket hang up"));
 
-      const res = await symbolsGET();
+      const res = await symbolsGET(makeRequest("http://localhost:3000/api/binance/symbols"));
       expect(res.status).toBe(502);
 
       const body = await res.json();
@@ -298,7 +326,7 @@ describe("Proxy Error Mapping", () => {
         json: async () => exchangeInfo,
       });
 
-      const res = await symbolsGET();
+      const res = await symbolsGET(makeRequest("http://localhost:3000/api/binance/symbols"));
       expect(res.status).toBe(200);
 
       const body = await res.json();

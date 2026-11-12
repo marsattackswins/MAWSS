@@ -10,12 +10,12 @@ import { freshEnv, makeCfg, installFakes, FakeHttp, jsonRes, BTCUSDT_INFO } from
 /**
  * Clock-degraded regression (#status showed clock degraded mid-session):
  *
- * In local mode the manager synced the exchange clock exactly once at
- * startup. `clockIsHealthy` goes stale after CLOCK_STALE_MS (5 minutes), so
- * every session longer than five minutes flipped /status to "clock degraded"
- * even though the machine's clock was fine — and nothing ever resynced.
+ * The manager used to sync the exchange clock exactly once at startup.
+ * `clockIsHealthy` goes stale after CLOCK_STALE_MS (5 minutes), so every
+ * session longer than five minutes flipped /status to "clock degraded" even
+ * though the machine's clock was fine — and nothing ever resynced.
  *
- * The fix: local mode runs a periodic clock refresh + market-data probe.
+ * The fix: every attached manager runs a periodic clock refresh + probe.
  * These tests drive the real manager against the in-memory testnet and
  * verify (a) the refresh fires on the interval, (b) a flaky probe does not
  * mark the broker in error, and (c) the health rollup goes degraded when the
@@ -28,20 +28,34 @@ const flush = async () => {
 
 let http: FakeHttp;
 
-function startLocalManager(): BinanceLiveManager {
-  const cfg = freshEnv(makeCfg({ env: "local" }));
+function startManager(): BinanceLiveManager {
+  const cfg = freshEnv(makeCfg({ env: "testnet" }));
   http = new FakeHttp();
   installFakes(http);
   http.route("/fapi/v1/time", () => jsonRes({ serverTime: Date.now() }));
   http.route("/fapi/v1/exchangeInfo", () => jsonRes({ symbols: [BTCUSDT_INFO] }));
   http.route("/fapi/v1/ticker/price", () => jsonRes({ symbol: "BTCUSDT", price: "50000" }));
+  http.route("/fapi/v2/account", () => jsonRes({
+    totalWalletBalance: "1000",
+    totalUnrealizedProfit: "0",
+    totalMarginBalance: "1000",
+    availableBalance: "1000",
+    maxWithdrawAmount: "1000",
+    assets: [],
+  }));
+  http.route("/fapi/v2/positionRisk", () => jsonRes([]));
+  http.route("/fapi/v1/openOrders", () => jsonRes([]));
+  http.route("/fapi/v1/listenKey", () => jsonRes({ listenKey: "CLOCK-LK" }));
+  http.route("/fapi/v1/leverageBracket", () => jsonRes([]));
+  http.route("/fapi/v1/userTrades", () => jsonRes([]));
+  http.route("/fapi/v1/income", () => jsonRes([]));
 
   const manager = new BinanceLiveManager(cfg);
   resetLiveManagerForTests(manager);
   return manager;
 }
 
-describe("local-mode clock refresh (health staleness regression)", () => {
+describe("attached-manager clock refresh (health staleness regression)", () => {
   beforeEach(() => {
     resetClockForTests();
     resetHealthSignalsForTests();
@@ -52,19 +66,19 @@ describe("local-mode clock refresh (health staleness regression)", () => {
     jest.useRealTimers();
   });
 
-  test("chart-only local mode is healthy without a trading manager", () => {
-    const cfg = freshEnv(makeCfg({ env: "local", activeProfileId: null }));
+  test("a detached server reports unhealthy trading components without a manager", () => {
+    const cfg = freshEnv(makeCfg({ env: "testnet", activeProfileId: null }));
     resetHealthSignalsForTests();
     const health = buildHealthStatus(cfg);
 
-    expect(health.healthy).toBe(true);
+    expect(health.healthy).toBe(false);
     expect(health.brokerConnected).toBe(false);
     expect(health.clockHealthy).toBe(false);
     expect(health.streamHealthy).toBe(false);
   });
 
   test("startup syncs the clock once, then the periodic refresh keeps it fresh", async () => {
-    const manager = startLocalManager();
+    const manager = startManager();
     const startPromise = manager.ensureStarted();
     await jest.advanceTimersByTimeAsync(0);
     await startPromise;
@@ -92,7 +106,7 @@ describe("local-mode clock refresh (health staleness regression)", () => {
   });
 
   test("a flaky market-data probe does not flip brokerStatus to error", async () => {
-    const manager = startLocalManager();
+    const manager = startManager();
     const startPromise = manager.ensureStarted();
     await jest.advanceTimersByTimeAsync(0);
     await startPromise;
@@ -113,7 +127,7 @@ describe("local-mode clock refresh (health staleness regression)", () => {
   });
 
   test("health rollup degrades when the clock is truly stale and recovers on resync", async () => {
-    const manager = startLocalManager();
+    const manager = startManager();
     const startPromise = manager.ensureStarted();
     await jest.advanceTimersByTimeAsync(0);
     await startPromise;
@@ -132,7 +146,7 @@ describe("local-mode clock refresh (health staleness regression)", () => {
   });
 
   test("clock sync persists samples and updates the health signal", async () => {
-    const manager = startLocalManager();
+    const manager = startManager();
     const startPromise = manager.ensureStarted();
     await jest.advanceTimersByTimeAsync(0);
     await startPromise;
@@ -143,7 +157,7 @@ describe("local-mode clock refresh (health staleness regression)", () => {
     expect(Number.isFinite(st.offsetMs)).toBe(true);
 
     const row = getDb()
-      .prepare(`SELECT offset_ms, samples FROM exchange_clock WHERE profile_id = 'paper' AND id = 1`)
+      .prepare(`SELECT offset_ms, samples FROM exchange_clock WHERE profile_id = 'binance-testnet' AND id = 1`)
       .get() as { offset_ms: number; samples: number } | undefined;
     expect(row).toBeDefined();
 

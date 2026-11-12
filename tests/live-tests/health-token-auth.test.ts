@@ -1,5 +1,7 @@
 import { describe, test, expect, beforeEach } from "@jest/globals";
 import { compareSecretTokens } from "@/lib/server/auth/token";
+import { createSession, sessionCookieName } from "@/lib/server/auth/session";
+import { secureCookieContext } from "@/lib/server/http/guards";
 import { freshEnv, makeCfg } from "./helpers";
 import { saveProtectionIntent, setProtectionStatus } from "@/lib/server/binance/protection";
 import { liveState } from "@/lib/server/binance/state";
@@ -44,16 +46,19 @@ describe("health token authentication", () => {
 
   describe("route-level health token behavior", () => {
     test("health endpoint reports unprotected positions", async () => {
-      freshEnv(makeCfg({ env: "local" }));
+      const cfg = freshEnv(makeCfg({ env: "testnet", activeProfileId: null }));
       liveState().positions.set("BTCUSDT", {
         symbol: "BTCUSDT", side: "long", qty: "0.001", entryPrice: "50000", markPrice: "50000",
         unrealizedProfit: "0", leverage: "1", liquidationPrice: "0", notional: "50", updatedAt: Date.now(),
       });
       saveProtectionIntent({ symbol: "BTCUSDT", side: "long", tpPrice: "52000", slPrice: "48000" });
       setProtectionStatus("BTCUSDT", "UNPROTECTED", "protective order missing");
+      const { sessionId } = createSession("health-session");
       const { GET } = await import("@/app/api/health/route");
 
-      const response = await GET(new Request("http://localhost:3000/api/health"));
+      const response = await GET(new Request("http://localhost:3000/api/health", {
+        headers: { cookie: `${sessionCookieName(secureCookieContext(cfg))}=${sessionId}` },
+      }));
       const body = await response.json();
 
       expect(response.status).toBe(200);

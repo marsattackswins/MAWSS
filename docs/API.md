@@ -4,11 +4,13 @@ Complete API endpoint documentation for MAWS (Market Analysis & Workflow System)
 
 ## Authentication
 
-Protected API endpoints require authentication via:
-- **Session Cookie**: `maws_session` HTTP-only cookie set by login
-- **Health Token**: `x-maws-health-token` header for health/admin endpoints
+Operator APIs require a valid session cookie set by real login, regardless of trading mode or attachment. Mutating requests additionally require CSRF and Origin/Host checks. Expired, revoked, or fabricated cookies do not authorize access.
 
-Local Chart Only can read safe profile metadata without a session. Selecting a Binance profile and all live profile/state/mutation routes still require an authenticated operator session; mutating requests also require CSRF and origin checks.
+The only anonymous operational endpoint is `GET /api/liveness`, returning exactly `{"status":"ok"}` without configuration, environment, database, or broker side effects. Login and minimal unauthenticated session bootstrap remain accessible so an operator can sign in.
+
+Explicitly configured `x-maws-health-token` authentication is limited to documented sanitized monitoring endpoints. A separate `x-maws-emergency-token` authorizes only emergency flatten; neither token grants general operator or public-data proxy access.
+
+There are exactly two trading modes: **Testnet** and **Live**. **Disconnected** means no attachment, represented by null profile/environment. Startup, login, hydration, and health reads never attach either profile.
 
 ## Response Format
 
@@ -34,6 +36,8 @@ All endpoints return JSON with the following structure:
 | Code | HTTP Status | Description |
 |------|-------------|-------------|
 | `bad_request` | 400 | Invalid request body or parameters |
+| `not_connected` | 409 | No profile is attached; orders and emergency flatten are rejected before broker access |
+| `unauthenticated` | 401 | A valid operator session is required |
 | `bad_credentials` | 401 | Invalid operator password |
 | `forbidden` | 403 | Origin/host rejected or insufficient permissions |
 | `rate_limited` | 429 | Too many requests |
@@ -68,7 +72,7 @@ Authenticate with operator credentials and create a session.
 **Headers**: Sets `maws_session` cookie
 
 **Error Responses**:
-- `403` - Operator authentication is not configured for local Binance profile access
+- `503` - Operator authentication or server configuration is invalid
 - `401` - Invalid operator password
 - `429` - Too many login attempts
 
@@ -83,20 +87,11 @@ curl -X POST http://localhost:3000/api/auth/login \
 
 ### GET /api/auth/session
 
-Get current session information.
+Get current session information. Without a valid session, the response is only `{"authenticated":false}`; this bootstrap does not disclose runtime details or create a session.
 
-**Authentication**: Required (session cookie)
+**Authentication**: Required for authenticated details, not minimal bootstrap.
 
-**Response** (200 OK):
-```json
-{
-  "authenticated": true,
-  "sessionId": "string"
-}
-```
-
-**Error Responses**:
-- `401` - Invalid or expired session
+An authenticated response includes the CSRF token and server-confirmed attachment state. It never returns the session cookie value, API credentials, or password verifier. With no attachment, profile/environment are null. Reading the session does not attach a broker or enable execution.
 
 ---
 
@@ -138,7 +133,7 @@ Revoke all operator sessions (emergency logout).
 
 Return safe metadata for the available trading profiles. Credentials, endpoints, and other secrets are never returned.
 
-**Authentication**: Not required in local Chart Only; required in other environments
+**Authentication**: Required (session cookie)
 
 **Response** (200 OK):
 ```json
@@ -146,7 +141,7 @@ Return safe metadata for the available trading profiles. Credentials, endpoints,
   "profiles": [
     {
       "profileId": "binance-testnet",
-      "label": "Binance Testnet",
+      "label": "Testnet",
       "environment": "testnet",
       "configured": true,
       "requiresProductionConfirmation": false,
@@ -154,7 +149,7 @@ Return safe metadata for the available trading profiles. Credentials, endpoints,
     },
     {
       "profileId": "binance-production",
-      "label": "Binance Live",
+      "label": "Live",
       "environment": "production",
       "configured": true,
       "requiresProductionConfirmation": true,
@@ -172,7 +167,7 @@ Return the server-confirmed active profile and readiness state.
 
 **Authentication**: Required (session cookie)
 
-The response identifies Chart Only with `profileId: null`. It does not expose credentials.
+The response identifies Disconnected with `profileId: null`. It does not expose credentials.
 
 ---
 
@@ -661,7 +656,7 @@ curl -H "x-maws-health-token: your-token" \
 
 Reports application power status. The app is always running when this endpoint responds; `desired` reflects what the supervisor should do (written to `.maws/app-state.json`).
 
-**Authentication**: Required (session cookie OR supervisor token) — anonymous in local mode
+**Authentication**: Required (session cookie OR supervisor token)
 
 **Response** (200 OK):
 ```json
@@ -678,10 +673,10 @@ Reports application power status. The app is always running when this endpoint r
 
 Stop the application. Requires `{"confirm":"STOP"}`. Writes `desired=off` for the supervisor, audit-logs `app.stop`, then runs the same graceful shutdown as Ctrl+C (stream-lease release + DB checkpoint) before the process exits.
 
-- **Operator calls** (session + CSRF header, or anonymous in local mode with origin binding) flip the desired state and audit.
+- **Operator calls** (session + CSRF header) flip the desired state and audit.
 - **Supervisor calls** (`x-maws-supervisor-token` header) perform graceful teardown only — they never change desired state. The supervisor uses this on Ctrl+C because Windows cannot deliver signals to a child process.
 
-**Authentication**: Required (session cookie OR supervisor token) — anonymous in local mode
+**Authentication**: Required (session cookie OR supervisor token)
 
 **Request**:
 ```json
@@ -705,7 +700,7 @@ After stopping, restart from the supervisor control page (`http://127.0.0.1:3001
 
 Get the most recent server terminal output (stdout/stderr) captured in memory by the running process. This is the same text the `npm start` / `npm run dev` terminal prints, exposed so the Operations Console can show it. Lines are kept in a bounded ring buffer (last 1000) and reset when the server restarts.
 
-**Authentication**: Required (session cookie OR health token header) — anonymous in local mode
+**Authentication**: Required (session cookie)
 
 **Query Parameters**:
 - `limit` (optional): Max lines returned (default: 200, max: 1000)

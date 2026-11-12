@@ -59,6 +59,13 @@ jest.mock("@/lib/server/broker/factory", () => ({
   }),
 }));
 
+// Attachment is covered elsewhere; this suite isolates the rate-limit response.
+jest.mock("@/lib/server/profile/coordinator", () => ({
+  assertProfileMutationRequest: () => undefined,
+  ProfileCoordinatorError: class ProfileCoordinatorError extends Error {},
+  profileErrorStatus: () => 409,
+}));
+
 describe("live mutation rate limiting", () => {
   beforeEach(() => {
     resetRateLimitWindows();
@@ -148,7 +155,7 @@ describe("live mutation rate limiting", () => {
       for (let i = 0; i < 30; i++) {
         recordRequest("BTCUSDT", LIVE_MUTATION_OPERATIONS.SUBMIT_ORDER);
       }
-      let btcState = checkRateLimit("BTCUSDT", LIVE_MUTATION_OPERATIONS.SUBMIT_ORDER);
+      const btcState = checkRateLimit("BTCUSDT", LIVE_MUTATION_OPERATIONS.SUBMIT_ORDER);
       expect(btcState.allowed).toBe(false);
 
       // ETHUSDT submit_order should still be allowed
@@ -176,7 +183,7 @@ describe("live mutation rate limiting", () => {
         recordRequest(symbol, operation);
       }
 
-      let state = checkRateLimit(symbol, operation);
+      const state = checkRateLimit(symbol, operation);
       expect(state.allowed).toBe(false);
       expect(state.retryAfterSec).toBeGreaterThan(0);
       expect(state.resetAt).toBeGreaterThan(Date.now());

@@ -153,16 +153,19 @@ describe("GET /api/status/trading-health", () => {
     resetServerConfigForTests();
   });
 
-  test("returns a stable local-mode contract without authentication", async () => {
-    freshEnv(makeCfg({ env: "local" }));
+  test("returns the contract to an authenticated operator while disconnected", async () => {
+    const cfg = freshEnv(makeCfg({ env: "testnet" }));
+    const { sessionId } = createSession("trading-health-session");
     setHealthSignal({ stream: null, snapshot: null });
-    const response = await GET(new NextRequest("http://localhost:3000/api/status/trading-health"));
+    const response = await GET(new NextRequest("http://localhost:3000/api/status/trading-health", {
+      headers: { cookie: `${sessionCookieName(secureCookieContext(cfg))}=${sessionId}` },
+    }));
     const body = await response.json();
 
     expect(response.status).toBe(200);
     expect(response.headers.get("cache-control")).toBe("no-store");
     expect(body).toEqual(expect.objectContaining({
-      env: "local",
+      env: "testnet",
       feed: expect.objectContaining({
         marketFeed: {
           available: false,
@@ -179,7 +182,7 @@ describe("GET /api/status/trading-health", () => {
     expect(body.execution.rateLimits.historicalHits.available).toBe(false);
   });
 
-  test("requires authentication in non-local modes", async () => {
+  test("requires authentication in every environment", async () => {
     freshEnv(makeCfg({ env: "testnet" }));
     const response = await GET(new NextRequest("http://localhost:3000/api/status/trading-health"));
     expect(response.status).toBe(401);

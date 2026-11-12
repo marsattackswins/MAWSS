@@ -107,9 +107,9 @@ describe("historical order history", () => {
     expect(normalizeHistoricalOrder({ ...rawOpen, clientOrderId: "" })).toBeNull();
   });
 
-  test("symbols come from persisted fills plus current positions", () => {
+  test("symbols come from persisted fills plus current positions", async () => {
     const cfg = freshEnv(makeCfg());
-    const { persistenceProfileFromConfig } = require("@/lib/server/profile/context") as typeof import("@/lib/server/profile/context");
+    const { persistenceProfileFromConfig } = await import("@/lib/server/profile/context");
     const profile = persistenceProfileFromConfig(cfg);
     persistFill({ tradeId: "S1", ts: Date.now(), exchangeOrderId: 1, clientOrderId: "c", symbol: "BTCUSDT", side: "BUY", qty: "1", price: "1", realizedPnl: "0", source: "stream" });
     expect(historySymbols(profile, ["ETHUSDT"]).sort()).toEqual(["BTCUSDT", "ETHUSDT"]);

@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 
 let stateDir = "";
+let originalCwd = "";
 
 jest.mock("@/lib/server/audit/log", () => ({ audit: jest.fn() }));
 
@@ -27,7 +28,21 @@ function makePostRequest(body: unknown, headers: Record<string, string> = {}): R
   });
 }
 
+/** Real operator session + CSRF for the route's module instance. */
+async function operatorHeaders(extra: Record<string, string> = {}): Promise<Record<string, string>> {
+  const { createSession, sessionCookieName } = await import("@/lib/server/auth/session");
+  const { secureCookieContext } = await import("@/lib/server/http/guards");
+  const { serverConfig } = await import("@/lib/server/env/config");
+  const { sessionId, csrfToken } = createSession("app-power-test");
+  return {
+    cookie: `${sessionCookieName(secureCookieContext(serverConfig()))}=${sessionId}`,
+    "x-maws-csrf": csrfToken,
+    ...extra,
+  };
+}
+
 beforeEach(() => {
+  originalCwd = process.cwd();
   stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "maws-power-"));
   process.env.MAWS_STATE_DIR = stateDir;
   delete process.env.MAWS_SUPERVISOR_TOKEN;
@@ -79,10 +94,7 @@ describe("state directory pinning", () => {
       expect(fs.existsSync(path.join(pinned, "app-state.json"))).toBe(true);
       expect(fs.existsSync(path.join(stateDir, "app-state.json"))).toBe(false);
     } finally {
-      const { cwd } = await import("node:process");
-      const projectRoot = path.resolve(cwd(), "../..");
-      // jest runs with cwd = project root; restore by absolute path.
-      process.chdir(projectRoot.includes(os.tmpdir()) ? stateDir : projectRoot);
+      process.chdir(originalCwd);
       fs.rmSync(pinned, { recursive: true, force: true });
     }
   });
@@ -105,19 +117,19 @@ describe("supervisor token", () => {
 describe("POST /api/admin/power", () => {
   const LOCAL_ORIGIN = { origin: "http://localhost:3000", host: "localhost:3000" };
 
-  test("local operator stop without confirmation is rejected and keeps desired=on", async () => {
+  test("operator stop without confirmation is rejected and keeps desired=on", async () => {
     const { POST } = await loadRoute();
     const power = await loadModule();
-    const res = await POST(makePostRequest({}, LOCAL_ORIGIN) as never);
+    const res = await POST(makePostRequest({}, { ...LOCAL_ORIGIN, ...(await operatorHeaders()) }) as never);
     expect(res.status).toBe(400);
     expect(power.readDesiredState().desired).toBe("on");
   });
 
-  test("local operator stop with confirm=STOP flips desired to off", async () => {
+  test("operator stop with confirm=STOP flips desired to off", async () => {
     const { POST } = await loadRoute();
     const power = await loadModule();
     const res = await POST(
-      makePostRequest({ confirm: "STOP" }, LOCAL_ORIGIN) as never,
+      makePostRequest({ confirm: "STOP" }, { ...LOCAL_ORIGIN, ...(await operatorHeaders()) }) as never,
     );
     expect(res.status).toBe(200);
     expect(power.readDesiredState().desired).toBe("off");
@@ -136,10 +148,13 @@ describe("POST /api/admin/power", () => {
     expect(power.readDesiredState().desired).toBe("on"); // untouched
   });
 
-  test("rejects cross-origin operator stop in local mode", async () => {
+  test("rejects a cross-origin operator stop", async () => {
     const { POST } = await loadRoute();
     const res = await POST(
-      makePostRequest({ confirm: "STOP" }, { origin: "http://evil.example", host: "localhost:3000" }) as never,
+      makePostRequest(
+        { confirm: "STOP" },
+        { origin: "http://evil.example", host: "localhost:3000", ...(await operatorHeaders()) },
+      ) as never,
     );
     expect(res.status).toBe(403);
   });
@@ -150,7 +165,7 @@ describe("GET /api/admin/power", () => {
     const { GET } = await loadRoute();
     const power = await loadModule();
     power.writeDesiredState("off");
-    const res = await GET(makeGetRequest() as never);
+    const res = await GET(makeGetRequest(await operatorHeaders()) as never);
     expect(res.status).toBe(200);
     const body = (await res.json()) as { running: boolean; desired: string };
     expect(body.running).toBe(true);

@@ -1,18 +1,27 @@
 import { describe, test, expect, jest } from "@jest/globals";
 import { GET } from "@/app/api/binance/klines/route";
 import type { NextRequest } from "next/server";
+import { serverConfig } from "@/lib/server/env/config";
+import { createSession, sessionCookieName } from "@/lib/server/auth/session";
+import { secureCookieContext } from "@/lib/server/http/guards";
 
 /**
  * Focused validation tests for Binance klines route parameter parsing and bounds.
- * 
- * Scope: query parameter validation only.
- * Does not test: authentication, rate limits, caching, upstream error mapping.
+ *
+ * Scope: query parameter validation and session authentication.
+ * Does not test: rate limits, caching, upstream error mapping.
  */
 
 // Mock fetch to prevent real upstream calls
 const mockFetch = jest.fn();
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 global.fetch = mockFetch as any;
+
+/** Proxy routes require an authenticated operator session. */
+function operatorCookie(): string {
+  const { sessionId } = createSession("klines-validation");
+  return `${sessionCookieName(secureCookieContext(serverConfig()))}=${sessionId}`;
+}
 
 function makeRequest(params: Record<string, string>): NextRequest {
   const url = new URL("http://localhost:3000/api/binance/klines");
@@ -21,6 +30,7 @@ function makeRequest(params: Record<string, string>): NextRequest {
   }
   return {
     nextUrl: url,
+    headers: new Headers({ cookie: operatorCookie() }),
   } as NextRequest;
 }
 
@@ -33,6 +43,16 @@ describe("binance klines route validation", () => {
       ok: true,
       status: 200,
       text: async () => "[]",
+    });
+  });
+
+  describe("authentication", () => {
+    test("unauthenticated requests are rejected with 401 before validation", async () => {
+      const url = new URL("http://localhost:3000/api/binance/klines");
+      url.searchParams.set("symbol", "BTCUSDT");
+      const res = await GET({ nextUrl: url, headers: new Headers() } as NextRequest);
+      expect(res.status).toBe(401);
+      expect(mockFetch).not.toHaveBeenCalled();
     });
   });
 
@@ -440,7 +460,7 @@ describe("binance klines route validation", () => {
       url.searchParams.set("unknownParam", "malicious");
       url.searchParams.set("extraField", "ignored");
 
-      const req = { nextUrl: url } as NextRequest;
+      const req = { nextUrl: url, headers: new Headers({ cookie: operatorCookie() }) } as NextRequest;
       const res = await GET(req);
 
       expect(res.status).toBe(200);

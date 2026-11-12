@@ -83,14 +83,12 @@ graph TB
 
 ### Deployment Modes
 
-MAWS supports four environment modes with progressively stricter requirements:
+MAWS supports exactly two trading modes:
 
-- **local**: Chart Only startup with no attached trading account or server trading manager; public Binance market data remains available, and Testnet and Production can be attached from the UI
-- **testnet**: Binance USD-M Futures Testnet startup context, requiring authentication and Testnet credentials
-- **shadow**: Production market data with read-only account, zero order submissions
-- **production**: Real trading startup context, requiring all risk limits and execution gates enabled
+- **Testnet**: Binance USD-M Futures Demo. Requires `MAWS_OPERATOR_AUTH` and Testnet profile credentials to attach.
+- **Production**: Binance Live. Requires all risk limits, execution gates, and explicit confirmation to attach.
 
-Normal local use keeps `MAWS_ENV=local`. The UI can attach a configured Testnet or Production profile without editing the environment or restarting. Binance credentials remain server-side.
+`MAWS_ENV` selects which credentials are read and which environment is displayed; it never attaches anything. Both modes start **Disconnected** (no profile, no server-side trading manager). The operator attaches a profile explicitly from the Trade screen after signing in, and detaches explicitly or by disconnecting. `local`, `shadow`, and `paper` are retired and rejected with an actionable startup error rather than converted silently. Binance credentials remain server-side.
 
 ### Broker Abstraction
 
@@ -194,15 +192,16 @@ npm run dev
 ```
 
 - Runs on http://localhost:3000
-- Starts in Chart Only (disconnected)
-- Testnet or Production can be attached from the Trade screen after server-side setup and operator login
+- Starts Disconnected; startup, login, and hydration never attach a profile
+- Testnet or Live can be attached from the Trade screen after operator login
+- `npm run dev` requires configured operator authentication (`MAWS_OPERATOR_AUTH`); `npm run dev -- --throwaway` uses a scratch database and prints a random password once
 - SQLite database in `.maws/maws.db`
 
 ### Production Deployment
 
 MAWS is designed for deployment behind a reverse proxy (nginx):
 
-1. **Environment Configuration**: The normal UI workflow keeps `MAWS_ENV=local` and attaches a configured profile from the UI. A server-managed `MAWS_ENV=production` deployment is also available for deployments that intentionally select one runtime at startup.
+1. **Environment Configuration**: Set `MAWS_ENV=testnet` or `MAWS_ENV=production` for credentials and risk defaults. The server still starts Disconnected; attach the configured profile from the UI after signing in. There is no `local` deployment mode.
 2. **Reverse Proxy**: nginx handles TLS, static files, and proxying to Next.js
 3. **Service Management**: systemd service for process management
 4. **Database**: SQLite with WAL mode for performance
@@ -242,10 +241,10 @@ docker run -p 3000:3000 --env-file .env maws
 
 ### Risk Controls
 
-- **Environment Enforcement**: Local startup begins without an attached trading account or server trading manager; public market data remains available, and profile-specific credentials are accepted for authenticated UI switching
+- **Attachment Enforcement**: Every mode starts Disconnected; order, cancel, close, and emergency-flatten paths reject with `409 not_connected` until an operator attaches a profile and passes exposure checks
 - **Production Requirements**: All risk limits must be positive finite numbers
-- **Execution Gates**: Dual requirement (static env var + runtime flag)
-- **Shadow Mode**: Read-only enforcement, zero submissions allowed
+- **Execution Gates**: Dual requirement (static env var + runtime flag); attaching a profile never enables submissions by itself
+- **Mutual Exclusion**: Exactly one profile can be attached at a time; switching is serialized by the coordinator
 
 ## Runbook
 
@@ -261,7 +260,7 @@ npm install
 npm run dev
 ```
 
-The local development server starts in Chart Only and serves the MAWS dashboard at `http://localhost:3000`.
+The development server starts Disconnected and serves the MAWS dashboard at `http://localhost:3000`.
 
 For a local production-like run, build and start the standalone server:
 
@@ -275,8 +274,8 @@ The standalone launcher loads `.env.local` and `.env`, copies the required stati
 #### Production
 
 ```bash
-# Normal deployment starts in Chart Only and switches profiles from the UI
-export MAWS_ENV=local
+# Selects credentials and risk defaults; the server still starts Disconnected
+export MAWS_ENV=testnet   # or production
 export MAWS_OPERATOR_AUTH=<salt:hash>
 export MAWS_BINANCE_TESTNET_API_KEY=<testnet-key>
 export MAWS_BINANCE_TESTNET_API_SECRET=<testnet-secret>
@@ -284,8 +283,8 @@ export MAWS_BINANCE_PRODUCTION_API_KEY=<production-key>
 export MAWS_BINANCE_PRODUCTION_API_SECRET=<production-secret>
 # ... other required variables
 
-# Non-local MAWS_ENV=testnet|production|shadow startup modes remain supported
-# when a deployment intentionally wants one server-selected runtime.
+# Attach Testnet or Live from the UI after signing in.
+# production additionally requires explicit risk limits and execution gates.
 
 # Build and start
 npm run build
@@ -327,10 +326,17 @@ Critical environment variables (see `.env.example` for complete list):
 
 ### Health Checks
 
-#### Basic Health Check
+#### Liveness Check (anonymous)
 
 ```bash
-curl http://localhost:3000/api/health
+curl http://localhost:3000/api/liveness
+# {"status":"ok"} — no configuration or broker details
+```
+
+#### Authenticated Health Check
+
+```bash
+curl -H "Cookie: maws_session=<session>" http://localhost:3000/api/health
 ```
 
 Response includes:
@@ -340,7 +346,7 @@ Response includes:
 - Execution gate state
 - Circuit breaker states
 
-For public Binance reachability, use `GET /api/health/broker`; it performs a lightweight Binance public API ping. In local Chart Only, the public API can be reachable while the server trading manager is idle. The Operations Console (`/admin`) presents those as separate blocks so an idle server trading manager is not mistaken for a disconnected chart feed.
+For public Binance reachability, use `GET /api/health/broker`; it performs a lightweight Binance public API ping. While Disconnected, the public API can be reachable while the server trading manager is idle. The Operations Console (`/admin`) presents those as separate blocks so an idle server trading manager is not mistaken for a disconnected chart feed.
 
 #### Health Check with Token
 

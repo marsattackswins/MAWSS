@@ -52,9 +52,14 @@ export function assertTestnetSafety(
   if (cfg.env !== "testnet") {
     throw new Error(`Integration tests refuse MAWS_ENV=${cfg.env}; only testnet is allowed`);
   }
-  const profile = cfg.activeProfileId ? cfg.profiles[cfg.activeProfileId] : null;
+  // Base configuration never carries an attached profile; validate the
+  // testnet profile directly instead of following activeProfileId.
+  if (cfg.activeProfileId !== null && cfg.activeProfileId !== "binance-testnet") {
+    throw new Error(`Integration tests refuse the attached profile ${cfg.activeProfileId}`);
+  }
+  const profile = cfg.profiles["binance-testnet"];
   if (!profile || profile.environment !== "testnet") {
-    throw new Error(`Integration tests require the binance-testnet profile, got: ${cfg.activeProfileId ?? "none"}`);
+    throw new Error("Integration tests require the binance-testnet profile with testnet endpoints");
   }
   if (endpointHost(profile.restEndpoint) !== TESTNET_REST_HOST || endpointHost(profile.webSocketEndpoint) !== TESTNET_WS_HOST) {
     throw new Error(`Integration tests refuse non-Testnet endpoints: rest=${profile.restEndpoint} ws=${profile.webSocketEndpoint}`);
@@ -116,7 +121,7 @@ export function loadTestnetConfig(): EnvConfig {
   const profiles: ProfileRegistry = {
     "binance-testnet": {
       profileId: "binance-testnet",
-      label: "Binance Demo Trading",
+      label: "Binance Testnet",
       environment: "testnet",
       configured: true,
       executionEnabled: true,
@@ -339,7 +344,7 @@ export async function waitForFillCount(
 /**
  * Generate a unique client order ID for this test run.
  */
-let testRunId = crypto.randomBytes(4).toString("hex");
+const testRunId = crypto.randomBytes(4).toString("hex");
 let orderSeq = 0;
 
 export function uniqueOrderId(prefix = "int"): string {

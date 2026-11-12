@@ -74,8 +74,13 @@ async function emitLatestStreamOpen(minInstances = 1): Promise<void> {
 }
 
 async function startCoordinator(): Promise<ProfileRuntimeStatus> {
-  const startup = profileCoordinator().ensureStarted();
-  await emitLatestStreamOpen();
+  const startup = profileCoordinator().switchProfile({
+    profileId: "binance-testnet",
+    requestId: "attach-testnet",
+  });
+  for (let i = 0; i < 500 && FakeWs.instances.length === 0; i += 1) await nextTurn();
+  for (const ws of FakeWs.instances) ws.emitOpen();
+  await nextTurn();
   await startup;
   return profileRuntimeStatus();
 }
@@ -88,9 +93,8 @@ afterEach(() => {
 });
 
 describe("profile coordinator", () => {
-  test("starts local Chart Only without a manager and refuses Testnet or Production attachment", async () => {
+  test("boots disconnected without a manager until an explicit attach", async () => {
     const cfg = makeCfg({
-      env: "local",
       activeProfileId: null,
       binanceApiKey: null,
       binanceApiSecret: null,
@@ -98,7 +102,6 @@ describe("profile coordinator", () => {
     });
     const http = configure(cfg);
 
-    await profileCoordinator().ensureStarted();
     expect(profileRuntimeStatus()).toMatchObject({
       profileId: null,
       environment: null,
@@ -107,25 +110,20 @@ describe("profile coordinator", () => {
     });
     expect(http.calls).toHaveLength(0);
 
-    await expect(profileCoordinator().switchProfile({
+    const switching = profileCoordinator().switchProfile({
       profileId: "binance-testnet",
-      requestId: "local-testnet-switch",
-    })).rejects.toMatchObject({
-      code: "local_profile_switch_disabled",
-      message: expect.stringContaining("Chart Only"),
+      requestId: "explicit-testnet-attach",
     });
-    await expect(profileCoordinator().switchProfile({
-      profileId: "binance-production",
-      confirmProduction: true,
-      requestId: "local-production-switch",
-    })).rejects.toMatchObject({ code: "local_profile_switch_disabled" });
+    await emitLatestStreamOpen();
+    await expect(switching).resolves.toMatchObject({
+      profileId: "binance-testnet",
+      environment: "testnet",
+      phase: "ready",
+      ready: true,
+    });
 
-    expect(http.calls).toHaveLength(0);
-    expect(profileRuntimeStatus()).toMatchObject({
-      profileId: null,
-      phase: "idle",
-      ready: false,
-    });
+    expect(http.calls.length).toBeGreaterThan(0);
+    expect(profileRuntimeStatus()).toMatchObject({ profileId: "binance-testnet", phase: "ready", ready: true });
   });
 
   test("owns one manager and selects trusted target credentials and endpoints", async () => {

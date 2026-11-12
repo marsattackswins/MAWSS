@@ -90,7 +90,7 @@ describe("existing PnL values are unchanged", () => {
 
   test("getBrokerBook keeps live precedence and passes freshness fields through", () => {
     const stalePos = { ...livePositionBase, markAgeMs: 9000, markPriceStale: true };
-    const live = { orders: [], positions: [stalePos] };
+    const live = { orders: [], positions: [stalePos], attached: true, profileId: "binance-testnet" };
     const app = { connectedBroker: "binance" as const, orders: [], positions: [] };
     const book = getBrokerBook(app, live as never);
     expect(book.positions[0].markPriceStale).toBe(true);

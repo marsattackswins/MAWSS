@@ -26,6 +26,7 @@ import { getBinanceRestBreaker, initializeCircuitBreakers } from "@/lib/server/r
 import { setRuntime, RUNTIME_KEYS } from "@/lib/server/runtime/flags";
 import { CircuitBreakerOpenError } from "@/lib/server/resilience/circuit-breaker";
 import { getBroker, resetBrokerForTests } from "@/lib/server/broker/factory";
+import { profileCoordinator, resetProfileCoordinatorForTests } from "@/lib/server/profile/coordinator";
 import { getMetrics, METRICS } from "@/lib/server/metrics/collector";
 import { createIntent } from "@/lib/server/binance/intents";
 import { getDb } from "@/lib/server/db/connection";
@@ -91,11 +92,17 @@ async function bootRealBroker(
     }
     return jsonRes(orderFixture({ type: "MARKET", status: "FILLED", origQty: "0.002" }));
   });
-  await getBroker().connect();
+  // Attach through the coordinator: routes assert coordinator ownership
+  // (assertProfileMutationRequest) before ever reaching the broker.
+  const attaching = profileCoordinator().switchProfile({ profileId: "binance-testnet", requestId: "brk-attach" });
+  for (let i = 0; i < 500 && FakeWs.instances.length === 0; i += 1) await flush();
   // The live manager runs several sockets (user-data stream, public
   // mark-price stream); open them all so the harness does not depend on
   // stream ordering — the private stream must be connected for the
   // execution gate to allow submissions.
+  for (const ws of FakeWs.instances) ws.emitOpen();
+  await flush();
+  await attaching;
   for (const ws of FakeWs.instances) ws.emitOpen();
   await flush();
 }
@@ -192,6 +199,7 @@ afterEach(() => {
   (process.stdout as unknown as { write: (...a: unknown[]) => unknown }).write =
     stdoutWrite as unknown as (...a: unknown[]) => unknown;
   resetBrokerForTests();
+  resetProfileCoordinatorForTests();
   getBinanceRestBreaker().reset();
   getMetrics().reset();
 });

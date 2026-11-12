@@ -82,17 +82,15 @@ describe("GET /api/health/broker", () => {
     });
   });
 
-  test("local env allows anonymous access (health endpoints accessible for development)", async () => {
-    const cfg = freshEnv(makeCfg({ env: "local", allowedOrigin: null }));
+  test("every environment denies anonymous access", async () => {
+    freshEnv(makeCfg({ allowedOrigin: null }));
     const http = new FakeHttp();
     http.route("/fapi/v1/ping", () => jsonRes({}));
     installFakes(http);
 
-    // No session cookie - anonymous access
     const res = await GET(makeRequest());
 
-    // Should succeed (200 or 503, but not 403/401)
-    expect([200, 503]).toContain(res.status);
+    expect(res.status).toBe(401);
   });
 
   test("missing auth denies access", async () => {

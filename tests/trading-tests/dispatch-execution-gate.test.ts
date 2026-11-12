@@ -121,7 +121,19 @@ describe("dispatchSubmitOrder execution gate (live broker)", () => {
     submitOrderMock.mockReset();
     klineStatusMock.mockReturnValue("live");
     useAppStore.setState({ connectedBroker: "binance" });
-    useLiveStore.setState({ health: null, notices: [] });
+    // The dispatcher requires the live store to carry an attached runtime,
+    // not just the legacy connectedBroker label.
+    useLiveStore.setState({
+      health: null,
+      notices: [],
+      attached: true,
+      profileId: "binance-testnet",
+      environment: "testnet",
+      phase: "ready",
+      ready: true,
+      executionAllowed: true,
+      generation: 1,
+    });
   });
 
   test("kill switch engaged: broker not called, toast names the kill switch", async () => {
@@ -229,14 +241,16 @@ describe("dispatchSubmitOrder execution gate (live broker)", () => {
     expect(lastNotice()).toBeUndefined();
   });
 
-  test("no live session (null health): gate never blocks a live submission", async () => {
+  test("no live session (null health): dispatch fails closed before the broker", async () => {
     useLiveStore.setState({ health: null });
     submitOrderMock.mockResolvedValue({ ok: true, clientOrderId: INPUT.clientOrderId });
 
     const res = await dispatchSubmitOrder(INPUT);
 
-    expect(res).toEqual({ ok: true });
-    expect(submitOrderMock).toHaveBeenCalledTimes(1);
+    // An attached runtime with no execution status must fail closed.
+    expect(res).toEqual({ ok: false, error: "trading_halted" });
+    expect(submitOrderMock).not.toHaveBeenCalled();
+    expectHaltedToast("Trading halted: execution status unavailable");
   });
 
   test("disconnected broker: submission is rejected and never hits the broker", async () => {

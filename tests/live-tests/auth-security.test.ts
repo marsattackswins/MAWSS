@@ -177,26 +177,28 @@ describe("authenticate guard chain", () => {
     return new Request(`http://localhost:3000/api/live/${method === "GET" ? "meta" : "orders"}`, { method, headers });
   };
 
-  test("local env refuses all live routes", () => {
-    const localCfg = makeCfg({ env: "local" });
-    const ctx = authenticate(mkReq("GET"), localCfg);
-    expect(isAuthFailure(ctx)).toBe(true);
-    if (isAuthFailure(ctx)) {
-      expect(ctx.response.status).toBe(403);
+  test("every environment requires an operator session", () => {
+    for (const env of ["testnet", "production"] as const) {
+      const cfg = makeCfg({ env });
+      const ctx = authenticate(mkReq("GET"), cfg);
+      expect(isAuthFailure(ctx)).toBe(true);
+      if (isAuthFailure(ctx)) {
+        expect(ctx.response.status).toBe(401);
+      }
     }
   });
 
-  test("local-safe live routes still require an operator session", async () => {
-    const localCfg = makeCfg({ env: "local", activeProfileId: null, binanceApiKey: null, binanceApiSecret: null });
-    freshEnv(localCfg);
+  test("read-only live routes still require an operator session", async () => {
+    const cfg = makeCfg({ env: "testnet", activeProfileId: null, binanceApiKey: null, binanceApiSecret: null });
+    freshEnv(cfg);
 
-    const missing = authenticate(mkReq("GET"), localCfg, { allowLocal: true });
+    const missing = authenticate(mkReq("GET"), cfg);
     expect(isAuthFailure(missing)).toBe(true);
     if (isAuthFailure(missing)) expect(missing.response.status).toBe(401);
 
-    const { sessionId } = createSession("local-safe-route");
-    const cookie = `${sessionCookieName(secureCookieContext(localCfg))}=${sessionId}`;
-    const authenticated = authenticate(mkReq("GET", { cookie }), localCfg, { allowLocal: true });
+    const { sessionId } = createSession("read-only-route");
+    const cookie = `${sessionCookieName(secureCookieContext(cfg))}=${sessionId}`;
+    const authenticated = authenticate(mkReq("GET", { cookie }), cfg);
     expect(isAuthFailure(authenticated)).toBe(false);
   });
 

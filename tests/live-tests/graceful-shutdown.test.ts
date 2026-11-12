@@ -31,9 +31,9 @@ function configureFakeExchange(listenKey: string): FakeHttp {
   return http;
 }
 
-/** Start the coordinator, opening the fake user-data socket once it appears. */
+/** Attach a profile, opening the fake user-data socket once it appears. */
 async function startAttached(): Promise<void> {
-  const started = profileCoordinator().ensureStarted();
+  const started = profileCoordinator().switchProfile({ profileId: "binance-testnet", requestId: "shutdown-attach" });
   for (let i = 0; i < 400 && FakeWs.instances.length < 1; i += 1) await nextTurn();
   FakeWs.last()?.emitOpen();
   try {

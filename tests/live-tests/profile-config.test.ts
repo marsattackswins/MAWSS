@@ -17,8 +17,9 @@ const RISK_CAPS = {
   MAWS_RISK_MIN_LIQ_DISTANCE_PCT: "10",
 };
 
+/** Valid two-mode defaults: operator auth is required on every launch. */
 function env(values: Record<string, string> = {}): NodeJS.ProcessEnv {
-  return values as NodeJS.ProcessEnv;
+  return { MAWS_ENV: "testnet", MAWS_OPERATOR_AUTH: AUTH, ...values } as unknown as NodeJS.ProcessEnv;
 }
 
 describe("server profile configuration", () => {
@@ -29,17 +30,17 @@ describe("server profile configuration", () => {
 
   test("parses separate testnet and production credentials", () => {
     const cfg = loadEnvConfig(env({
-      MAWS_ENV: "testnet",
-      MAWS_OPERATOR_AUTH: AUTH,
       MAWS_BINANCE_TESTNET_API_KEY: "testnet-key",
       MAWS_BINANCE_TESTNET_API_SECRET: "testnet-secret",
       MAWS_BINANCE_PRODUCTION_API_KEY: "production-key",
       MAWS_BINANCE_PRODUCTION_API_SECRET: "production-secret",
     }));
 
-    expect(cfg.activeProfileId).toBe("binance-testnet");
-    expect(cfg.binanceApiKey).toBe("testnet-key");
-    expect(cfg.binanceApiSecret).toBe("testnet-secret");
+    // The base config never carries credentials or an attached profile; only
+    // the coordinator's explicit attach does.
+    expect(cfg.activeProfileId).toBeNull();
+    expect(cfg.binanceApiKey).toBeNull();
+    expect(cfg.binanceApiSecret).toBeNull();
     expect(cfg.profiles["binance-testnet"]).toMatchObject({
       configured: true,
       apiKey: "testnet-key",
@@ -76,57 +77,51 @@ describe("server profile configuration", () => {
     expect(cfg.profiles["binance-testnet"].configured).toBe(true);
   });
 
-  test("maps legacy MAWS_ENV values to safe profile identity", () => {
-    const local = loadEnvConfig(env({}));
-    expect(local.activeProfileId).toBeNull();
+  test("rejects retired MAWS_ENV values with an actionable error", () => {
+    for (const retired of ["local", "shadow", "paper"]) {
+      expect(() => loadEnvConfig(env({ MAWS_ENV: retired }))).toThrow(
+        /MAWS_ENV must be testnet\|production/,
+      );
+    }
+  });
 
-    const testnet = loadEnvConfig(env({
-      MAWS_ENV: "testnet",
-      MAWS_OPERATOR_AUTH: AUTH,
-      MAWS_BINANCE_API_KEY: "legacy-testnet-key",
-      MAWS_BINANCE_API_SECRET: "legacy-testnet-secret",
-    }));
-    expect(testnet.activeProfileId).toBe("binance-testnet");
-    expect(testnet.profiles["binance-testnet"].configured).toBe(true);
-
-    const production = loadEnvConfig(env({
-      MAWS_ENV: "production",
-      MAWS_OPERATOR_AUTH: AUTH,
-      MAWS_BINANCE_API_KEY: "legacy-production-key",
-      MAWS_BINANCE_API_SECRET: "legacy-production-secret",
-      ...RISK_CAPS,
-    }));
-    expect(production.activeProfileId).toBe("binance-production");
-
-    const shadow = loadEnvConfig(env({
-      MAWS_ENV: "shadow",
-      MAWS_OPERATOR_AUTH: AUTH,
-      MAWS_BINANCE_API_KEY: "legacy-shadow-key",
-      MAWS_BINANCE_API_SECRET: "legacy-shadow-secret",
-    }));
-    expect(shadow.activeProfileId).toBeNull();
-    expect(shadow.profiles["binance-production"].configured).toBe(true);
+  test("rejects retired MAWS_DEFAULT_PROFILE values", () => {
+    for (const retired of ["local", "shadow", "paper"]) {
+      expect(() => loadEnvConfig(env({ MAWS_DEFAULT_PROFILE: retired }))).toThrow(
+        /MAWS_DEFAULT_PROFILE must be binance-testnet\|binance-production/,
+      );
+    }
   });
 
   test("keeps legacy single-key variables compatible for the active environment", () => {
     const cfg = loadEnvConfig(env({
-      MAWS_ENV: "testnet",
-      MAWS_OPERATOR_AUTH: AUTH,
       MAWS_BINANCE_API_KEY: "legacy-key",
       MAWS_BINANCE_API_SECRET: "legacy-secret",
     }));
 
-    expect(cfg.binanceApiKey).toBe("legacy-key");
-    expect(cfg.binanceApiSecret).toBe("legacy-secret");
+    // Legacy keys feed the profile matching MAWS_ENV, never the base config.
+    expect(cfg.binanceApiKey).toBeNull();
+    expect(cfg.binanceApiSecret).toBeNull();
     expect(cfg.profiles["binance-testnet"].apiKey).toBe("legacy-key");
     expect(cfg.profiles["binance-testnet"].apiSecret).toBe("legacy-secret");
+    expect(cfg.profiles["binance-production"].configured).toBe(false);
+  });
+
+  test("legacy production keys feed the production profile in production mode", () => {
+    const cfg = loadEnvConfig(env({
+      MAWS_ENV: "production",
+      MAWS_BINANCE_API_KEY: "legacy-production-key",
+      MAWS_BINANCE_API_SECRET: "legacy-production-secret",
+      ...RISK_CAPS,
+    }));
+
+    expect(cfg.profiles["binance-production"].apiKey).toBe("legacy-production-key");
+    expect(cfg.profiles["binance-testnet"].configured).toBe(false);
   });
 
   test("fails closed on conflicting active legacy and profile credentials", () => {
     expect(() =>
       loadEnvConfig(env({
-        MAWS_ENV: "testnet",
-        MAWS_OPERATOR_AUTH: AUTH,
         MAWS_BINANCE_API_KEY: "legacy-key",
         MAWS_BINANCE_API_SECRET: "legacy-secret",
         MAWS_BINANCE_TESTNET_API_KEY: "different-key",
@@ -135,48 +130,26 @@ describe("server profile configuration", () => {
     ).toThrow("MAWS_PROFILE_CONFIGURATION_INVALID");
   });
 
-  test("keeps local chart-only startup while exposing configured profiles", () => {
-    const local = loadEnvConfig(env({
+  test("boots Disconnected while exposing configured profiles", () => {
+    const cfg = loadEnvConfig(env({
       MAWS_BINANCE_TESTNET_API_KEY: "testnet-key",
       MAWS_BINANCE_TESTNET_API_SECRET: "testnet-secret",
     }));
-    expect(local.env).toBe("local");
-    expect(local.activeProfileId).toBeNull();
-    expect(local.binanceApiKey).toBeNull();
-    expect(local.binanceApiSecret).toBeNull();
-    expect(local.profiles["binance-testnet"].configured).toBe(true);
-
-    const shadow = loadEnvConfig(env({
-      MAWS_ENV: "shadow",
-      MAWS_OPERATOR_AUTH: AUTH,
-      MAWS_BINANCE_PRODUCTION_API_KEY: "production-key",
-      MAWS_BINANCE_PRODUCTION_API_SECRET: "production-secret",
-    }));
-    expect(shadow.env).toBe("shadow");
-    expect(shadow.activeProfileId).toBeNull();
-    expect(shadow.binanceApiKey).toBe("production-key");
-    expect(shadow.binanceApiSecret).toBe("production-secret");
+    expect(cfg.env).toBe("testnet");
+    // Startup never attaches: the operator attaches Testnet or Live explicitly.
+    expect(cfg.activeProfileId).toBeNull();
+    expect(cfg.profiles["binance-testnet"].configured).toBe(true);
+    expect(cfg.defaultProfile).toBe("binance-testnet");
   });
 
-  test("configured production credentials enable the profile automatically", () => {
-    const disabled = loadEnvConfig(env({
-      MAWS_ENV: "production",
-      MAWS_OPERATOR_AUTH: AUTH,
-      MAWS_BINANCE_PRODUCTION_API_KEY: "production-key",
-      MAWS_BINANCE_PRODUCTION_API_SECRET: "production-secret",
-      ...RISK_CAPS,
-    }));
-    expect(disabled.profiles["binance-production"].executionEnabled).toBe(true);
-
+  test("configured production credentials mark the profile execution-capable", () => {
     const enabled = loadEnvConfig(env({
       MAWS_ENV: "production",
-      MAWS_OPERATOR_AUTH: AUTH,
       MAWS_BINANCE_PRODUCTION_API_KEY: "production-key",
       MAWS_BINANCE_PRODUCTION_API_SECRET: "production-secret",
       ...RISK_CAPS,
     }));
     expect(enabled.profiles["binance-production"].executionEnabled).toBe(true);
-
   });
 
   test("safe metadata is allowlisted and never contains credentials or endpoints", () => {
@@ -197,6 +170,7 @@ describe("server profile configuration", () => {
     expect(serialized).not.toContain(sentinelSecret);
     expect(serialized).not.toContain("https://");
     expect(metadata.map((profile) => profile.profileId)).toEqual(profileIds);
+    expect(metadata.map((profile) => profile.label)).toEqual(["Testnet", "Live"]);
     expect(Object.keys(metadata[0])).toEqual([
       "profileId",
       "label",
@@ -210,9 +184,7 @@ describe("server profile configuration", () => {
 
   test("default profile is binance-testnet unless explicitly configured and does not switch startup mode", () => {
     const cfg = loadEnvConfig(env({
-      MAWS_ENV: "testnet",
       MAWS_DEFAULT_PROFILE: "binance-production",
-      MAWS_OPERATOR_AUTH: AUTH,
       MAWS_BINANCE_TESTNET_API_KEY: "testnet-key",
       MAWS_BINANCE_TESTNET_API_SECRET: "testnet-secret",
     }));
@@ -220,6 +192,6 @@ describe("server profile configuration", () => {
     expect(loadEnvConfig(env({})).defaultProfile).toBe("binance-testnet");
     expect(cfg.defaultProfile).toBe("binance-production");
     expect(cfg.env).toBe("testnet");
-    expect(cfg.activeProfileId).toBe("binance-testnet");
+    expect(cfg.activeProfileId).toBeNull();
   });
 });

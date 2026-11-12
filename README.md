@@ -2,31 +2,33 @@
 
 **Market Analysis & Workflow System**
 
-MAWS is a browser-based market-analysis and trading-workflow terminal. It brings Binance Futures market data, multi-chart analysis, technical indicators, drawings, replay, news, an economic calendar into one workspace. Server-managed Binance Testnet and Production trading are available only in the corresponding non-local runtime modes and remain subject to authentication and safety checks.
+MAWS is a browser-based market-analysis and trading-workflow terminal. It brings Binance Futures market data, multi-chart analysis, technical indicators, drawings, replay, news, and an economic calendar into one workspace. Exactly two trading modes are available: **Testnet** (Binance Futures Demo) and **Live** (Binance production), subject to explicit attachment, authentication, and safety checks.
 
 > **Disclaimer:** MAWS is personal-use trading software. It is unaudited, is not financial advice, and comes with no warranty of any kind. Trading futures can lose money, including more than you deposit. See [docs/VERIFICATION_STATUS.md](docs/VERIFICATION_STATUS.md) for what has and has not been verified against a real exchange.
 
-> **Trading risk:** Start in Chart Only (disconnected). Test exchange workflows on Testnet before considering Production. Binance API keys must not have withdrawal permission. MAWS is software, not financial advice.
+> **Trading risk:** Every process starts **Disconnected**. Test exchange workflows on Testnet before considering Live. Binance API keys must not have withdrawal permission. MAWS is software, not financial advice.
 
 ## What is in the workspace
 
 - **Market analysis:** Binance USDT-M Futures candles and quotes, a watchlist, multiple chart layouts, indicators, drawing tools, and saved templates.
 - **Chart tools:** The app integrates LuxAlgo's Vela charting engine from vendored source in `lib/charting/`. It includes replay, Pine indicators through `@luxalgo/vela-pinets`, timeline marks, and chart settings.
 - **Market context:** News is available through the Finnhub integration when configured; economic-calendar data is supplied by Xoomar. The Sessions card shows Tokyo, London, and New York cash-market hours (08:00–17:00 local venue time, weekdays).
-- **Trading workflows:** Server-managed Binance Testnet and Production profiles in non-local modes. Orders and positions for a live profile are not browser-owned state.
+- **Trading workflows:** Server-managed Testnet and Live profiles, attached only by explicit operator request. Exchange orders and positions are not browser-owned state.
 
 The Vela workspace host is feature-flagged with `NEXT_PUBLIC_MAWS_VELA_WORKSPACE`; see `.env.example` and `components/charts/VelaWorkspaceHost.tsx` for the current integration boundary. When a saved chart template named `maws` is available, the host applies it to the initial chart cells. The vendored charting source retains its upstream Apache-2.0 `LICENSE` and `NOTICE`.
 
-## Runtime modes
+## Trading modes and attachment
 
-| Mode | Use | Trading behavior |
+| Mode | Profile ID | Trading endpoints |
 |---|---|---|
-| `local` | Local development and chart analysis; this is the default | Chart Only (disconnected); server live-trading routes reject requests in local mode. |
-| `testnet` | Binance USD-M Futures Testnet server runtime | Uses Testnet credentials, operator authentication, and server safety checks. Testnet orders affect the Testnet account. |
-| `production` | Binance USD-M Futures Production server runtime | Real orders may be submitted; authentication, confirmation, health, reconciliation, and risk checks apply. |
-| `shadow` | Internal read-only production-data runtime | Not a normal selectable UI profile; order submission is not allowed. |
+| **Testnet** — Binance Futures Demo | `binance-testnet` | `demo-fapi.binance.com`, `demo-fstream.binance.com` |
+| **Live** — Binance production | `binance-production` | `fapi.binance.com`, `fstream.binance.com` |
 
-`MAWS_ENV=local` does **not** allow you to attach a Binance profile from the UI. Changing the active Binance runtime requires configuring the appropriate non-local environment, credentials, and operator authentication, then restarting the server. Chart Only does not contact Binance.
+**Disconnected is not a mode.** It means no profile is attached. Every process starts Disconnected, even if one or both profiles have credentials or a previous session used Live. Login, browser restoration, and health polling never attach a profile or enable execution. Authenticated charts continue using public market data; disconnected does not mean offline.
+
+An operator must explicitly select and attach a configured profile. Live additionally requires confirmation and the existing risk/readiness checks. Switching or detaching is refused when source exposure or uncertain state makes it unsafe. Execution must be enabled explicitly. Disconnected order submission and emergency flatten return `409 not_connected`.
+
+**After restart, reattach before using MAWS to manage exchange exposure, or use Binance directly. Exchange-side stops stay in place; restarting MAWS does not cancel them.**
 
 ## Run locally
 
@@ -50,13 +52,17 @@ On macOS or Linux:
 cp .env.example .env.local
 ```
 
-Keep `MAWS_ENV=local` and leave exchange credentials empty for charting. Start the development server:
+Normal development requires configured `MAWS_OPERATOR_AUTH`; Binance credentials are optional. `MAWS_ENV` accepts only `testnet` or `production` and defaults to Testnet configuration, not an attachment. Start the server and sign in through `/login`:
 
 ```bash
 npm run dev
 ```
 
-Open [http://localhost:3000](http://localhost:3000). MAWS uses port **3000 only**: browser workspace state is saved by origin, so another port would appear as a separate, empty workspace. The development launcher refuses to use a different port if 3000 is occupied.
+For an explicitly disposable session, use `npm run dev -- --throwaway`. It generates a random password, prints it once to the terminal, uses a scratch database under the OS temporary directory, and still requires real login. It refuses Live credential components found through effective configuration, including normal environment-file loading. It never writes a temporary credential file or silently replaces normal operator authentication.
+
+Open [http://localhost:3000](http://localhost:3000). The developer application stays on **3000** and refuses an occupied port. E2E deliberately uses **3001**, a matching allowed origin, fresh browser contexts, and isolated server state so it cannot collide with the developer workspace.
+
+For retired configuration, follow the explicit [migration steps](docs/OPERATIONS.md#migrating-an-existing-envlocal); the launcher never rewrites configuration files or silently converts retired modes.
 
 The browser stores workspace preferences in origin-scoped local storage. Server-side trading and audit data uses SQLite at `.maws/maws.db` by default. Keep both local working data and `.env.local` out of source control.
 

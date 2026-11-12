@@ -1,18 +1,16 @@
 import { describe, test, expect, jest } from "@jest/globals";
 import { GET } from "@/app/api/news/finnhub/route";
 import type { NextRequest } from "next/server";
+import { serverConfig } from "@/lib/server/env/config";
+import { createSession, sessionCookieName } from "@/lib/server/auth/session";
+import { secureCookieContext } from "@/lib/server/http/guards";
 
 /**
  * Focused validation tests for Finnhub news route symbol parameter.
- * 
- * Scope: symbol query parameter validation only.
- * Does not test: authentication, rate limits, caching, upstream error mapping, category semantics.
+ *
+ * Scope: session authentication and symbol query parameter validation.
+ * Does not test: rate limits, caching, upstream error mapping, category semantics.
  */
-
-// Mock server config to bypass auth in tests
-jest.mock("@/lib/server/env/config", () => ({
-  serverConfig: jest.fn(() => ({ env: "local" })),
-}));
 
 // Mock Finnhub API key
 jest.mock("@/lib/market/finnhub-server", () => ({
@@ -44,6 +42,12 @@ const mockFetch = jest.fn();
 // @ts-expect-error - Mock fetch response for testing
 global.fetch = mockFetch;
 
+/** Proxy routes require an authenticated operator session. */
+function operatorCookie(): string {
+  const { sessionId } = createSession("finnhub-validation");
+  return `${sessionCookieName(secureCookieContext(serverConfig()))}=${sessionId}`;
+}
+
 function makeRequest(params: Record<string, string>): NextRequest {
   const url = new URL("http://localhost:3000/api/news/finnhub");
   for (const [key, value] of Object.entries(params)) {
@@ -51,7 +55,7 @@ function makeRequest(params: Record<string, string>): NextRequest {
   }
   return {
     nextUrl: url,
-    headers: new Headers(),
+    headers: new Headers({ cookie: operatorCookie() }),
   } as NextRequest;
 }
 
@@ -135,7 +139,7 @@ describe("finnhub news route symbol validation", () => {
   describe("symbol validation - empty/omitted is valid", () => {
     test("omitted symbol allowed (market news mode)", async () => {
       const url = new URL("http://localhost:3000/api/news/finnhub");
-      const req = { nextUrl: url, headers: new Headers() } as NextRequest;
+      const req = { nextUrl: url, headers: new Headers({ cookie: operatorCookie() }) } as NextRequest;
       const res = await GET(req);
       expect(res.status).not.toBe(400);
       // Empty symbol triggers category-based news fetch (no resolveNewsTarget call)
@@ -252,7 +256,7 @@ describe("finnhub news route symbol validation", () => {
     test("valid categories work (general)", async () => {
       const url = new URL("http://localhost:3000/api/news/finnhub");
       url.searchParams.set("category", "general");
-      const req = { nextUrl: url, headers: new Headers() } as NextRequest;
+      const req = { nextUrl: url, headers: new Headers({ cookie: operatorCookie() }) } as NextRequest;
       const res = await GET(req);
       expect(res.status).not.toBe(400);
     });
@@ -260,7 +264,7 @@ describe("finnhub news route symbol validation", () => {
     test("valid categories work (crypto)", async () => {
       const url = new URL("http://localhost:3000/api/news/finnhub");
       url.searchParams.set("category", "crypto");
-      const req = { nextUrl: url, headers: new Headers() } as NextRequest;
+      const req = { nextUrl: url, headers: new Headers({ cookie: operatorCookie() }) } as NextRequest;
       const res = await GET(req);
       expect(res.status).not.toBe(400);
     });
@@ -268,7 +272,7 @@ describe("finnhub news route symbol validation", () => {
     test("valid categories work (merger)", async () => {
       const url = new URL("http://localhost:3000/api/news/finnhub");
       url.searchParams.set("category", "merger");
-      const req = { nextUrl: url, headers: new Headers() } as NextRequest;
+      const req = { nextUrl: url, headers: new Headers({ cookie: operatorCookie() }) } as NextRequest;
       const res = await GET(req);
       expect(res.status).not.toBe(400);
     });
@@ -276,7 +280,7 @@ describe("finnhub news route symbol validation", () => {
     test("valid categories work (all)", async () => {
       const url = new URL("http://localhost:3000/api/news/finnhub");
       url.searchParams.set("category", "all");
-      const req = { nextUrl: url, headers: new Headers() } as NextRequest;
+      const req = { nextUrl: url, headers: new Headers({ cookie: operatorCookie() }) } as NextRequest;
       const res = await GET(req);
       expect(res.status).not.toBe(400);
     });
@@ -284,7 +288,7 @@ describe("finnhub news route symbol validation", () => {
     test("invalid category defaults to 'all' (safe fallback, not rejected)", async () => {
       const url = new URL("http://localhost:3000/api/news/finnhub");
       url.searchParams.set("category", "invalid");
-      const req = { nextUrl: url, headers: new Headers() } as NextRequest;
+      const req = { nextUrl: url, headers: new Headers({ cookie: operatorCookie() }) } as NextRequest;
       const res = await GET(req);
       // Should not return 400, safe default behavior
       expect(res.status).not.toBe(400);
@@ -292,7 +296,7 @@ describe("finnhub news route symbol validation", () => {
 
     test("omitted category works (defaults to 'all')", async () => {
       const url = new URL("http://localhost:3000/api/news/finnhub");
-      const req = { nextUrl: url, headers: new Headers() } as NextRequest;
+      const req = { nextUrl: url, headers: new Headers({ cookie: operatorCookie() }) } as NextRequest;
       const res = await GET(req);
       expect(res.status).not.toBe(400);
     });
@@ -300,7 +304,7 @@ describe("finnhub news route symbol validation", () => {
     test("empty category works (defaults to 'all')", async () => {
       const url = new URL("http://localhost:3000/api/news/finnhub");
       url.searchParams.set("category", "");
-      const req = { nextUrl: url, headers: new Headers() } as NextRequest;
+      const req = { nextUrl: url, headers: new Headers({ cookie: operatorCookie() }) } as NextRequest;
       const res = await GET(req);
       expect(res.status).not.toBe(400);
     });
@@ -312,7 +316,7 @@ describe("finnhub news route symbol validation", () => {
       url.searchParams.set("symbol", "BTCUSDT");
       url.searchParams.set("unknownParam", "malicious");
       url.searchParams.set("extraField", "ignored");
-      const req = { nextUrl: url, headers: new Headers() } as NextRequest;
+      const req = { nextUrl: url, headers: new Headers({ cookie: operatorCookie() }) } as NextRequest;
       const res = await GET(req);
       expect(res.status).not.toBe(400);
       // Unknown params should not affect behavior
@@ -342,7 +346,7 @@ describe("finnhub news route symbol validation", () => {
       const url = new URL("http://localhost:3000/api/news/finnhub");
       url.searchParams.append("symbol", "BTCUSDT");
       url.searchParams.append("symbol", "ETHUSDT");
-      const req = { nextUrl: url, headers: new Headers() } as NextRequest;
+      const req = { nextUrl: url, headers: new Headers({ cookie: operatorCookie() }) } as NextRequest;
       const res = await GET(req);
       
       // URLSearchParams.get() returns first value

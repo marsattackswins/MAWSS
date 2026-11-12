@@ -157,12 +157,6 @@ test("stale feed shows Data delayed and returns to Live after recovery", async (
   }
 });
 
-test.skip("paper order opens, TP closes it, and position/P&L/balance update — REMOVED: paper trading was removed from the product", () => {
-  // Paper trading mode has been removed. Testnet and Production are the only
-  // trading environments. This test has been skipped pending a replacement
-  // E2E test for live Testnet order flow.
-});
-
 test("rapid timeframe switches never hit 'Object is disposed' and chart stays live", async ({
   page,
 }) => {

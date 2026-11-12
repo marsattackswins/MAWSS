@@ -2,22 +2,26 @@ import { describe, test, expect, jest, beforeEach, afterEach } from "@jest/globa
 import { GET } from "@/app/api/calendar/xoomar/route";
 import type { NextRequest } from "next/server";
 import { parseCalendarDate } from "@/lib/server/validation/calendar";
+import { serverConfig } from "@/lib/server/env/config";
+import { createSession, sessionCookieName } from "@/lib/server/auth/session";
+import { secureCookieContext } from "@/lib/server/http/guards";
 
 /**
  * Focused validation tests for Xoomar calendar route and helper.
- * Scope: query parameter validation and Gregorian logic.
- * Does not test: auth, caching, rate limits, UI.
+ * Scope: session authentication, query parameter validation and Gregorian logic.
+ * Does not test: caching, rate limits, UI.
  */
-
-// Mock server config to bypass auth in tests
-jest.mock("@/lib/server/env/config", () => ({
-  serverConfig: jest.fn(() => ({ env: "local" })),
-}));
 
 // Mock fetch to prevent real upstream calls
 const mockFetch = jest.fn();
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 global.fetch = mockFetch as any;
+
+/** Proxy routes require an authenticated operator session. */
+function operatorCookie(): string {
+  const { sessionId } = createSession("xoomar-validation");
+  return `${sessionCookieName(secureCookieContext(serverConfig()))}=${sessionId}`;
+}
 
 function makeRequest(params: Record<string, string | string[]>): NextRequest {
   const url = new URL("http://localhost:3000/api/calendar/xoomar");
@@ -30,7 +34,7 @@ function makeRequest(params: Record<string, string | string[]>): NextRequest {
   }
   return {
     nextUrl: url,
-    headers: new Headers(),
+    headers: new Headers({ cookie: operatorCookie() }),
   } as unknown as NextRequest;
 }
 

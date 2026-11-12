@@ -3,20 +3,13 @@
  * Verifies the live_mutations_latency_ms histogram is present and numeric.
  */
 
-import { describe, test, expect, beforeAll, afterAll } from "@jest/globals";
-import { observeLiveMutationLatency, LIVE_MUTATION_OPERATIONS, metricsSnapshot } from "@/lib/server/metrics/collector";
+import { describe, test, expect, afterAll } from "@jest/globals";
+import { getMetrics, observeLiveMutationLatency, LIVE_MUTATION_OPERATIONS, metricsSnapshot } from "@/lib/server/metrics/collector";
 
 describe("/api/admin/metrics", () => {
-  beforeAll(() => {
-    // Ensure we are in local mode so authentication is skipped
-    const original = process.env.MAWS_ENV;
-    process.env.MAWS_ENV = "local";
-  });
-
   afterAll(() => {
     // Reset metrics after tests
-    const metrics = require("@/lib/server/metrics/collector").getMetrics;
-    metrics().reset();
+    getMetrics().reset();
   });
 
   test("live_mutations_latency_ms histogram is present in metrics response", async () => {

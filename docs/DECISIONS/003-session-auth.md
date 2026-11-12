@@ -6,7 +6,7 @@ Accepted
 
 ## Context
 
-MAWS requires authentication for operator access to trading operations and Binance profile switching. The system starts in local Chart Only without an active broker, while still allowing an authenticated operator to attach a configured Binance profile without changing the server's startup configuration.
+MAWS requires authentication for operator access to trading operations and Binance profile switching. The server always starts Disconnected, without an active broker, while still allowing an authenticated operator to attach a configured Testnet or Live profile without changing the server's startup configuration.
 
 ### Problem
 
@@ -95,11 +95,8 @@ interface Session {
 ### Authentication Guard
 
 ```typescript
-function authenticate(req: Request, cfg: EnvConfig, options = {}): AuthContext {
-  // Only explicitly designated local-safe routes may run in local mode.
-  if (cfg.env === "local" && options.allowLocal !== true) {
-    return { authenticated: false, response: 403 };
-  }
+function authenticate(req: Request, cfg: EnvConfig): AuthContext {
+  // Every environment and every route requires a real session.
 
   // Validate session cookie
   const sessionId = extractSessionCookie(req);
@@ -222,17 +219,17 @@ POST /api/auth/revoke-all
 
 ## Implementation Notes
 
-### Local Chart Only
+### Disconnected startup
 
-`MAWS_ENV=local` is the normal single startup context for the UI:
+Every `MAWS_ENV` value (`testnet` or `production`) starts Disconnected:
 
 - The server starts with no active trading profile and does not start a broker manager.
-- Charting and public market-data workflows remain available.
-- Safe profile metadata can be displayed without a session.
-- Attaching Testnet or Production requires `MAWS_OPERATOR_AUTH`, a valid session, CSRF/origin checks, configured profile credentials, and normal readiness gates.
-- Local mode is chart-only (disconnected); no orders are sent without a confirmed exchange connection.
+- Charting and public market-data proxies are available after sign-in.
+- Safe profile metadata is returned only to an authenticated operator.
+- Attaching Testnet or Live requires `MAWS_OPERATOR_AUTH`, a valid session, CSRF/origin checks, configured profile credentials, and normal readiness and exposure gates.
+- No orders are sent without an explicitly attached, confirmed exchange connection; mutating routes return `409 not_connected` otherwise.
 
-The default authentication guard still blocks routes that are not explicitly marked as local-safe; local mode is not a blanket authentication bypass.
+There is no environment-level authentication bypass. `local`, `shadow`, and `paper` are retired startup values and are rejected rather than converted.
 
 ### Session Expiry
 
@@ -250,10 +247,10 @@ Set security headers on responses:
 
 ## Configuration
 
-Typical single-profile local configuration:
+Typical single-profile configuration:
 
 ```bash
-MAWS_ENV=local
+MAWS_ENV=testnet   # or production
 MAWS_OPERATOR_AUTH=<salt:hash>
 MAWS_BINANCE_TESTNET_API_KEY=<testnet-key>
 MAWS_BINANCE_TESTNET_API_SECRET=<testnet-secret>
@@ -262,7 +259,7 @@ MAWS_BINANCE_PRODUCTION_API_SECRET=<production-secret>
 MAWS_ALLOWED_ORIGIN=https://terminal.example.com
 ```
 
-`MAWS_OPERATOR_AUTH` is required when attaching a Binance profile from local mode. Non-local startup modes remain supported for server-managed deployments and require their normal credentials and authentication.
+`MAWS_OPERATOR_AUTH` is required in every mode. The server still starts Disconnected; attaching a profile is always an explicit operator action.
 
 ## References
 

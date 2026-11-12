@@ -2,8 +2,10 @@
  * Broker book selector (lib/selectors/broker.ts).
  *
  * Guarantees the UI renders exactly one orders/positions book at a time:
- *   - connectedBroker === "binance"  → live book only
- *   - connectedBroker !== "binance"  → empty book (no paper fallback)
+ *   - connectedBroker === "binance" AND an explicit attached profile
+ *       → live book only
+ *   - anything else (disconnected, stale claim, no profile)
+ *       → empty book (no paper fallback)
  * There is no paper book; when disconnected the books are empty.
  */
 
@@ -40,6 +42,13 @@ const livePos: PositionDto = {
   openedAt: 1_700_000_000_000,
 };
 
+const LIVE_SNAPSHOT = {
+  orders: [liveOrder],
+  positions: [livePos],
+  attached: true,
+  profileId: "binance-testnet" as const,
+};
+
 beforeEach(() => {
   useAppStore.setState({ connectedBroker: null });
   useLiveStore.setState({ orders: [liveOrder], positions: [livePos] });
@@ -51,11 +60,8 @@ afterEach(() => {
 });
 
 describe("getBrokerBook", () => {
-  test("binance: returns live orders/positions only", () => {
-    const app = { connectedBroker: "binance" as const };
-    const live = { orders: [liveOrder], positions: [livePos] };
-
-    const book = getBrokerBook(app, live);
+  test("binance + attached profile: returns live orders/positions only", () => {
+    const book = getBrokerBook({ connectedBroker: "binance" }, LIVE_SNAPSHOT);
 
     expect(book.orders).toHaveLength(1);
     expect(book.orders[0]).toBe(liveOrder);
@@ -64,19 +70,34 @@ describe("getBrokerBook", () => {
   });
 
   test("no broker connected: returns empty orders/positions", () => {
-    const app = { connectedBroker: null };
-    const live = { orders: [liveOrder], positions: [livePos] };
-
-    const book = getBrokerBook(app, live);
+    const book = getBrokerBook({ connectedBroker: null }, LIVE_SNAPSHOT);
 
     expect(book.orders).toEqual([]);
     expect(book.positions).toEqual([]);
   });
 
-  test("returns empty books when the live side has nothing", () => {
+  test("binance claim without an attached runtime returns an empty book", () => {
     const book = getBrokerBook(
       { connectedBroker: "binance" },
-      { orders: [], positions: [] },
+      { orders: [liveOrder], positions: [livePos], attached: false, profileId: null },
+    );
+
+    expect(book).toEqual({ orders: [], positions: [] });
+  });
+
+  test("binance claim with no active profile returns an empty book", () => {
+    const book = getBrokerBook(
+      { connectedBroker: "binance" },
+      { orders: [liveOrder], positions: [livePos], attached: true, profileId: null },
+    );
+
+    expect(book).toEqual({ orders: [], positions: [] });
+  });
+
+  test("returns empty books when the attached live side has nothing", () => {
+    const book = getBrokerBook(
+      { connectedBroker: "binance" },
+      { orders: [], positions: [], attached: true, profileId: "binance-testnet" },
     );
     expect(book).toEqual({ orders: [], positions: [] });
   });
@@ -84,7 +105,7 @@ describe("getBrokerBook", () => {
   test("disconnected never returns live items even when live is populated", () => {
     const book = getBrokerBook(
       { connectedBroker: null },
-      { orders: [liveOrder], positions: [livePos] },
+      { orders: [liveOrder], positions: [livePos], attached: false, profileId: null },
     );
     expect(book.orders).toHaveLength(0);
     expect(book.positions).toHaveLength(0);

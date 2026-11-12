@@ -1,7 +1,7 @@
 import { HOST_MAP, loadEnvConfig, type EnvConfig } from "@/lib/server/env/config";
 import { hashPassword } from "@/lib/server/auth/password";
 import { persistenceProfileFromConfig } from "@/lib/server/profile/context";
-import { executionDecision, requireEmergencyActionAllowed, requireSubmissionAllowed, SubmissionBlockedError } from "@/lib/server/gates/execution";
+import { executionDecision, requireSubmissionAllowed, SubmissionBlockedError } from "@/lib/server/gates/execution";
 import { RUNTIME_KEYS, setRuntime, getRuntime, allRuntime } from "@/lib/server/runtime/flags";
 import { freshEnv, makeCfg } from "./helpers";
 import { resetHealthSignalsForTests, setHealthSignal } from "@/lib/server/health/state";
@@ -24,14 +24,12 @@ const VALID_RISK_CAPS = {
 const envSrc = (src: Record<string, string>) => src as unknown as NodeJS.ProcessEnv;
 
 describe("environment configuration (fail closed)", () => {
-  test("host map is fixed: local -> production public endpoints, testnet -> demo hosts, shadow/production -> real fapi hosts", () => {
-    expect(HOST_MAP.local.rest).toBe("https://fapi.binance.com");
-    expect(HOST_MAP.local.uds).toBe("wss://fstream.binance.com");
+  test("host map is fixed: testnet -> demo hosts, production -> real fapi hosts", () => {
     expect(HOST_MAP.testnet.rest).toBe("https://demo-fapi.binance.com");
     expect(HOST_MAP.testnet.uds).toBe("wss://demo-fstream.binance.com");
-    expect(HOST_MAP.shadow.rest).toBe("https://fapi.binance.com");
     expect(HOST_MAP.production.rest).toBe("https://fapi.binance.com");
     expect(HOST_MAP.production.uds).toBe("wss://fstream.binance.com");
+    expect(Object.keys(HOST_MAP).sort()).toEqual(["production", "testnet"]);
   });
 
   test("testnet profile resolves only to demo hosts", () => {
@@ -82,9 +80,10 @@ describe("environment configuration (fail closed)", () => {
     // Production profile carries production credentials and production hosts
     expect(cfg.profiles["binance-production"].apiKey).toBe("prod-key");
     expect(cfg.profiles["binance-production"].restEndpoint).toBe("https://fapi.binance.com");
-    // Active credentials come from the testnet profile, not production
-    expect(cfg.binanceApiKey).toBe("demo-key");
-    expect(cfg.binanceApiKey).not.toBe("prod-key");
+    // The base config carries no credentials at all: only the attached
+    // coordinator runtime does.
+    expect(cfg.binanceApiKey).toBeNull();
+    expect(cfg.binanceApiSecret).toBeNull();
   });
 
   test("legacy testnet hosts are absent from the host map", () => {
@@ -94,9 +93,9 @@ describe("environment configuration (fail closed)", () => {
     }
   });
 
-  test("defaults to local with no config", () => {
-    const cfg = loadEnvConfig(envSrc({}));
-    expect(cfg.env).toBe("local");
+  test("defaults to testnet with safe tuning values, and operator auth is mandatory", () => {
+    const cfg = loadEnvConfig(envSrc({ MAWS_OPERATOR_AUTH: AUTH }));
+    expect(cfg.env).toBe("testnet");
     expect(cfg.recvWindowMs).toBe(5000);
     expect(cfg.reverseEnabled).toBe(false);
 
@@ -104,9 +103,11 @@ describe("environment configuration (fail closed)", () => {
     expect(cfg.risk.maxLeverage).toBe(10);
     expect(cfg.risk.maxMarginRatio).toBe(0.5);
     expect(cfg.risk.minLiquidationDistancePct).toBe(5);
+
+    expect(() => loadEnvConfig(envSrc({}))).toThrow(/MAWS_OPERATOR_AUTH/);
   });
 
-  test("non-local envs require operator auth in salt:hash form", () => {
+  test("every env requires operator auth in salt:hash form", () => {
     expect(() => loadEnvConfig(envSrc({ MAWS_ENV: "testnet", ...KEYS }))).toThrow(/MAWS_OPERATOR_AUTH/);
     expect(() => loadEnvConfig(envSrc({ MAWS_ENV: "testnet", MAWS_OPERATOR_AUTH: "plaintext-password", ...KEYS }))).toThrow(/hex/);
     const testnet = loadEnvConfig(envSrc({ MAWS_ENV: "testnet", MAWS_OPERATOR_AUTH: AUTH, ...KEYS }));
@@ -156,15 +157,21 @@ describe("environment configuration (fail closed)", () => {
     expect(valid.emergencyToken).toBe("emergency-" + "e".repeat(32));
   });
 
-  test("Binance credentials are required for testnet/shadow/production", () => {
-    for (const env of ["testnet", "shadow", "production"]) {
-      expect(() => loadEnvConfig(envSrc({ MAWS_ENV: env, MAWS_OPERATOR_AUTH: AUTH }))).toThrow(/BINANCE_API/);
-    }
+  test("testnet boots disconnected without credentials; production requires explicit risk caps", () => {
+    // No credentials at all: the server boots Disconnected with an unconfigured
+    // profile. Credentials become mandatory only at attach time.
+    const disconnected = loadEnvConfig(envSrc({ MAWS_ENV: "testnet", MAWS_OPERATOR_AUTH: AUTH }));
+    expect(disconnected.activeProfileId).toBeNull();
+    expect(disconnected.profiles["binance-testnet"].configured).toBe(false);
+
+    expect(() =>
+      loadEnvConfig(envSrc({ MAWS_ENV: "production", MAWS_OPERATOR_AUTH: AUTH })),
+    ).toThrow(/explicitly configured/);
   });
 
-  test("local chart-only mode accepts separate profile credentials", () => {
+  test("two-mode config accepts separate profile credentials", () => {
     const cfg = loadEnvConfig(envSrc({
-      MAWS_ENV: "local",
+      MAWS_OPERATOR_AUTH: AUTH,
       MAWS_BINANCE_TESTNET_API_KEY: "testnet-key",
       MAWS_BINANCE_TESTNET_API_SECRET: "testnet-secret",
       MAWS_BINANCE_PRODUCTION_API_KEY: "production-key",
@@ -184,8 +191,8 @@ describe("environment configuration (fail closed)", () => {
   });
 
   test("backup key must be 64 hex chars", () => {
-    expect(() => loadEnvConfig(envSrc({ MAWS_BACKUP_KEY: "short" }))).toThrow(/64 hex/);
-    const cfg = loadEnvConfig(envSrc({ MAWS_BACKUP_KEY: "ab".repeat(32) }));
+    expect(() => loadEnvConfig(envSrc({ MAWS_OPERATOR_AUTH: AUTH, MAWS_BACKUP_KEY: "short" }))).toThrow(/64 hex/);
+    const cfg = loadEnvConfig(envSrc({ MAWS_OPERATOR_AUTH: AUTH, MAWS_BACKUP_KEY: "ab".repeat(32) }));
     expect(cfg.backupKey?.length).toBe(32);
   });
 
@@ -346,20 +353,6 @@ describe("execution gate matrix", () => {
     expect(d.reasons).toContain("Binance credentials are not configured for the active profile");
   });
 
-  test("shadow can never submit, regardless of flags", () => {
-    setRuntime(RUNTIME_KEYS.executionEnabled, "true");
-    const d = decide(makeCfg({ env: "shadow" }));
-    expect(d.canSubmit).toBe(false);
-    expect(d.reasons).toContain("shadow mode is read-only");
-    expect(() => requireSubmissionAllowed(makeCfg({ env: "shadow" }))).toThrow(SubmissionBlockedError);
-  });
-
-  test("local can never submit", () => {
-    setRuntime(RUNTIME_KEYS.executionEnabled, "true");
-    expect(decide(makeCfg({ env: "local" })).canSubmit).toBe(false);
-  });
-
-
   test("kill switch blocks submissions", () => {
     setRuntime(RUNTIME_KEYS.executionEnabled, "true");
     setRuntime(RUNTIME_KEYS.killSwitch, "true");
@@ -410,9 +403,12 @@ describe("execution gate matrix", () => {
     expect(d.reasons).toContain("snapshot too old");
   });
 
-  test("emergency action remains available when normal gates block", () => {
+  test("submission gate passes when healthy and throws under a blocking gate", () => {
+    setRuntime(RUNTIME_KEYS.executionEnabled, "true");
+    expect(() => requireSubmissionAllowed(makeCfg({ env: "testnet" }))).not.toThrow();
+
     resetHealthSignalsForTests();
-    expect(() => requireEmergencyActionAllowed(makeCfg({ env: "testnet" }))).not.toThrow();
+    expect(() => requireSubmissionAllowed(makeCfg({ env: "testnet" }))).toThrow(SubmissionBlockedError);
   });
 });
 

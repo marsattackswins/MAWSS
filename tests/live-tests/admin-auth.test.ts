@@ -16,16 +16,16 @@ describe("admin route authentication", () => {
     return new Request(url.toString(), { method: "GET", headers });
   };
 
-  test("local env bypasses authentication for all admin routes", () => {
-    const localCfg = makeCfg({ env: "local" });
+  test("every environment requires authentication for all admin routes", () => {
+    const localCfg = makeCfg();
     // All admin routes are read-only GET endpoints
     const paths = ["/health", "/metrics", "/performance", "/circuits"];
     for (const path of paths) {
       const ctx = authenticate(mkAdminReq(path), localCfg);
-      // Local mode is gated at environment level; routes handle it separately
+      // No environment bypasses the operator session; every admin route is protected.
       expect(isAuthFailure(ctx)).toBe(true);
       if (isAuthFailure(ctx)) {
-        expect(ctx.response.status).toBe(403);
+        expect(ctx.response.status).toBe(401);
       }
     }
   });

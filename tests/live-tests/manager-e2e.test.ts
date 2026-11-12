@@ -643,9 +643,9 @@ describe("BinanceLiveManager end-to-end (fake testnet)", () => {
     expect(findByClientOrderId("stream-algo-finished")?.status).toBe("SUBMITTED");
   });
 
-  test("local env can construct a manager (for public data access)", () => {
-    freshEnv(makeCfg({ env: "local" }));
-    // Should not throw - local mode now allows manager for public data
+  test("testnet env can construct a manager", () => {
+    freshEnv(makeCfg({ env: "testnet" }));
+    // The manager constructor must not require an active attachment.
     expect(() => new BinanceLiveManager()).not.toThrow();
   });
 

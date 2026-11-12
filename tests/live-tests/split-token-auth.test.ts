@@ -138,15 +138,14 @@ describe("split health and emergency token authorization", () => {
     expect(metrics.status).toBeGreaterThanOrEqual(400);
   });
 
-  test("logout remains idempotent and does not treat either token as authorization", async () => {
+  test("logout requires a session and does not treat either token as authorization", async () => {
     const tokenHeaders: Array<Record<string, string>> = [
       { "x-maws-health-token": HEALTH_TOKEN },
       { "x-maws-emergency-token": EMERGENCY_TOKEN },
     ];
     for (const tokenHeader of tokenHeaders) {
       const response = await logoutPost(request("/api/auth/logout", "POST", tokenHeader));
-      expect(response.status).toBe(200);
-      expect(await response.json()).toMatchObject({ ok: true });
+      expect(response.status).toBe(401);
     }
   });
 

@@ -10,12 +10,13 @@
 
 import { describe, test, expect, beforeEach, afterEach } from "@jest/globals";
 import { POST as ordersPost } from "@/app/api/live/orders/route";
-import { createSession, sessionCookieName } from "@/lib/server/auth/session";
+import { createSession, getSession, sessionCookieName } from "@/lib/server/auth/session";
 import { secureCookieContext } from "@/lib/server/http/guards";
 import { getBinanceRestBreaker, initializeCircuitBreakers } from "@/lib/server/resilience/breakers";
 import { setRuntime, RUNTIME_KEYS } from "@/lib/server/runtime/flags";
 import { CircuitBreakerOpenError } from "@/lib/server/resilience/circuit-breaker";
 import { getBroker, resetBrokerForTests } from "@/lib/server/broker/factory";
+import { profileCoordinator, resetProfileCoordinatorForTests } from "@/lib/server/profile/coordinator";
 import { getMetrics, METRICS } from "@/lib/server/metrics/collector";
 import type { EnvConfig } from "@/lib/server/env/config";
 import {
@@ -35,6 +36,37 @@ const flush = async (): Promise<void> => {
   for (let i = 0; i < 5; i++) await new Promise((r) => setTimeout(r, 0));
 };
 
+/**
+ * Attaches a testnet runtime through the coordinator so route-level
+ * assertions (assertProfileMutationRequest) pass outside the end-to-end
+ * describe, which owns its own heavier bootRealBroker harness.
+ */
+async function attachTestnetRuntime(): Promise<void> {
+  const http = new FakeHttp();
+  freshEnv(makeCfg({ env: "testnet", allowedOrigin: "https://localhost:3000" }));
+  setRuntime(RUNTIME_KEYS.executionEnabled, "true");
+  installFakes(http);
+  http.route("/fapi/v1/time", () => jsonRes({ serverTime: Date.now() }));
+  http.route("/fapi/v1/exchangeInfo", () => jsonRes({ symbols: [BTCUSDT_INFO] }));
+  http.route("/fapi/v1/ticker/price", () => jsonRes({ symbol: "BTCUSDT", price: "50000" }));
+  http.route("/fapi/v2/account", () => jsonRes(accountFixture()));
+  http.route("/fapi/v2/positionRisk", () => jsonRes([]));
+  http.route("/fapi/v1/openOrders", () => jsonRes([]));
+  http.route("/fapi/v1/allOpenOrders", () => jsonRes([]));
+  http.route("/fapi/v1/income", () => jsonRes([]));
+  http.route("/fapi/v1/userTrades", () => jsonRes([]));
+  http.route("/fapi/v1/listenKey", () => jsonRes({ listenKey: "LK-BRK" }));
+  http.route("/fapi/v1/leverageBracket", () => jsonRes([]));
+  http.route("/fapi/v1/leverage", () => jsonRes({ leverage: 1, maxNotionalValue: "1000000" }));
+  const attaching = profileCoordinator().switchProfile({ profileId: "binance-testnet", requestId: "orders-validate-attach" });
+  for (let i = 0; i < 500 && FakeWs.instances.length === 0; i += 1) await flush();
+  for (const ws of FakeWs.instances) ws.emitOpen();
+  await flush();
+  await attaching;
+  for (const ws of FakeWs.instances) ws.emitOpen();
+  await flush();
+}
+
 describe("POST /api/live/orders with circuit breaker", () => {
   beforeEach(() => {
     freshEnv(makeCfg({ env: "testnet", allowedOrigin: "https://localhost:3000" }));
@@ -46,6 +78,10 @@ describe("POST /api/live/orders with circuit breaker", () => {
     // Reset breaker state after each test
     const breaker = getBinanceRestBreaker();
     breaker.reset();
+    // Stop the attached runtime so its stream lease does not stall the
+    // next test's coordinator attach.
+    resetBrokerForTests();
+    resetProfileCoordinatorForTests();
   });
 
   const makeOrderRequest = (body: unknown, sessionId?: string) => {
@@ -61,7 +97,7 @@ describe("POST /api/live/orders with circuit breaker", () => {
       const cookieName = sessionCookieName(secureCookieContext(cfg));
       headers.set("cookie", `${cookieName}=${sessionId}`);
       // Add CSRF token for mutating requests
-      const session = require("@/lib/server/auth/session").getSession(sessionId);
+      const session = getSession(sessionId);
       if (session) {
         headers.set("x-maws-csrf", session.csrfToken);
       }
@@ -98,6 +134,7 @@ describe("POST /api/live/orders with circuit breaker", () => {
   });
 
   test("returns 400 for invalid payload even when breaker is open", async () => {
+    await attachTestnetRuntime();
     const { sessionId } = createSession("test-agent");
 
     // Force circuit breaker open
@@ -156,6 +193,7 @@ describe("POST /api/live/orders end-to-end with REST breaker open", () => {
     (process.stdout as unknown as { write: (...a: unknown[]) => unknown }).write =
       stdoutWrite as unknown as (...a: unknown[]) => unknown;
     resetBrokerForTests();
+    resetProfileCoordinatorForTests();
     getBinanceRestBreaker().reset();
     getMetrics().reset();
   });
@@ -172,11 +210,20 @@ describe("POST /api/live/orders end-to-end with REST breaker open", () => {
     http.route("/fapi/v2/account", () => jsonRes(accountFixture()));
     http.route("/fapi/v2/positionRisk", () => jsonRes([]));
     http.route("/fapi/v1/openOrders", () => jsonRes([]));
+    http.route("/fapi/v1/allOpenOrders", () => jsonRes([]));
+    http.route("/fapi/v1/income", () => jsonRes([]));
+    http.route("/fapi/v1/userTrades", () => jsonRes([]));
     http.route("/fapi/v1/listenKey", () => jsonRes({ listenKey: "LK-BRK" }));
     http.route("/fapi/v1/leverageBracket", () => jsonRes([]));
     http.route("/fapi/v1/leverage", () => jsonRes({ leverage: 1, maxNotionalValue: "1000000" }));
-    await getBroker().connect();
-    FakeWs.last()?.emitOpen();
+    // Attach through the coordinator: routes assert coordinator ownership
+    // (assertProfileMutationRequest) before ever reaching the broker.
+    const attaching = profileCoordinator().switchProfile({ profileId: "binance-testnet", requestId: "brk-orders-attach" });
+    for (let i = 0; i < 500 && FakeWs.instances.length === 0; i += 1) await flush();
+    for (const ws of FakeWs.instances) ws.emitOpen();
+    await flush();
+    await attaching;
+    for (const ws of FakeWs.instances) ws.emitOpen();
     await flush();
   }
 
@@ -187,7 +234,7 @@ describe("POST /api/live/orders end-to-end with REST breaker open", () => {
       "origin": "https://localhost:3000",
       "host": "localhost:3000",
       "cookie": `${sessionCookieName(secureCookieContext(cfg))}=${sessionId}`,
-      "x-maws-csrf": require("@/lib/server/auth/session").getSession(sessionId).csrfToken,
+      "x-maws-csrf": getSession(sessionId)?.csrfToken ?? "",
     });
     return ordersPost(
       new Request("https://localhost:3000/api/live/orders", {

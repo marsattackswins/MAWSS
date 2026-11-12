@@ -4,6 +4,7 @@ import { BinanceLiveManager, liveManager, resetLiveManagerForTests } from "@/lib
 import { BinanceAdapter } from "@/lib/server/broker/binance/adapter";
 import type { IBroker } from "@/lib/server/broker/interface";
 import { getBroker, resetBrokerForTests } from "@/lib/server/broker/factory";
+import { profileCoordinator, resetProfileCoordinatorForTests } from "@/lib/server/profile/coordinator";
 import { healthSignals } from "@/lib/server/health/state";
 import { getDb } from "@/lib/server/db/connection";
 import { installBrokerClients, type HttpRequestOptions } from "@/lib/server/binance/transport";
@@ -55,19 +56,30 @@ function configureTestnet(): { manager: BinanceLiveManager; http: FakeHttp } {
 }
 
 afterEach(() => {
+  resetProfileCoordinatorForTests();
   resetBrokerForTests();
   resetLiveManagerForTests();
 });
 
 describe("authoritative Binance manager ownership", () => {
-  test("adapter, factory, and liveManager resolve one manager", () => {
-    const cfg = freshEnv(makeCfg({ env: "testnet" }));
-    const authoritative = liveManager(cfg);
-    const directAdapter = new BinanceAdapter(cfg);
-    const factoryBroker = getBroker();
+  test("adapter, factory, and liveManager resolve one manager after an explicit attach", async () => {
+    configureTestnet();
+    const attaching = profileCoordinator().switchProfile({
+      profileId: "binance-testnet",
+      requestId: "lifecycle-attach",
+    });
+    for (let i = 0; i < 500 && FakeWs.instances.length === 0; i += 1) {
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    }
+    for (const ws of FakeWs.instances) ws.emitOpen();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    await attaching;
+
+    const authoritative = liveManager();
+    const directAdapter = new BinanceAdapter(authoritative.cfg);
 
     expect(managerFromBroker(directAdapter)).toBe(authoritative);
-    expect(managerFromBroker(factoryBroker)).toBe(authoritative);
+    expect(managerFromBroker(getBroker())).toBe(authoritative);
     expect(liveManager()).toBe(authoritative);
   });
 

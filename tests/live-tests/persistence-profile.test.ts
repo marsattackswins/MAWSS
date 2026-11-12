@@ -13,17 +13,17 @@ describe("persistence profile context", () => {
   });
 
   test.each([
-    ["local", "paper"],
     ["testnet", "binance-testnet"],
     ["production", "binance-production"],
-    ["shadow", "shadow"],
   ] as const)("maps %s to %s", (env, id) => {
     expect(persistenceProfileFromConfig(makeCfg({ env }))).toEqual({ id, environment: env });
   });
 
-  test("unknown environment fails closed", () => {
-    const invalid = { env: "unknown" } as unknown as Pick<EnvConfig, "env">;
-    expect(() => persistenceProfileFromConfig(invalid)).toThrow("MAWS_PERSISTENCE_PROFILE_INVALID");
+  test("retired local/shadow environments fail closed", () => {
+    for (const retired of ["local", "shadow", "paper", "unknown"]) {
+      const invalid = { env: retired } as unknown as Pick<EnvConfig, "env">;
+      expect(() => persistenceProfileFromConfig(invalid)).toThrow("MAWS_PERSISTENCE_PROFILE_INVALID");
+    }
   });
 
   test("rejects a mismatched profile and environment", () => {
@@ -47,9 +47,14 @@ describe("persistence profile context", () => {
     expect(Object.keys(profile)).toEqual(["id", "environment"]);
   });
 
-  test("paper remains a server profile label without Binance persistence data", () => {
-    const profile = persistenceProfileFromConfig(makeCfg({ env: "local" }));
-    expect(profile).toEqual({ id: "paper", environment: "local" });
-    expect(JSON.stringify(profile)).not.toContain("binance");
+  test("legacy paper/shadow rows keep their DB identity without a live mapping", () => {
+    // Rows written before the two-mode change stay readable: "paper" and
+    // "shadow" remain valid persistence keys, but no configuration maps to
+    // them anymore — the mapping is total over testnet|production only.
+    expect(persistenceProfileFromConfig(makeCfg({ env: "testnet" })).id).toBe("binance-testnet");
+    expect(persistenceProfileFromConfig(makeCfg({ env: "production" })).id).toBe("binance-production");
+    expect(() => persistenceProfileFromConfig({ env: "shadow" } as unknown as Pick<EnvConfig, "env">)).toThrow(
+      "MAWS_PERSISTENCE_PROFILE_INVALID",
+    );
   });
 });

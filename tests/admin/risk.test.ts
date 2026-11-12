@@ -3,6 +3,8 @@ import { NextRequest } from "next/server";
 import { aggregateRiskCockpit, liquidationDistancePct, liquidationStatus, utilizationStatus } from "@/lib/server/risk/cockpit";
 import { resetServerConfigForTests } from "@/lib/server/env/config";
 import { GET } from "@/app/api/admin/risk/route";
+import { createSession, sessionCookieName } from "@/lib/server/auth/session";
+import { secureCookieContext } from "@/lib/server/http/guards";
 import { freshEnv, makeCfg } from "../live-tests/helpers";
 
 const risk = {
@@ -102,9 +104,9 @@ describe("risk cockpit aggregation", () => {
     expect(liquidationStatus(null)).toBe("unavailable");
   });
 
-  test("preserves unavailable state for local mode while exposing configured limits", () => {
+  test("preserves unavailable state while disconnected and exposes configured limits", () => {
     const snapshot = aggregateRiskCockpit({
-      env: "local",
+      env: "testnet",
       risk,
       account: null,
       positions: [],
@@ -127,20 +129,23 @@ describe("GET /api/admin/risk", () => {
     resetServerConfigForTests();
   });
 
-  test("returns local-mode unavailable state and limits without authentication", async () => {
-    freshEnv(makeCfg({ env: "local" }));
-    const response = await GET(new NextRequest("http://localhost:3000/api/admin/risk"));
+  test("returns disconnected limits to an authenticated operator", async () => {
+    const cfg = freshEnv(makeCfg({ env: "testnet", activeProfileId: null }));
+    const { sessionId } = createSession("risk-session");
+    const response = await GET(new NextRequest("http://localhost:3000/api/admin/risk", {
+      headers: { cookie: `${sessionCookieName(secureCookieContext(cfg))}=${sessionId}` },
+    }));
     const body = await response.json();
 
     expect(response.status).toBe(200);
     expect(response.headers.get("cache-control")).toBe("no-store");
-    expect(body.env).toBe("local");
+    expect(body.env).toBe("testnet");
     expect(body.sourceAvailable).toBe(false);
     expect(body.sourceMessage).toBe("No server-side trading state available");
     expect(body.limits.maxOrderNotional.limit).toBe(50);
   });
 
-  test("requires authentication in non-local modes", async () => {
+  test("requires authentication in every environment", async () => {
     freshEnv(makeCfg({ env: "testnet" }));
     const response = await GET(new NextRequest("http://localhost:3000/api/admin/risk"));
     expect(response.status).toBe(401);
