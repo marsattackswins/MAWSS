@@ -39,10 +39,15 @@ if (listing.status !== 0 || discovered.length === 0) {
 }
 console.log(`test:integration: ${discovered.length} test file(s) discovered`);
 
+// The integration suites exist to drive Binance Demo Trading, so they opt out
+// of the Jest network guard. tests/network-guard.ts honours the flag only when
+// MAWS_ENV resolves to testnet, no production credentials are present and every
+// Binance endpoint in the environment is a demo host; assertTestnetSafety()
+// still runs inside the suites themselves.
 const child = spawn(process.execPath, [jest, ...selection, "--runInBand", "--detectOpenHandles"], {
   cwd: root,
   stdio: "inherit",
-  env: process.env,
+  env: { ...process.env, MAWS_ALLOW_REAL_NETWORK: "1" },
 });
 child.on("error", (err) => {
   console.error(err);
