@@ -15,7 +15,7 @@
  * blanked by playwright.config.ts, so no real exchange traffic ever occurs.
  */
 
-import { expect, test } from "@playwright/test";
+import { expect, test } from "./fixtures";
 import {
   FakeBinanceFeed,
   currentDayOpenSec,

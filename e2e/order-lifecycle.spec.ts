@@ -11,7 +11,7 @@
  * e2e/disconnected.spec.ts and e2e/smoke.spec.ts.
  */
 
-import { test } from "@playwright/test";
+import { test } from "./fixtures";
 
 test.skip("order lifecycle tests pending rewrite for Testnet authenticated flow", () => {
   // Paper trading was removed. Pending: Testnet order lifecycle E2E using
