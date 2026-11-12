@@ -77,7 +77,6 @@ export default defineConfig({
     // Readiness = the anonymous liveness endpoint answering, not merely the
     // port accepting connections.
     url: "http://127.0.0.1:3001/api/liveness",
-    port: 3001,
     reuseExistingServer: false,
     timeout: 120_000,
     env: webServerEnv,
