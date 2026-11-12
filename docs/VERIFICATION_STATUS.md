@@ -40,7 +40,7 @@ itself is the unit test's.
 
 ## Position-tool e2e harness gap
 
-`e2e/smoke.spec.ts` "position tool places a long with entry/TP/SL geometry"
+`e2e/smoke.spec.ts` "position tool: toolbar cells present, long placed with target > entry > stop anchors"
 arms the same control surface the toolbar cells call, drag-places the tool with
 real mouse input, and asserts the resulting anchors. What it cannot do in this
 fixture is drag an existing level: Vela's chart has no deterministic candles of

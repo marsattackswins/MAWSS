@@ -254,7 +254,7 @@ test("rapid timeframe switches never hit 'Object is disposed' and chart stays li
   }
 });
 
-test("position tool places a long with entry/TP/SL geometry", async ({
+test("position tool: toolbar cells present, long placed with target > entry > stop anchors", async ({
   page,
 }) => {
   const feed = new FakeBinanceFeed(8787);
@@ -284,7 +284,7 @@ test("position tool places a long with entry/TP/SL geometry", async ({
     ).toBeVisible();
 
     // Magnet snaps dragged points to candle OHLC; with flat seeded candles that
-    // would pin every drag to 100. Turn it off for free dragging.
+    // would pin the placement to 100. Turn it off so placement stays unsnapped.
     await page.evaluate(() => {
       const handles = (
         window as unknown as {
@@ -351,7 +351,7 @@ test("position tool places a long with entry/TP/SL geometry", async ({
     await expect.poll(readPosition, { timeout: 10_000 }).not.toBeNull();
     const placed = await readPosition();
     if (!placed) throw new Error("position drawing was not created");
-    // Dragging UP from the entry is the profit direction: long, TP above, SL below.
+    // The placement drag ran up from the entry — the profit direction: long, TP above, SL below.
     expect(placed.target).toBeGreaterThan(placed.entry);
     expect(placed.stop).toBeLessThan(placed.entry);
 
