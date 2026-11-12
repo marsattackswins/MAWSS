@@ -1004,7 +1004,7 @@ export function TopBar() {
   ]);
 
   return (
-    <header className="relative z-40 flex h-[40px] shrink-0 items-center gap-0.5 overflow-visible bg-[var(--app-bg)] px-2 text-[var(--app-text)]">
+    <header className="relative z-40 flex min-h-[40px] shrink-0 flex-wrap items-center gap-0.5 overflow-visible bg-[var(--app-bg)] px-2 py-1 text-[var(--app-text)]">
       <MawsProductMenu />
       <span className="relative z-[2] top-sep" />
 
@@ -1210,7 +1210,7 @@ export function TopBar() {
       {/* Vela's native drawing bar (horizontal, top-docked) — one shared bar for the
           active pane, Vela-owned state; the MAWS extras (undo/redo/hide/Clear) ride
           in its row and are all drag-reorderable with the tools. */}
-      <div className="relative z-[2] mx-0.5 flex min-w-0 flex-1 items-center">
+      <div className="relative z-[2] mx-0.5 flex min-w-fit flex-1 items-center">
         <VelaDrawingBar />
       </div>
 
