@@ -110,12 +110,12 @@ describe("server profile configuration", () => {
   test("legacy production keys feed the production profile in production mode", () => {
     const cfg = loadEnvConfig(env({
       MAWS_ENV: "production",
-      MAWS_BINANCE_API_KEY: "legacy-production-key",
-      MAWS_BINANCE_API_SECRET: "legacy-production-secret",
+      MAWS_BINANCE_API_KEY: "legacy-production-mock-key",
+      MAWS_BINANCE_API_SECRET: "legacy-production-mock-secret",
       ...RISK_CAPS,
     }));
 
-    expect(cfg.profiles["binance-production"].apiKey).toBe("legacy-production-key");
+    expect(cfg.profiles["binance-production"].apiKey).toBe("legacy-production-mock-key");
     expect(cfg.profiles["binance-testnet"].configured).toBe(false);
   });
 

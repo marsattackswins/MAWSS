@@ -201,7 +201,7 @@ To enable API access without operator session:
 
 ```bash
 # .env.local
-MAWS_HEALTH_TOKEN=your-secret-token-here
+MAWS_HEALTH_TOKEN=<generated-token>
 ```
 
 **IMPORTANT**: The health token is a **secret credential**. 

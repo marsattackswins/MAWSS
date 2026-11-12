@@ -86,7 +86,7 @@ describe("network guard — integration-runner opt-out", () => {
     expect(
       realNetworkAllowed({
         ...testnetEnv,
-        MAWS_BINANCE_PRODUCTION_API_KEY: "present-but-never-read",
+        MAWS_BINANCE_PRODUCTION_API_KEY: "present-but-never-read-mock",
       }),
     ).toBe(false);
   });

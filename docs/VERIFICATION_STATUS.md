@@ -1,42 +1,44 @@
 # MAWS Verification Status
 
 What has been executed against a real exchange versus what has only been
-exercised with fakes. Last updated 2026-11-12 on `master`.
+exercised with fakes. Last updated 2026-11-12 on `master` after Stage 1.
 
 ## Verified
 
 | Check | Result | Notes |
 | --- | --- | --- |
-| Unit tests | Pass (fakes only) | 112 suites / 1819 tests green. No exchange socket or credential is used. |
+| Unit tests | Pass (fakes only) | 113 suites / 1819 tests green. No exchange socket or credential is used. |
 | Type check | Pass | `npx tsc --noEmit` clean. |
-| Browser e2e (CI shape) | Pass (fakes only) | `npx playwright test --project=chromium`: 12 passed, 4 skipped. FakeBinanceFeed plus a stubbed REST layer; no exchange is contacted. |
-| Secret scan | Pass | Gitleaks scan reported no findings. |
+| Lint | Pass | App-scoped ESLint run (app, components, lib, tests, scripts, proxy) reports 0 errors. `npm run lint` also scans the untracked `vendor/` tree, which is absent from a fresh clone. |
+| Production build | Pass | `npx next build` succeeds. |
+| Browser e2e (fresh clone, CI shape) | Pass (fakes only) | Cloned the committed tree with no `vendor/` and no `.env*`, then `npm ci`, `npx playwright install chromium`, and `CI=true npx playwright test --project=chromium --repeat-each=3`: **45 passed, 0 failed, 0 skipped, 0 flaky**. FakeBinanceFeed plus a stubbed REST layer; no exchange is contacted. |
+| Secret scan | Pass (tracked tree) | Clean in a fresh clone. A local working-tree run also flags the gitignored `.env.local` operator verifier by design; no secret is tracked or committed. |
 | Public demo-host calls | Pass (unsigned) | `GET /fapi/v1/time` and `/fapi/v1/exchangeInfo` returned data from Binance demo hosts. The Algo order endpoint returned `401` without a key, which confirms only the unauthenticated path. |
 
-## Skipped e2e tests
+## E2E coverage
 
-The run reports 4 skips. Each one, its written reason, and the coverage that
-replaces it:
+The suite contains 15 unique tests, every one running behind a real
+`POST /api/auth/login` session against a disposable server. The run above
+repeats each test three times; there are no `test.skip` or `test.fixme`
+entries.
 
-| Spec | Test | Kind | Added by | Covered instead by |
+Two dead paper cases were removed with the feature:
+
+| Spec | Test | Kind | Reason | Replaced by |
 | --- | --- | --- | --- | --- |
-| `e2e/disconnected.spec.ts:168` | disconnected startup: broker dialog shows two profiles, no Paper Trading option | `test.fixme` | `3f3c6e5` Align the e2e suite with the Vela workspace | `tests/live-tests/profile-api.test.ts` — "local Chart Only exposes safe metadata" (profiles length is exactly 2) and "rejects invalid profiles and requires production confirmation" (`profileId: "paper"` → 400 `invalid_profile`). The e2e reason is environmental: `/api/live/profiles` authenticates in every non-local runtime and returns 401 under the blank-credential e2e policy. |
-| `e2e/disconnected.spec.ts:216` | dispatch rejects order when disconnected (server returns not_connected) | `test.fixme` | `3f3c6e5` Align the e2e suite with the Vela workspace | `tests/trading-tests/disconnected-behavior.test.ts` — "dispatchSubmitOrder returns not_connected and never hits the API" (also cancel, close, protect). The e2e reason is structural: `page.evaluate` cannot resolve the `@/lib/trading/dispatch` alias, and the UI renders no order control while disconnected. |
-| `e2e/order-lifecycle.spec.ts:16` | order lifecycle tests pending rewrite for Testnet authenticated flow | `test.skip` | `da44cda` baseline snapshot | Nothing: the bodies were removed with paper trading. Testnet order lifecycle is unverified end to end. |
-| `e2e/smoke.spec.ts:160` | paper order opens, TP closes it, and position/P&L/balance update — REMOVED: paper trading was removed from the product | `test.skip` | `da44cda` baseline snapshot | Nothing: the feature is gone by design. Legacy paper state migration is covered in `tests/trading-tests/disconnected-behavior.test.ts`. |
+| `e2e/order-lifecycle.spec.ts` | order lifecycle tests pending rewrite for Testnet authenticated flow | skipped file | The bodies were tied to paper trading and had already been removed. | Login-first attachment tests in `e2e/disconnected.spec.ts`; a full Testnet order lifecycle remains unverified end to end. |
+| `e2e/smoke.spec.ts` | paper order opens, TP closes it, and position/P&L/balance update — REMOVED: paper trading was removed from the product | `test.skip` | The feature is gone by design. | `tests/trading-tests/disconnected-behavior.test.ts` — every mutation returns `not_connected` and never reaches the broker. |
 
-Earlier runs showed 2 skips because the two `test.fixme` entries in
-`e2e/disconnected.spec.ts` were introduced later, when the suite was aligned
-with the Vela workspace (`3f3c6e5`). Both `test.skip` entries predate that.
+The two former `test.fixme` cases in `e2e/disconnected.spec.ts` are now real
+login-first tests: the profile menu lists exactly Testnet and Live, and a
+disconnected order submission returns `409 not_connected`.
 
-The Testnet-to-Production contract is covered by passing tests:
+The Testnet-to-Production switch contract is covered by
 `tests/live-tests/profile-coordinator.test.ts` — "rejects a concurrent switch
 and blocks exposure without cancellation or flattening" (asserts
 `exposure_present`, no `allOpenOrders` and no `order` mutation calls) — plus the
-passing e2e "switching from Testnet to Production goes through exposure and
-mutation checks" in `e2e/disconnected.spec.ts`. Note that the e2e stubs
-`/api/live/profile/switch` and asserts the surfaced status; the blocking logic
-itself is the unit test's.
+e2e "switching from Testnet to Production goes through exposure and mutation
+checks", which stubs the switch route and asserts the surfaced status.
 
 ## Position-tool e2e harness gap
 
