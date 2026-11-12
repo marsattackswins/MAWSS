@@ -10,7 +10,9 @@ const FAKE_WS_PORT = 8787;
 // login-first specs via MAWS_E2E_OPERATOR_PASSWORD); it is never printed and
 // never written to disk.
 const disposable = createDisposableContext({ source: {}, purpose: "e2e" });
-process.env.MAWS_E2E_OPERATOR_PASSWORD = disposable.password;
+// Playwright reloads this config in every worker process. Keep the password
+// minted by the main process, which started the server with matching verifier.
+process.env.MAWS_E2E_OPERATOR_PASSWORD ??= disposable.password;
 
 // Playwright merges `env` over process.env, so also blank every ambient
 // MAWS_* variable (secrets included) so nothing leaks into e2e runs.
