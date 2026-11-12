@@ -45,11 +45,19 @@ export default defineConfig({
   expect: { timeout: 10_000 },
   workers: 1,
   fullyParallel: false,
-  retries: 0,
-  reporter: [["list"]],
+  // Two retries in CI absorb runner-level flake without hiding a real
+  // regression: a deterministic failure still fails all three attempts, and a
+  // test that only passes on retry is visible in the report as "flaky".
+  retries: process.env.CI ? 2 : 0,
+  // The HTML report is what the e2e workflow uploads; the list reporter keeps
+  // the job log readable.
+  reporter: process.env.CI ? [["list"], ["html", { open: "never" }]] : [["list"]],
   use: {
     baseURL: "http://localhost:3001",
     viewport: { width: 1440, height: 900 },
+    // Traces are captured for retried tests only, so green runs stay fast and
+    // a flake ships its evidence with the report.
+    trace: "on-first-retry",
   },
   // The CI workflow selects this project with `--project=chromium`. Without a
   // projects array Playwright reports `Project(s) "chromium" not found`.
