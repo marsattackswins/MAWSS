@@ -13,6 +13,25 @@ MAWS uses session-based authentication with the following components:
 - **Origin Validation**: Strict origin/host checking to prevent CSRF
 - **Rate Limiting**: Per-IP rate limiting on login attempts
 
+### Local dev convenience mode (localhost only)
+
+`npm run dev` sets `MAWS_LOCAL_DEV=1` and `MAWS_LOCAL_DEV_BIND=127.0.0.1` and binds
+Next to loopback. With the marker set, in a non-production runtime, on a loopback
+bind, and only for a request whose `Host` is exactly `localhost:3000` or
+`127.0.0.1:3000`, the chart shell and the public-data proxies (`/api/binance/ticker`,
+`klines`, `symbols`, `/api/logo`, news, calendar) allow anonymous access. The
+exact-Host requirement is a DNS-rebinding defence: another origin resolving to
+127.0.0.1 still sends its own Host and receives 401.
+
+Account surfaces never take this path. `/api/live/*` (except an unauthenticated
+`GET /api/live/state` that returns only `{attached:false, loginRequired:true}`),
+`/api/admin/*`, `/admin`, orders, cancel, protect, flatten, profile switch and
+disconnect all require a valid session, CSRF token, and Origin/Host checks in
+every mode, and unauthenticated attempts get 401. The outbound Binance budget
+and the 429/418 cooldown are unchanged; the mode removes no exchange guard.
+A non-loopback bind with the marker refuses to start, and without the marker
+(Docker, systemd, production, e2e) all routes require a session as before.
+
 ### Password Storage
 
 **Algorithm**: Scrypt with salt

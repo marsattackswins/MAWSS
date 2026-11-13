@@ -48,6 +48,23 @@ step is expensive to undo once the server has started.
 - Restrict the Binance API key to the server's egress IP and disable withdrawals
   on that key.
 
+### Local dev convenience mode
+
+`npm run dev` only: the launcher binds `127.0.0.1:3000` and sets `MAWS_LOCAL_DEV=1`
+with `MAWS_LOCAL_DEV_BIND=127.0.0.1`. It is not a configuration file setting and
+it is never enabled by Docker, systemd, the supervisor, or e2e. When active, and
+only when the `Host` header is exactly `localhost:3000` or `127.0.0.1:3000`, the
+chart shell and public-data proxies (`/api/binance/ticker`, `klines`, `symbols`,
+`/api/logo`, news, calendar) answer without a session. The shared outbound
+Binance budget and the 429/418 cooldown still apply. Every account route —
+`/api/live/*` except the unauthenticated `GET /api/live/state` status stub,
+`/api/admin/*`, `/admin`, orders, cancel, protect, flatten, profile switch and
+disconnect — still requires a valid session, CSRF, and Origin/Host checks.
+
+A marker on any non-loopback bind is refused at startup rather than downgraded
+silently. Do not set it in a deployment; production deployments never run
+`scripts/dev.mjs`.
+
 ### Data safety
 
 - Back up `.maws/` (the database plus its `-wal`/`-shm` sidecars) before the

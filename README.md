@@ -52,13 +52,19 @@ On macOS or Linux:
 cp .env.example .env.local
 ```
 
-Normal development requires configured `MAWS_OPERATOR_AUTH`; Binance credentials are optional. `MAWS_ENV` accepts only `testnet` or `production` and defaults to Testnet configuration, not an attachment. Start the server and sign in through `/login`:
+Binance credentials are optional. `MAWS_ENV` accepts only `testnet` or `production` and defaults to Testnet configuration, not an attachment. `npm run dev` binds the server to `127.0.0.1:3000` and starts it in **local dev convenience mode**: charts and public market data open without a login, while Testnet/Live connection, orders, and the admin surface still require the operator session.
 
 ```bash
 npm run dev
 ```
 
-For an explicitly disposable session, use `npm run dev -- --throwaway`. It generates a random password, prints it once to the terminal, uses a scratch database under the OS temporary directory, and still requires real login. It refuses Live credential components found through effective configuration, including normal environment-file loading. It never writes a temporary credential file or silently replaces normal operator authentication.
+### Local dev convenience mode (localhost only)
+
+`scripts/dev.mjs` sets `MAWS_LOCAL_DEV=1` and `MAWS_LOCAL_DEV_BIND=127.0.0.1` and binds Next to loopback. In that mode, and only when the request's `Host` header is exactly `localhost:3000` or `127.0.0.1:3000`, the chart shell and the public-data proxies (`/api/binance/ticker`, `/api/binance/klines`, `/api/binance/symbols`, `/api/logo`, news, calendar) answer without a session. The exact-Host rule blocks DNS rebinding, and the outbound Binance budget plus the 429/418 cooldown still apply.
+
+Everything account-related always requires a valid session, CSRF token, and Origin/Host checks: `/api/live/*` except an unauthenticated `GET /api/live/state` that returns only `{ attached: false, loginRequired: true }`, all `/api/admin/*`, `/admin`, protect, orders, cancel, flatten, profile switch and disconnect. Without `MAWS_LOCAL_DEV=1` — Docker, systemd, production, and e2e — every surface requires a session exactly as before. A marker on a non-loopback bind is refused at startup; it is never honored silently. Sign in at `/login?next=/` to connect Testnet or Live, and the app never attaches a profile automatically.
+
+For an explicitly disposable session, use `npm run dev -- --throwaway`. It generates a random password, prints it once to the terminal, uses a scratch database under the OS temporary directory, and still requires real login for any account surface. It refuses Live credential components found through effective configuration, including normal environment-file loading. It never writes a temporary credential file or silently replaces normal operator authentication.
 
 Open [http://localhost:3000](http://localhost:3000). The developer application stays on **3000** and refuses an occupied port. E2E deliberately uses **3001**, a matching allowed origin, fresh browser contexts, and isolated server state so it cannot collide with the developer workspace.
 

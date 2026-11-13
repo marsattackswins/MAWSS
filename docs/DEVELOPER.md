@@ -34,7 +34,8 @@ cp .env.example .env
 **Development Defaults**:
 - `MAWS_ENV=testnet` is the default; `production` is the only other accepted value
 - The server always starts Disconnected — startup never attaches a profile
-- `MAWS_OPERATOR_AUTH` is required in every mode; charting is available after sign-in
+- `MAWS_OPERATOR_AUTH` is required in every mode; connecting Testnet or Live always needs a sign-in
+- `npm run dev` enables local dev convenience mode (loopback bind, exact `localhost:3000`/`127.0.0.1:3000` Host): the chart and public market data open without a login, account/admin routes never do
 - `npm run dev -- --throwaway` starts a scratch database with a random password printed once and refuses to start when any Live credential is configured
 - Add profile credentials only when you intend to attach that profile
 - Keep all broker credentials server-side; never use a `NEXT_PUBLIC_` prefix
@@ -45,7 +46,7 @@ cp .env.example .env
 npm run dev
 ```
 
-The development server starts on http://localhost:3000
+The development server binds `127.0.0.1` and starts on http://localhost:3000. It sets `MAWS_LOCAL_DEV=1` and `MAWS_LOCAL_DEV_BIND=127.0.0.1`, which enable the login-free chart shell and public-data proxies for that exact loopback Host only. Connecting a profile, orders, protection, `/admin`, and every other account route still return 401 without an operator session; sign in at `/login?next=/`. Without the marker (Docker, systemd, production, e2e) every route requires a session as before, and a marker without a loopback bind refuses to start.
 
 ### Building for Production
 
