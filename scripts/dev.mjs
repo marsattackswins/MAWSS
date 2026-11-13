@@ -173,6 +173,16 @@ if (existing && reuseFlag && !restartFlag) {
 // exactly what the server would read. Values are inspected, never printed.
 loadEnvConfig(process.cwd(), true, () => {});
 
+// Local-dev convenience mode: the chart and public market data open without a
+// login; connecting Testnet or Live still requires the operator session. Only
+// this launcher sets the marker, and always together with the loopback bind it
+// actually uses — next.config.ts refuses to start when those disagree.
+const LOCAL_DEV_ENV = {
+  MAWS_LOCAL_DEV: "1",
+  MAWS_LOCAL_DEV_BIND: "127.0.0.1",
+  NEXT_PUBLIC_MAWS_LOCAL_DEV: "1",
+};
+
 let childEnv;
 let disposable = null;
 if (throwawayFlag) {
@@ -181,7 +191,7 @@ if (throwawayFlag) {
     // configuration, .env files included) and when a real operator verifier
     // would be overwritten. The child env is otherwise fully isolated.
     disposable = createDisposableContext({ source: { ...process.env }, purpose: "throwaway" });
-    childEnv = { ...disposable.env, PORT: port };
+    childEnv = { ...disposable.env, PORT: port, ...LOCAL_DEV_ENV };
     // Human terminal only; written exactly once. The password is never stored.
     passwordAnnouncement(disposable.password, process.stdout)();
   } catch (error) {
@@ -196,7 +206,7 @@ if (throwawayFlag) {
     console.error(`\n${bold}Dev server cannot start.${reset}\n  ${error.message}\n`);
     process.exit(1);
   }
-  childEnv = { ...process.env, PORT: port };
+  childEnv = { ...process.env, PORT: port, ...LOCAL_DEV_ENV };
 }
 
 // Always kill stale processes on our port before spawning Next — this prevents
@@ -254,7 +264,9 @@ if (await portInUse(Number(port))) {
 }
 
 const nextBin = path.resolve(process.cwd(), "node_modules", "next", "dist", "bin", "next");
-const child = spawn(process.execPath, [nextBin, "dev", "-p", port], {
+// Loopback only: the login-free chart mode must never be reachable from the
+// network, and Next's default 0.0.0.0 bind would expose it.
+const child = spawn(process.execPath, [nextBin, "dev", "-H", "127.0.0.1", "-p", port], {
   stdio: "inherit",
   // PORT pinned as well as the flag: nothing in the toolchain may read a launcher's
   // PORT=0 and build URLs from it.

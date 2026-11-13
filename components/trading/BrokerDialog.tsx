@@ -232,7 +232,14 @@ export function BrokerDialog() {
   };
 
   const selectProfile = (profile: ProfileMetadataDto) => {
-    const unavailable = !profile.configured && !authenticationRequired;
+    // Local-dev convenience: the chart is usable while signed out, so the
+    // profile chooser sends the operator to the sign-in page and back here.
+    if (authenticationRequired) {
+      // eslint-disable-next-line @next/next/no-location-assign-relative-destination
+      window.location.href = "/login?next=/";
+      return;
+    }
+    const unavailable = !profile.configured;
     if (switching || unavailable) return;
     void requestBinanceProfile(profile.profileId);
   };
@@ -264,7 +271,19 @@ export function BrokerDialog() {
             <span>{profileErrorMessage(liveReason)}{liveManagerError ? ` ${liveManagerError}.` : ""} {profilePhaseLabel(livePhase)}. Normal trading remains disabled until a ready profile is confirmed.</span>
           </div>
         ) : null}
-        {loadError ? <div className="mx-5 mb-3 text-[12px] text-[#f0b90b]">{loadError}</div> : null}
+        {authenticationRequired ? (
+          <div className="mx-5 mb-3 flex items-center justify-between gap-3 rounded-[6px] border border-[#2962ff]/40 bg-[#101827] px-3 py-2 text-[12px] text-(--app-text)" role="status">
+            <span>Log in to connect Testnet or Live</span>
+            <a
+              href="/login?next=/"
+              className="rounded-[4px] bg-[#2962ff] px-3 py-1.5 text-[12px] font-semibold text-white"
+            >
+              Log in
+            </a>
+          </div>
+        ) : loadError ? (
+          <div className="mx-5 mb-3 text-[12px] text-[#f0b90b]">{loadError}</div>
+        ) : null}
 
         <div className="grid grid-cols-2 gap-3 px-5 pb-5">
           {loading ? <div className="col-span-2 flex items-center justify-center py-14 text-[12px] text-(--app-muted)"><LoaderCircle size={16} className="mr-2 animate-spin" />Loading server profiles…</div> : null}

@@ -10,7 +10,7 @@ function errorMessage(status: number, body: LoginErrorBody | null): string {
   return "Sign-in is unavailable. Try again later.";
 }
 
-export function LoginForm() {
+export function LoginForm({ next = "/" }: { next?: string }) {
   const [password, setPassword] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -30,7 +30,7 @@ export function LoginForm() {
       if (response.ok) {
         // Full page load boots the app under the fresh HttpOnly session cookie.
         // eslint-disable-next-line @next/next/no-location-assign-relative-destination
-        window.location.href = "/";
+        window.location.href = next;
         return;
       }
       const body = (await response.json().catch(() => null)) as LoginErrorBody | null;
@@ -54,7 +54,7 @@ export function LoginForm() {
       >
         <div className="mb-1 text-[15px] font-semibold">MAWS operator sign-in</div>
         <div className="mb-4 text-[12px] text-[var(--maws-muted)]">
-          Trading endpoints require the operator credential.
+          Trading endpoints require the operator credential. The chart itself stays usable without a login on this local dev server.
         </div>
         <label className="mb-1 block text-[12px] text-[var(--maws-muted)]" htmlFor="op-password">
           Password
