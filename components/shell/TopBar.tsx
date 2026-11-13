@@ -11,6 +11,7 @@ import { formatTicker } from "@/lib/maws/universe";
 import { useActivePane, useAppStore } from "@/lib/store";
 import { useLiveStore } from "@/lib/live/store";
 import { liveApi, LiveApiError, LiveAuthError, setCsrf } from "@/lib/live/api";
+import { ProfileAuthDialog } from "@/components/trading/ProfileAuthDialog";
 import { profileErrorMessage, profileLabel, switchLiveProfile } from "@/lib/live/bridge";
 import type { LiveProfileId } from "@/lib/live/types";
 import { TIMEFRAMES } from "@/lib/timeframes";
@@ -533,67 +534,19 @@ function BuySellStrip({
         </>
       )}
       {authTarget ? (
-        <div
-          className="fixed inset-0 z-[100] flex items-center justify-center bg-black/60"
-          onMouseDown={() => {
+        <ProfileAuthDialog
+          profileId={authTarget}
+          password={authPassword}
+          error={authError}
+          busy={authBusy}
+          onPasswordChange={setAuthPassword}
+          onCancel={() => {
             setAuthTarget(null);
             setAuthPassword("");
             setAuthError(null);
           }}
-        >
-          <form
-            role="dialog"
-            aria-modal="true"
-            aria-labelledby="profile-auth-title"
-            onSubmit={authenticateForProfile}
-            className="w-[430px] max-w-[calc(100vw-32px)] rounded-[8px] border border-(--app-border) bg-[#171717] p-5 shadow-[0_16px_60px_rgba(0,0,0,0.7)]"
-            onMouseDown={(event) => event.stopPropagation()}
-          >
-            <div id="profile-auth-title" className="text-[16px] font-semibold text-white">
-              Authenticate for {profileLabel(authTarget)}
-            </div>
-            <p className="mt-3 text-[13px] leading-5 text-(--app-text)">
-              Enter the server operator password to connect this profile.
-            </p>
-            <label className="mt-4 block text-[12px] text-(--app-muted)" htmlFor="profile-operator-password">
-              Operator password
-            </label>
-            <input
-              id="profile-operator-password"
-              type="password"
-              autoComplete="current-password"
-              autoFocus
-              value={authPassword}
-              onChange={(event) => setAuthPassword(event.target.value)}
-              className="mt-1 h-9 w-full rounded-[6px] border border-(--app-border) bg-[#111111] px-3 text-[13px] text-(--app-text) outline-none focus:border-[#2962ff]"
-            />
-            {authError ? (
-              <div role="alert" className="mt-3 text-[12px] text-[#f23645]">
-                {authError}
-              </div>
-            ) : null}
-            <div className="mt-5 flex justify-end gap-2">
-              <button
-                type="button"
-                className="rounded-[4px] px-3 py-2 text-[12px] text-(--app-muted) hover:bg-[#222] hover:text-(--app-text)"
-                onClick={() => {
-                  setAuthTarget(null);
-                  setAuthPassword("");
-                  setAuthError(null);
-                }}
-              >
-                Cancel
-              </button>
-              <button
-                type="submit"
-                disabled={authBusy || authPassword.length === 0}
-                className="rounded-[4px] bg-[#2962ff] px-3 py-2 text-[12px] font-semibold text-white disabled:cursor-not-allowed disabled:opacity-40"
-              >
-                {authBusy ? "Authenticating…" : "Authenticate"}
-              </button>
-            </div>
-          </form>
-        </div>
+          onSubmit={authenticateForProfile}
+        />
       ) : null}
 
       {productionConfirmation ? (

@@ -238,6 +238,9 @@ describe("the proxy gate", () => {
     expect(call("/api/news/finnhub").status).toBe(200);
     expect(call("/api/calendar/xoomar").status).toBe(200);
     expect(call("/api/live/state").status).toBe(200);
+    // The journal is a login-free chart companion in this mode.
+    expect(call("/journal").status).toBe(200);
+    expect(call("/journal/some/page").status).toBe(200);
   });
 
   test("keeps every account, admin, status and journal path behind the login", () => {
@@ -245,7 +248,7 @@ describe("the proxy gate", () => {
     for (const pathname of [
       "/admin",
       "/status",
-      "/journal",
+      "/journalx",
       "/api/admin/config",
       "/api/live/profile",
       "/api/live/profiles",

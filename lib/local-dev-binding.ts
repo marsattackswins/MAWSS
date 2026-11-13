@@ -60,6 +60,9 @@ export function canReadPublicDataWithoutSession(req: {
  */
 const PUBLIC_PATHS = new Set([
   "/",
+  // The vendored journal keeps no trading credentials of its own and is
+  // rendered inside the chart; it opens with the chart in local-dev mode.
+  "/journal",
   "/api/binance/ticker",
   "/api/binance/klines",
   "/api/binance/symbols",
@@ -71,7 +74,9 @@ const PUBLIC_PATHS = new Set([
 ]);
 
 export function isLocalDevPublicPath(pathname: string): boolean {
-  return PUBLIC_PATHS.has(pathname);
+  if (PUBLIC_PATHS.has(pathname)) return true;
+  // The journal is a proxied Next app with its own subpaths and assets.
+  return pathname.startsWith("/journal/");
 }
 
 /**
