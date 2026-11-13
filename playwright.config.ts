@@ -13,6 +13,10 @@ const FAKE_WS_PORT = 8787;
 // login-first specs via MAWS_E2E_OPERATOR_PASSWORD); it is never printed and
 // never written to disk.
 const disposable = createDisposableContext({ source: {}, purpose: "e2e" });
+// Separate scratch database for the local-dev convenience server on 3000, so
+// the two servers never share SQLite files or state.
+const localDevContext = createDisposableContext({ source: {}, purpose: "e2e" });
+const localDevEnv = localDevContext.env as Record<string, string>;
 // Playwright reloads this config in every worker process. Keep the password
 // minted by the main process, which started the server with matching verifier.
 process.env.MAWS_E2E_OPERATOR_PASSWORD ??= disposable.password;
@@ -84,13 +88,40 @@ export default defineConfig({
   // - The webServer runs on port 3001 (isolated from the dev workspace on
   //   3000) so saved state keys (origin-scoped localStorage) cannot
   //   cross-contaminate; MAWS_ALLOWED_ORIGIN matches this port.
-  webServer: {
-    command: "npx next dev -p 3001",
-    // Readiness = the anonymous liveness endpoint answering, not merely the
-    // port accepting connections.
-    url: "http://127.0.0.1:3001/api/liveness",
-    reuseExistingServer: false,
-    timeout: 120_000,
-    env: webServerEnv,
-  },
+  webServer: [
+    {
+      command: "npx next dev -p 3001",
+      // Readiness = the anonymous liveness endpoint answering, not merely the
+      // port accepting connections.
+      url: "http://127.0.0.1:3001/api/liveness",
+      reuseExistingServer: false,
+      timeout: 120_000,
+      env: webServerEnv,
+    },
+    // Local-dev convenience mode: the login-free chart is localhost:3000 only.
+    // A second, isolated server (own distDir and scratch DB) proves that mode
+    // while every other spec keeps the 3001 server without the marker.
+    {
+      command: "npx next dev -H 127.0.0.1 -p 3000",
+      url: "http://127.0.0.1:3000/api/liveness",
+      reuseExistingServer: false,
+      timeout: 120_000,
+      env: {
+        ...webServerEnv,
+        MAWS_ENV: "testnet",
+        MAWS_OPERATOR_AUTH: localDevEnv.MAWS_OPERATOR_AUTH,
+        MAWS_DB_PATH: localDevEnv.MAWS_DB_PATH,
+        MAWS_STATE_DIR: localDevEnv.MAWS_STATE_DIR,
+        MAWS_ALLOWED_ORIGIN: "http://localhost:3000",
+        MAWS_TRUST_PROXY: "false",
+        MAWS_ALLOW_REAL_NETWORK: "0",
+        MAWS_NEXT_DIST_DIR: ".next-e2e-localdev",
+        MAWS_LOCAL_DEV: "1",
+        MAWS_LOCAL_DEV_BIND: "127.0.0.1",
+        NEXT_PUBLIC_MAWS_LOCAL_DEV: "1",
+        NEXT_PUBLIC_BINANCE_FAPI_WS: `ws://127.0.0.1:${FAKE_WS_PORT}`,
+        NEXT_PUBLIC_BINANCE_FAPI_WS_FALLBACK: `ws://127.0.0.1:${FAKE_WS_PORT}`,
+      },
+    },
+  ],
 });
