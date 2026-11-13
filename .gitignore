@@ -16,6 +16,7 @@
 /test-results/
 /playwright-report/
 /.next-e2e/
+/.next-e2e-localdev/
 
 # next.js
 /.next/
