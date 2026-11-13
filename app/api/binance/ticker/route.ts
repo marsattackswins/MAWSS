@@ -4,6 +4,7 @@ import { mapUpstreamError, upstreamErrorResponse } from "@/lib/server/validation
 import { tickerAggregator } from "@/lib/server/log/market-logger";
 import { serverConfig } from "@/lib/server/env/config";
 import { resolveOperatorSession } from "@/lib/server/auth/session-guard";
+import { canReadPublicDataWithoutSession } from "@/lib/server/auth/local-dev";
 
 export const dynamic = "force-dynamic";
 
@@ -19,7 +20,7 @@ export async function GET(req: NextRequest) {
   } catch {
     return Response.json({ error: "Service unavailable" }, { status: 503 });
   }
-  if (!resolveOperatorSession(req.headers.get("cookie"), cfg)) {
+  if (!resolveOperatorSession(req.headers.get("cookie"), cfg) && !canReadPublicDataWithoutSession(req)) {
     return Response.json(
       { error: { code: "unauthenticated", message: "Sign in required" } },
       { status: 401 },

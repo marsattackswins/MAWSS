@@ -1,4 +1,5 @@
 import { resolveOperatorSession } from "@/lib/server/auth/session-guard";
+import { canReadPublicDataWithoutSession } from "@/lib/server/auth/local-dev";
 import { serverConfig } from "@/lib/server/env/config";
 import type { NextRequest } from "next/server";
 
@@ -28,7 +29,7 @@ export async function GET(req: NextRequest) {
 
   // Require operator session
   const session = resolveOperatorSession(req.headers.get("cookie"), cfg);
-  if (!session) {
+  if (!session && !canReadPublicDataWithoutSession(req)) {
     return Response.json(
       { error: { code: "unauthenticated", message: "Sign in required" } },
       { status: 401, headers: { "Cache-Control": "no-store" } },

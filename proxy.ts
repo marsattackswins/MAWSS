@@ -1,6 +1,10 @@
 import type { NextRequest } from "next/server";
 import { NextResponse } from "next/server";
 import { resolveOperatorSession } from "@/lib/server/auth/session-guard";
+import {
+  canReadPublicDataWithoutSession,
+  isLocalDevPublicPath,
+} from "@/lib/server/auth/local-dev";
 import { serverConfig } from "@/lib/server/env/config";
 
 // Token validation and response sanitization remain in the specific handlers.
@@ -32,6 +36,14 @@ export function proxy(request: NextRequest): NextResponse {
     return NextResponse.json({ error: { code: "config", message: "Service unavailable" } }, {
       status: 503, headers: { "cache-control": "private, no-store" },
     });
+  }
+  // Local-dev convenience mode: the chart and public market data only. The
+  // session branch above already returned for a signed-in operator, so this is
+  // strictly the anonymous path: launcher marker, loopback bind, and the exact
+  // localhost/127.0.0.1 Host. Account, admin, status, journal and every write
+  // stay below and answer 401.
+  if (canReadPublicDataWithoutSession(request) && isLocalDevPublicPath(pathname)) {
+    return NextResponse.next();
   }
   if (pathname.startsWith("/api/")) {
     return NextResponse.json({ error: { code: "unauthenticated", message: "Sign in required" } }, {

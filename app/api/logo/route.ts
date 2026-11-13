@@ -2,6 +2,7 @@ import { logoBase } from "@/lib/maws/asset-logo";
 import { normalizeAppSymbol } from "@/lib/market/resolve-provider";
 import { serverConfig } from "@/lib/server/env/config";
 import { resolveOperatorSession } from "@/lib/server/auth/session-guard";
+import { canReadPublicDataWithoutSession } from "@/lib/server/auth/local-dev";
 import type { NextRequest } from "next/server";
 
 export const dynamic = "force-dynamic";
@@ -145,7 +146,7 @@ export async function GET(req: NextRequest) {
   } catch {
     return new Response("Service unavailable", { status: 503 });
   }
-  if (!resolveOperatorSession(req.headers.get("cookie"), cfg)) {
+  if (!resolveOperatorSession(req.headers.get("cookie"), cfg) && !canReadPublicDataWithoutSession(req)) {
     return new Response("Sign in required", { status: 401 });
   }
 

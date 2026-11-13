@@ -1,4 +1,10 @@
 import type { NextConfig } from "next";
+import { assertLocalDevBinding } from "./lib/local-dev-binding";
+
+// Local-dev convenience mode is localhost-only. Refuse to boot a login-free
+// terminal when the launcher did not bind loopback (0.0.0.0, a LAN address, a
+// custom hostname all fail here) instead of silently honoring the marker.
+assertLocalDevBinding();
 
 const nextConfig: NextConfig = {
   // Lets the e2e webServer run a second dev instance in its own directory

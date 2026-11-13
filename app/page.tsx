@@ -1,17 +1,16 @@
 import { redirect } from "next/navigation";
 import { headers } from "next/headers";
-import { isOperatorPageAuthorized } from "@/lib/server/auth/page-guard";
+import { isChartPageAuthorized } from "@/lib/server/auth/page-guard";
 import { AppShell } from "@/components/shell/AppShell";
 
 export const dynamic = "force-dynamic";
 
 export default async function Home() {
   const headersList = await headers();
-  const cookieHeader = headersList.get("cookie");
 
   let authorized: boolean;
   try {
-    authorized = isOperatorPageAuthorized(cookieHeader);
+    authorized = isChartPageAuthorized(headersList);
   } catch {
     // Configuration load failure: fail closed, do not render the terminal.
     return (
