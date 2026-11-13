@@ -44,9 +44,37 @@ function isBlocked(target) {
   return host !== null && BLOCKED_HOST.test(host);
 }
 
-function record(kind, target) {
+function headerValue(headers, name) {
+  if (!headers) return null;
+  try {
+    if (typeof headers.get === "function") return headers.get(name);
+    if (Array.isArray(headers)) {
+      const hit = headers.find(
+        (pair) => Array.isArray(pair) && String(pair[0]).toLowerCase() === name.toLowerCase(),
+      );
+      return hit ? String(hit[1]) : null;
+    }
+    for (const key of Object.keys(headers)) {
+      if (key.toLowerCase() === name.toLowerCase()) return String(headers[key]);
+    }
+  } catch {
+    /* malformed headers are themselves a finding; fall through */
+  }
+  return null;
+}
+
+/**
+ * One line per blocked attempt: `blocked <iso> <kind> <url> method=… auth=… sig=…`.
+ * The trailing fields let e2e/disconnected-policy.ts prove that a disconnected
+ * app only ever issues allowlisted, unsigned public market reads.
+ */
+function record(kind, target, details) {
   const url = typeof target === "string" ? target : target && (target.href || target.url) ? String(target.href || target.url) : String(target);
-  const line = `${new Date().toISOString()} ${kind} ${url}`;
+  const headers = details && details.headers;
+  const method = String((details && details.method) || (kind === "websocket" ? "-" : "GET")).toUpperCase();
+  const auth = headerValue(headers, "x-mbx-apikey") ? 1 : 0;
+  const sig = headerValue(headers, "x-mbx-signature") || /[?&]signature=/.test(url) ? 1 : 0;
+  const line = `${new Date().toISOString()} ${kind} ${url} method=${method} auth=${auth} sig=${sig}`;
   try {
     fs.mkdirSync(path.dirname(LOG_PATH), { recursive: true });
     fs.appendFileSync(LOG_PATH, `blocked ${line}\n`);
@@ -68,7 +96,14 @@ const nativeFetch = globalThis.fetch;
 if (typeof nativeFetch === "function") {
   globalThis.fetch = function guardedFetch(input, init) {
     if (isBlocked(input)) {
-      record("fetch", input);
+      record("fetch", input, {
+        method:
+          (init && init.method) ||
+          (input && typeof input === "object" && typeof input.method === "string" ? input.method : "GET"),
+        headers:
+          (init && init.headers) ||
+          (input && typeof input === "object" && typeof input.headers === "object" ? input.headers : undefined),
+      });
       return Promise.reject(blockedError("fetch", input));
     }
     return nativeFetch(input, init);
@@ -85,7 +120,11 @@ for (const [name, mod] of [
     if (typeof native !== "function") continue;
     mod[method] = function guarded(target, ...rest) {
       if (isBlocked(target)) {
-        record(name, target);
+        const options =
+          rest.length > 0 && rest[0] && typeof rest[0] === "object" && typeof rest[0].write !== "function"
+            ? rest[0]
+            : undefined;
+        record(name, target, { method: options && options.method, headers: options && options.headers });
         throw blockedError(name, target);
       }
       return native.call(this, target, ...rest);
