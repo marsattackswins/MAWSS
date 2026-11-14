@@ -777,3 +777,33 @@ input[type="number"]::-webkit-inner-spin-button {
 .vela-popover {
   font-family: "Trebuchet MS", Roboto, Ubuntu, sans-serif !important;
 }
+
+/* ── Form controls stay dark under browser save/autofill ────────────────────
+ * Chrome paints saved passwords onto a pale yellow field regardless of the
+ * app theme, which made the operator password box look broken. Pin the
+ * colour-scheme and paint over the autofill background with an inset shadow
+ * (the only property Chrome lets an author override) so every credential
+ * field stays on the terminal surface in both the chart and its dialogs. */
+input,
+textarea,
+select {
+  color-scheme: dark;
+}
+
+input:-webkit-autofill,
+input:-webkit-autofill:hover,
+input:-webkit-autofill:focus,
+textarea:-webkit-autofill,
+select:-webkit-autofill {
+  -webkit-box-shadow: 0 0 0 1000px #0d0d0d inset !important;
+  -webkit-text-fill-color: var(--app-text) !important;
+  caret-color: var(--app-text);
+  transition: background-color 99999s ease-out 0s;
+}
+
+/* Profile sign-in: focus follows the environment accent (blue for Testnet,
+ * amber for Live) instead of one hard-coded colour. */
+.profile-auth-field:focus {
+  border-color: var(--auth-accent, #2962ff);
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--auth-accent, #2962ff) 45%, transparent);
+}
