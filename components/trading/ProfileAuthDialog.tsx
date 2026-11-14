@@ -183,11 +183,7 @@ export function ProfileAuthDialog({
               <CircleAlert size={12} className="mt-[1px] shrink-0" />
               <span>{error}</span>
             </div>
-          ) : (
-            <p className="mt-2 text-[11px] leading-4 text-(--app-muted)">
-              Verified server-side against the operator hash, never stored in the browser.
-            </p>
-          )}
+          ) : null}
         </div>
 
         <div className="mt-3.5 flex items-center justify-end gap-2 border-t border-(--app-border) px-5 py-3">
