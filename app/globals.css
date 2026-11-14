@@ -795,15 +795,15 @@ input:-webkit-autofill:hover,
 input:-webkit-autofill:focus,
 textarea:-webkit-autofill,
 select:-webkit-autofill {
-  -webkit-box-shadow: 0 0 0 1000px #0d0d0d inset !important;
+  -webkit-box-shadow: 0 0 0 1000px var(--app-bg) inset !important;
   -webkit-text-fill-color: var(--app-text) !important;
   caret-color: var(--app-text);
   transition: background-color 99999s ease-out 0s;
 }
 
-/* Profile sign-in: focus follows the environment accent (blue for Testnet,
- * amber for Live) instead of one hard-coded colour. */
+/* Profile sign-in: the focus ring uses the active theme accent (--auth-accent
+ * is set to it by the dialog, so a custom accent colour carries through). */
 .profile-auth-field:focus {
-  border-color: var(--auth-accent, #2962ff);
-  box-shadow: 0 0 0 1px color-mix(in srgb, var(--auth-accent, #2962ff) 45%, transparent);
+  border-color: var(--auth-accent, var(--app-accent));
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--auth-accent, var(--app-accent)) 45%, transparent);
 }
