@@ -204,20 +204,14 @@ function token(value: string | undefined, fallback: string): string {
 /**
  * Effective chrome tokens for a settings object.
  *
- * Floors apply to the built-in palettes and to normal (non-advanced) themes.
- * A user who has switched on advanced colours keeps their picks; meta text and
- * accent ink are still computed so those two never regress.
+ * Floors apply to text and market colours only, and only for the built-in
+ * palettes (a user who switched on advanced colours keeps their picks). Meta
+ * text and accent ink are always computed.
  *
- * `subtleBorders` leaves the divider colour exactly as the palette defines it:
- * the muted (Vela dark) theme deliberately uses near-surface hairlines, which
- * read as structure rather than as lines.
+ * Borders are decoration: they keep whatever tone the palette defines, because
+ * lifting them turned every divider and panel edge into a drawn line.
  */
-export type TokenOptions = { subtleBorders?: boolean };
-
-export function resolveAppTokens(
-  settings: AppSettings,
-  options: TokenOptions = {},
-): ResolvedTokens {
+export function resolveAppTokens(settings: AppSettings): ResolvedTokens {
   const surfaces = {
     background: settings.backgroundColor,
     panel: settings.panelColor,
@@ -250,7 +244,7 @@ export function resolveAppTokens(
     up: enforce ? lift(base.up, CONTRAST.market) : base.up,
     down: enforce ? lift(base.down, CONTRAST.market) : base.down,
     surfaces,
-    border: enforce && !options.subtleBorders ? lift(base.border, CONTRAST.border) : base.border,
+    border: base.border,
     accent,
   };
 }

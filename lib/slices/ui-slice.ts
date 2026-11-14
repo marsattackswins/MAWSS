@@ -2,6 +2,7 @@ import {
   applyAppTheme,
   DEFAULT_APP_SETTINGS,
   migrateLegacyAppSettings,
+  migrateLiftedBorder,
   migrateMutedPanelColor,
   normalizeAppSettings,
   type AppSettings,
@@ -339,8 +340,8 @@ export function createUiSlice(set: RootSet, get: RootGet): UiSlice {
  * bottomTab validation lives here and ONLY here.
  */
 export function normalizeUiRehydrate(state: Store): void {
-  state.appSettings = migrateMutedPanelColor(
-    migrateLegacyAppSettings(normalizeAppSettings(state.appSettings)),
+  state.appSettings = migrateLiftedBorder(
+    migrateMutedPanelColor(migrateLegacyAppSettings(normalizeAppSettings(state.appSettings))),
   );
   applyAppTheme(state.appSettings);
   state.shortcuts = mergeShortcuts(state.shortcuts);

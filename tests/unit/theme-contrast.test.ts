@@ -41,10 +41,7 @@ function worstSurface(
 function collect(): Check[] {
   const checks: Check[] = [];
   for (const [palette, theme] of PALETTES) {
-    // The muted palette's separators are decorative by design (near-surface
-    // hairlines), so its border is checked for presence, not for readability.
-    const subtleBorders = palette === "dark";
-    const tokens = resolveAppTokens(appSettingsFromTheme(theme, palette), { subtleBorders });
+    const tokens = resolveAppTokens(appSettingsFromTheme(theme, palette));
     const surfaces = [
       { name: "bg", rgb: tokens.surfaces.background },
       { name: "panel", rgb: tokens.surfaces.panel },
@@ -62,15 +59,6 @@ function collect(): Check[] {
       checks.push({ palette, token, rgb, surface: worst.name, ratio: worst.ratio, min });
     }
 
-    const border = worstSurface(surfaces, tokens.border);
-    checks.push({
-      palette,
-      token: "border",
-      rgb: tokens.border,
-      surface: border.name,
-      ratio: border.ratio,
-      min: subtleBorders ? 1 : CONTRAST.border,
-    });
     checks.push({
       palette,
       token: "accent-ink",
@@ -103,12 +91,16 @@ describe("theme contrast", () => {
     expect(checks.length).toBeGreaterThan(0);
   });
 
-  it("leaves the muted palette's separators decorative", () => {
-    const tokens = resolveAppTokens(appSettingsFromTheme(DARK_THEME, "dark"), {
-      subtleBorders: true,
-    });
-    expect(tokens.border).toBe(DARK_THEME.borderColor);
-    expect(contrastRatio(tokens.border, tokens.surfaces.background)).toBeLessThan(CONTRAST.border);
+  it("keeps every palette's separators decorative", () => {
+    // Borders are structure, not content: each palette keeps its own hairline
+    // tone, never a contrast-lifted one (that read as drawn lines everywhere).
+    for (const [palette, theme] of PALETTES) {
+      const tokens = resolveAppTokens(appSettingsFromTheme(theme, palette));
+      expect({ palette, border: tokens.border }).toEqual({
+        palette,
+        border: theme.border ?? theme.borderColor,
+      });
+    }
   });
 
   it("keeps every token above its readable floor", () => {
