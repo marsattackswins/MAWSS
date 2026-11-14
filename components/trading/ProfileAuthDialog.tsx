@@ -67,22 +67,22 @@ export function ProfileAuthDialog({
         aria-labelledby="profile-auth-title"
         aria-describedby="profile-auth-description"
         onSubmit={onSubmit}
-        className="relative w-[420px] max-w-full rounded-[12px] border border-(--app-border) bg-(--app-elevated) shadow-[0_24px_60px_-24px_rgba(0,0,0,0.55)]"
+        className="relative w-[440px] max-w-full rounded-[12px] border border-(--app-border) bg-(--app-elevated) shadow-[0_24px_60px_-24px_rgba(0,0,0,0.55)]"
         style={{ ["--auth-accent" as string]: "var(--app-accent)" }}
       >
         {/* Meta strip: which product this dialog belongs to and which environment. */}
         <div className="flex items-center justify-between gap-3 border-b border-(--app-border) px-5 py-2.5">
-          <span className="flex items-center gap-1.5 text-[10px] font-semibold uppercase tracking-[0.16em]">
+          <span className="flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-[0.14em]">
             <span className="text-(--app-muted)">MAWS</span>
             <span className="text-(--app-faint)">/</span>
-            <span className="font-medium tracking-[0.12em] text-(--app-faint)">Profile access</span>
+            <span className="font-medium tracking-[0.10em] text-(--app-muted)">Profile access</span>
           </span>
           <span className="flex items-center gap-1.5 rounded-full border border-(--app-border) px-2 py-0.5">
             <span
               className="size-1.5 rounded-full"
               style={{ background: live ? "var(--app-down)" : "var(--app-up)" }}
             />
-            <span className="text-[9px] font-semibold uppercase tracking-[0.12em] text-(--app-muted)">
+            <span className="text-[10px] font-semibold uppercase tracking-[0.10em] text-(--app-text)">
               {live ? "Live" : "Testnet"}
             </span>
           </span>
@@ -101,10 +101,10 @@ export function ProfileAuthDialog({
             <BinanceMark />
           </span>
           <div className="min-w-0 pt-0.5">
-            <h2 id="profile-auth-title" className="text-[15px] font-semibold leading-5 text-(--app-text)">
+            <h2 id="profile-auth-title" className="text-[17px] font-semibold leading-6 text-(--app-text)">
               Connect to {label}
             </h2>
-            <p id="profile-auth-description" className="mt-0.5 text-[12px] leading-[17px] text-(--app-muted)">
+            <p id="profile-auth-description" className="mt-1 text-[13px] leading-5 text-(--app-muted)">
               {live
                 ? "Attaching can place real orders with real funds."
                 : "Demo trading: orders never touch real funds."}
@@ -113,10 +113,10 @@ export function ProfileAuthDialog({
         </div>
 
         {/* One compact line instead of a facts grid: host and endpoint. */}
-        <div className="mt-3 flex items-center gap-2 px-5 text-[11px] text-(--app-faint)">
+        <div className="mt-3 flex items-center gap-2 px-5 text-[12px] text-(--app-muted)">
           <span className="text-(--app-muted)">{meta.host}</span>
           <span aria-hidden="true">·</span>
-          <span className="font-mono text-[10px]">{meta.detail}</span>
+          <span className="font-mono text-[11px]">{meta.detail}</span>
           <span aria-hidden="true">·</span>
           <span>{live ? "Real funds" : "Simulated funds"}</span>
         </div>
@@ -125,14 +125,14 @@ export function ProfileAuthDialog({
           <div className="mb-1.5 flex items-baseline justify-between gap-2">
             <label
               htmlFor="profile-operator-password"
-              className="flex items-center gap-1.5 text-[11px] font-medium text-(--app-muted)"
+              className="flex items-center gap-1.5 text-[12px] font-medium text-(--app-text)"
             >
-              <LockKeyhole size={11} aria-hidden="true" />
+              <LockKeyhole size={12} aria-hidden="true" />
               Operator password
             </label>
             {capsLock ? (
               <span
-                className="flex items-center gap-1 text-[10px] font-medium"
+                className="flex items-center gap-1 text-[11px] font-medium"
                 style={{ color: "var(--app-down)" }}
               >
                 <CircleAlert size={10} /> Caps Lock is on
@@ -151,7 +151,7 @@ export function ProfileAuthDialog({
               onKeyDown={trackCaps}
               placeholder="Enter operator password"
               aria-invalid={error ? true : undefined}
-              className="profile-auth-field h-10 w-full rounded-[6px] border border-(--app-border) bg-(--app-bg) px-3 pr-10 text-[13px] text-(--app-text) outline-none transition-colors placeholder:text-(--app-faint) hover:border-(--app-muted)"
+              className="profile-auth-field h-11 w-full rounded-[6px] border border-(--app-border) bg-(--app-bg) px-3 pr-10 text-[14px] text-(--app-text) outline-none transition-colors placeholder:text-(--app-muted) hover:border-(--app-muted)"
               style={
                 error
                   ? { borderColor: "color-mix(in srgb, var(--app-down) 65%, transparent)" }
@@ -173,7 +173,7 @@ export function ProfileAuthDialog({
           {error ? (
             <div
               role="alert"
-              className="mt-2 flex items-start gap-2 rounded-[6px] border px-2.5 py-1.5 text-[11px] leading-4"
+              className="mt-2 flex items-start gap-2 rounded-[6px] border px-2.5 py-2 text-[12px] leading-4"
               style={{
                 borderColor: "color-mix(in srgb, var(--app-down) 40%, transparent)",
                 background: "color-mix(in srgb, var(--app-down) 10%, transparent)",
@@ -184,7 +184,7 @@ export function ProfileAuthDialog({
               <span>{error}</span>
             </div>
           ) : (
-            <p className="mt-2 text-[10px] leading-4 text-(--app-faint)">
+            <p className="mt-2 text-[11px] leading-4 text-(--app-muted)">
               Verified server-side against the operator hash, never stored in the browser.
             </p>
           )}
@@ -194,14 +194,14 @@ export function ProfileAuthDialog({
           <button
             type="button"
             onClick={onCancel}
-            className="h-8 rounded-[6px] px-3 text-[12px] font-medium text-(--app-muted) transition-colors hover:bg-(--app-hover) hover:text-(--app-text)"
+            className="h-9 rounded-[6px] px-3 text-[13px] font-medium text-(--app-muted) transition-colors hover:bg-(--app-hover) hover:text-(--app-text)"
           >
             Cancel
           </button>
           <button
             type="submit"
             disabled={busy || password.length === 0}
-            className="group flex h-8 items-center gap-1.5 rounded-[6px] px-3.5 text-[12px] font-semibold text-white transition-[filter] hover:brightness-110 disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:brightness-100"
+            className="group flex h-9 items-center gap-1.5 rounded-[6px] px-4 text-[13px] font-semibold text-white transition-[filter] hover:brightness-110 disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:brightness-100"
             style={{ background: "var(--app-accent)" }}
           >
             {busy ? <LoaderCircle size={13} className="animate-spin" /> : null}
