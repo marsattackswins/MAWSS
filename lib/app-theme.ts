@@ -89,7 +89,8 @@ export function applyAppTheme(settings: AppSettings) {
   const root = document.documentElement;
   // Contrast-resolved tokens: text/meta/faint floors, borders, market colours
   // and the ink for accent-filled controls (see lib/theme-contrast.ts).
-  const t = resolveAppTokens(s);
+  // The muted palette keeps its near-surface separators by design.
+  const t = resolveAppTokens(s, { subtleBorders: velaThemeNameFromAppSettings(s) === "dark" });
   root.style.setProperty("--app-bg", s.backgroundColor);
   root.style.setProperty("--app-panel", s.panelColor);
   root.style.setProperty("--app-elevated", s.elevatedColor);
@@ -170,7 +171,7 @@ export function appSettingsFromTheme(t: VelaTheme, themeName: ThemeName): AppSet
   };
   // Persist what the shell will actually paint, so the Theme settings pickers
   // and a reload agree with the contrast-resolved tokens.
-  const tokens = resolveAppTokens(draft);
+  const tokens = resolveAppTokens(draft, { subtleBorders: themeName === "dark" });
   return {
     ...draft,
     textColor: tokens.text,
