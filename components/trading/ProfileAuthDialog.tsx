@@ -197,8 +197,7 @@ export function ProfileAuthDialog({
           <button
             type="submit"
             disabled={busy || password.length === 0}
-            className="group flex h-9 items-center gap-1.5 rounded-[6px] px-4 text-[13px] font-semibold text-white transition-[filter] hover:brightness-110 disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:brightness-100"
-            style={{ background: "var(--app-accent)" }}
+            className="accent-button group flex h-9 items-center gap-1.5 rounded-[6px] px-4 text-[13px] font-semibold transition-[filter] hover:brightness-110"
           >
             {busy ? <LoaderCircle size={13} className="animate-spin" /> : null}
             {busy ? "Connecting…" : "Connect"}

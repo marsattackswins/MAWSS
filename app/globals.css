@@ -9,10 +9,16 @@
   --app-hover: #1a1a1a;
   --app-text: #d1d4dc;
   --app-muted: #787b86;
+  /* Readable secondary text; --app-faint is decoration only. */
+  --app-meta: #9aa0ab;
+  /* Legible disabled label (never opacity on text). */
+  --app-disabled: #787b86;
   --app-faint: #4c525e;
   --app-up: #089981;
   --app-down: #f23645;
   --app-accent: #2962ff;
+  /* Ink for accent-filled controls; applyAppTheme computes the real value. */
+  --app-accent-ink: #ffffff;
   --app-menu: var(--app-elevated);
   --maws-bg: var(--app-bg);
   --maws-panel: var(--app-panel);
@@ -22,6 +28,8 @@
   --maws-hover: var(--app-hover);
   --maws-text: var(--app-text);
   --maws-muted: var(--app-muted);
+  --maws-meta: var(--app-meta);
+  --maws-disabled: var(--app-disabled);
   --maws-faint: var(--app-faint);
   --maws-up: var(--app-up);
   --maws-down: var(--app-down);
@@ -61,6 +69,20 @@ body {
 
 button {
   cursor: pointer;
+}
+
+/* Accent-filled controls: the label ink is computed per theme (a light accent
+ * such as gruvbox's yellow gets dark ink), and the disabled state uses a legible
+ * tone instead of opacity, which multiplied contrast away. */
+.accent-button {
+  background: var(--app-accent);
+  color: var(--app-accent-ink);
+}
+
+.accent-button:disabled {
+  background: var(--app-hover);
+  color: var(--app-disabled);
+  cursor: not-allowed;
 }
 
 /* Hide native number spinners — keyboard entry only */

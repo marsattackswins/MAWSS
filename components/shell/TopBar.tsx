@@ -457,7 +457,7 @@ function BuySellStrip({
         disabled={disabled}
         title={feedTitle}
         aria-label="Sell at bid"
-        className="trade-block trade-block-sell flex h-[32px] shrink-0 items-center gap-1.5 px-2.5 text-[12px] tabular-nums disabled:opacity-40"
+        className="trade-block trade-block-sell flex h-[32px] shrink-0 items-center gap-1.5 px-2.5 text-[12px] tabular-nums disabled:[&>span]:text-(--app-disabled)"
         onClick={() => {
           if (!quote) return;
           const qty = marginToQty(symbol, marginValue, bid);
@@ -478,7 +478,7 @@ function BuySellStrip({
           type="button"
           aria-label="Decrease margin"
           disabled={disabled || marginValue <= 10}
-          className="flex h-6 w-[14px] items-center justify-center text-[12px] text-(--app-muted) hover:bg-(--app-hover) disabled:opacity-40"
+          className="flex h-6 w-[14px] items-center justify-center text-[12px] text-(--app-muted) hover:bg-(--app-hover) disabled:[&>span]:text-(--app-disabled)"
           onClick={() => bumpMargin(-1)}
         >
           −
@@ -507,7 +507,7 @@ function BuySellStrip({
           type="button"
           aria-label="Increase margin"
           disabled={disabled}
-          className="flex h-6 w-[14px] items-center justify-center text-[12px] text-(--app-muted) hover:bg-(--app-hover) disabled:opacity-40"
+          className="flex h-6 w-[14px] items-center justify-center text-[12px] text-(--app-muted) hover:bg-(--app-hover) disabled:text-(--app-disabled)"
           onClick={() => bumpMargin(1)}
         >
           +

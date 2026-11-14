@@ -94,7 +94,7 @@ export function PnlCell({
     <span
       title={markPriceStale && ageS != null ? `PnL from fill snapshot; mark age ${ageS}s` : undefined}
     >
-      {formatUsd(pnl)}
+      {pnl > 0 ? `+${formatUsd(pnl)}` : formatUsd(pnl)}
       {markPriceStale ? (
         <span
           role="status"
@@ -585,7 +585,7 @@ export function PositionsPanel() {
                             type="button"
                             disabled={mutationBlocked}
                             title={mutationBlocked ? "Switching profile…" : "Cancel all TP/SL orders for this position"}
-                            className="mr-2 text-[#f0b90b] hover:text-(--app-text) disabled:cursor-not-allowed disabled:opacity-40"
+                            className="mr-2 text-[#f0b90b] hover:text-(--app-text) disabled:cursor-not-allowed disabled:text-(--app-disabled) disabled:hover:text-(--app-disabled)"
                             onClick={() => {
                               if (window.confirm(`Remove all TP/SL protection for ${formatTicker(p.symbol)}?`)) {
                                 void dispatchRemoveProtection(p.symbol);
@@ -599,7 +599,7 @@ export function PositionsPanel() {
                           type="button"
                           disabled={mutationBlocked}
                           title={mutationBlocked ? "Switching profile…" : undefined}
-                          className="text-(--app-muted) hover:text-(--app-text) disabled:cursor-not-allowed disabled:opacity-40"
+                          className="text-(--app-muted) hover:text-(--app-text) disabled:cursor-not-allowed disabled:text-(--app-disabled) disabled:hover:text-(--app-disabled)"
                           onClick={() => {
                             void dispatchClosePosition(p.id);
                           }}
@@ -645,7 +645,7 @@ export function PositionsPanel() {
                         type="button"
                         disabled={mutationBlocked}
                         title={mutationBlocked ? "Switching profile…" : undefined}
-                        className="text-(--app-muted) hover:text-(--app-text) disabled:cursor-not-allowed disabled:opacity-40"
+                        className="text-(--app-muted) hover:text-(--app-text) disabled:cursor-not-allowed disabled:text-(--app-disabled) disabled:hover:text-(--app-disabled)"
                         onClick={() => {
                           void dispatchCancelOrder(o.id);
                         }}

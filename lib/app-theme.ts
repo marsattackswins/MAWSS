@@ -1,6 +1,13 @@
 /** Chrome colors for shell UI (everything except the chart canvas). */
 
-import { LIGHT_THEME, resolveTheme, resolveThemeIndicatorColors, type ThemeName } from "@/lib/charting";
+import {
+  LIGHT_THEME,
+  resolveTheme,
+  resolveThemeIndicatorColors,
+  type ThemeName,
+  type VelaTheme,
+} from "@/lib/charting";
+import { resolveAppTokens } from "@/lib/theme-contrast";
 import type { ChartSettings, IndicatorInstance, IndicatorSettingsMap } from "@/types";
 
 export type AppSettings = {
@@ -80,18 +87,24 @@ export function applyAppTheme(settings: AppSettings) {
   if (typeof document === "undefined") return;
   const s = normalizeAppSettings(settings);
   const root = document.documentElement;
+  // Contrast-resolved tokens: text/meta/faint floors, borders, market colours
+  // and the ink for accent-filled controls (see lib/theme-contrast.ts).
+  const t = resolveAppTokens(s);
   root.style.setProperty("--app-bg", s.backgroundColor);
   root.style.setProperty("--app-panel", s.panelColor);
   root.style.setProperty("--app-elevated", s.elevatedColor);
-  root.style.setProperty("--app-border", s.borderColor);
+  root.style.setProperty("--app-border", t.border);
   root.style.setProperty("--app-bar", s.barColor);
   root.style.setProperty("--app-hover", s.hoverColor);
-  root.style.setProperty("--app-text", s.textColor);
-  root.style.setProperty("--app-muted", s.mutedColor);
-  root.style.setProperty("--app-faint", s.faintColor || "#4c525e");
-  root.style.setProperty("--app-up", s.upColor || "#089981");
-  root.style.setProperty("--app-down", s.downColor || "#f23645");
-  root.style.setProperty("--app-accent", s.accentColor || "#2962ff");
+  root.style.setProperty("--app-text", t.text);
+  root.style.setProperty("--app-muted", t.muted);
+  root.style.setProperty("--app-meta", t.meta);
+  root.style.setProperty("--app-disabled", t.disabled);
+  root.style.setProperty("--app-faint", t.faint);
+  root.style.setProperty("--app-up", t.up);
+  root.style.setProperty("--app-down", t.down);
+  root.style.setProperty("--app-accent", t.accent);
+  root.style.setProperty("--app-accent-ink", t.accentInk);
   // Dropdown menus sit on the settings-dialog surface. Gruvbox is the one
   // palette whose card tone reads as a different color than its dialog
   // surface, so its menus drop to the background tone; other themes keep the
@@ -107,12 +120,14 @@ export function applyAppTheme(settings: AppSettings) {
   root.style.setProperty("--maws-border", s.borderColor);
   root.style.setProperty("--maws-bar", s.barColor);
   root.style.setProperty("--maws-hover", s.hoverColor);
-  root.style.setProperty("--maws-text", s.textColor);
-  root.style.setProperty("--maws-muted", s.mutedColor);
-  root.style.setProperty("--maws-faint", s.faintColor || "#4c525e");
-  root.style.setProperty("--maws-up", s.upColor || "#089981");
-  root.style.setProperty("--maws-down", s.downColor || "#f23645");
-  root.style.setProperty("--maws-accent", s.accentColor || "#2962ff");
+  root.style.setProperty("--maws-text", t.text);
+  root.style.setProperty("--maws-muted", t.muted);
+  root.style.setProperty("--maws-meta", t.meta);
+  root.style.setProperty("--maws-disabled", t.disabled);
+  root.style.setProperty("--maws-faint", t.faint);
+  root.style.setProperty("--maws-up", t.up);
+  root.style.setProperty("--maws-down", t.down);
+  root.style.setProperty("--maws-accent", t.accent);
   root.style.setProperty("--maws-menu", menuColor);
 
   // Keep legacy TV tokens in sync for anything still referencing them.
@@ -120,24 +135,26 @@ export function applyAppTheme(settings: AppSettings) {
   root.style.setProperty("--color-tv-panel", s.panelColor);
   root.style.setProperty("--color-tv-settings", s.elevatedColor);
   root.style.setProperty("--color-tv-settings-input", s.elevatedColor);
-  root.style.setProperty("--color-tv-border", s.borderColor);
-  root.style.setProperty("--color-tv-text", s.textColor);
-  root.style.setProperty("--color-tv-muted", s.mutedColor);
-  root.style.setProperty("--color-tv-faint", s.faintColor || "#4c525e");
-  root.style.setProperty("--color-tv-green", s.upColor || "#089981");
-  root.style.setProperty("--color-tv-red", s.downColor || "#f23645");
-  root.style.setProperty("--color-tv-blue", s.accentColor || "#2962ff");
+  root.style.setProperty("--color-tv-border", t.border);
+  root.style.setProperty("--color-tv-text", t.text);
+  root.style.setProperty("--color-tv-muted", t.muted);
+  root.style.setProperty("--color-tv-faint", t.faint);
+  root.style.setProperty("--color-tv-green", t.up);
+  root.style.setProperty("--color-tv-red", t.down);
+  root.style.setProperty("--color-tv-blue", t.accent);
 }
 
 // ── Vela theme ↔ app theme ─────────────────────────────────────────────────
 
 /** AppSettings built from a resolved Vela theme — one palette drives charts
- *  AND every shell panel (TopBar, watchlist, docks, modals). */
-export function appSettingsFromVelaTheme(themeName: ThemeName): AppSettings {
-  const t = resolveTheme(themeName);
+ *  AND every shell panel (TopBar, watchlist, docks, modals). The theme object
+ *  is passed in (not resolved here) so tests can feed the real palettes without
+ *  the charting stub.
+ */
+export function appSettingsFromTheme(t: VelaTheme, themeName: ThemeName): AppSettings {
   const accent = themeName === "gruvbox" ? "#fabd2f" : "#2962ff";
   const faint = t.textMuted ?? (themeName === "light" ? "#94a3b8" : "#4c525e");
-  return {
+  const draft: AppSettings = {
     backgroundColor: t.background,
     panelColor: t.background,
     elevatedColor: t.bgCard ?? t.background,
@@ -151,6 +168,22 @@ export function appSettingsFromVelaTheme(themeName: ThemeName): AppSettings {
     downColor: t.downColor,
     accentColor: accent,
   };
+  // Persist what the shell will actually paint, so the Theme settings pickers
+  // and a reload agree with the contrast-resolved tokens.
+  const tokens = resolveAppTokens(draft);
+  return {
+    ...draft,
+    textColor: tokens.text,
+    mutedColor: tokens.muted,
+    faintColor: tokens.faint,
+    upColor: tokens.up,
+    downColor: tokens.down,
+    borderColor: tokens.border,
+  };
+}
+
+export function appSettingsFromVelaTheme(themeName: ThemeName): AppSettings {
+  return appSettingsFromTheme(resolveTheme(themeName), themeName);
 }
 
 /** The Vela theme matching a persisted AppSettings. Vela themes don't survive a

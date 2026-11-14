@@ -127,19 +127,19 @@ function EventCard({
         {open && guide && (
           <div className="mt-2 space-y-2.5 border-t border-(--app-border) pt-2.5 text-[11px] leading-snug">
             <div>
-              <div className="mb-0.5 text-[9px] font-semibold uppercase tracking-wide text-(--app-faint)">
+              <div className="mb-0.5 text-[9px] font-semibold uppercase tracking-wide text-(--app-meta)">
                 Description
               </div>
               <p className="text-(--app-muted)">{guide.description}</p>
             </div>
             <div>
-              <div className="mb-0.5 text-[9px] font-semibold uppercase tracking-wide text-(--app-faint)">
+              <div className="mb-0.5 text-[9px] font-semibold uppercase tracking-wide text-(--app-meta)">
                 Usual effect
               </div>
               <p className="text-(--app-muted)">{guide.usualEffect}</p>
             </div>
             <div>
-              <div className="mb-0.5 text-[9px] font-semibold uppercase tracking-wide text-(--app-faint)">
+              <div className="mb-0.5 text-[9px] font-semibold uppercase tracking-wide text-(--app-meta)">
                 Why traders care
               </div>
               <p className="text-(--app-muted)">{guide.whyTradersCare}</p>
@@ -150,7 +150,7 @@ function EventCard({
                   ? "text-(--app-down)"
                   : event.impact === "medium"
                     ? "text-[#ffa726]"
-                    : "text-(--app-faint)"
+                    : "text-(--app-meta)"
               }`}
             >
               {impactLabel}
@@ -181,7 +181,7 @@ function EventCard({
       </div>
 
       <span
-        className={`pointer-events-none absolute right-2 bottom-1.5 text-(--app-faint) transition-opacity ${
+        className={`pointer-events-none absolute right-2 bottom-1.5 text-(--app-meta) transition-opacity ${
           open ? "opacity-70" : "opacity-0 group-hover:opacity-70"
         }`}
         aria-hidden
@@ -273,7 +273,7 @@ export function EconomicCalendar() {
         <div className="flex min-w-0 items-center gap-2">
           <span className="text-[13px] font-semibold text-(--app-text)">Calendar</span>
           <span
-            className="truncate text-[10px] uppercase tracking-wide text-(--app-faint)"
+            className="truncate text-[10px] uppercase tracking-wide text-(--app-meta)"
             title={status ?? undefined}
           >
             {loading
@@ -285,7 +285,7 @@ export function EconomicCalendar() {
           <button
             type="button"
             title="Reload calendar"
-            className="h-5 rounded px-1 text-[10px] text-(--app-faint) hover:bg-(--app-hover) hover:text-(--app-text)"
+            className="h-5 rounded px-1 text-[10px] text-(--app-meta) hover:bg-(--app-hover) hover:text-(--app-text)"
             onClick={() => setReloadToken((n) => n + 1)}
           >
             Reload
