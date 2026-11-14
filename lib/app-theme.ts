@@ -223,14 +223,20 @@ export function migrateLegacyAppSettings(settings: AppSettings): AppSettings {
  *  `borderColor`, so separators and panel edges stayed pronounced after the
  *  floor was removed. Only the exact lifted values are repaired, and only for
  *  themes without explicit custom colours. */
+
+/** The exact divider tones the border floor wrote, and the palette tone each
+ *  one replaced. Literal on purpose: a migration must recognise values that no
+ *  longer exist anywhere in the palettes, so it cannot derive them. */
+export const LIFTED_BORDERS: Readonly<Record<string, string>> = {
+  "#414146": "#262629", // Vela muted
+  "#444a5c": "#2a2e39", // classic
+  "#5a5451": "#3c3836", // gruvbox
+  "#cbd2dd": "#d4dae3", // light
+};
+
 export function migrateLiftedBorder(settings: AppSettings): AppSettings {
   if (settings.advancedColors) return settings;
-  const lifted: Record<string, string> = {
-    "#414146": appSettingsFromVelaTheme("dark").borderColor,
-    "#444a5c": appSettingsFromVelaTheme("classic").borderColor,
-    "#5a5451": appSettingsFromVelaTheme("gruvbox").borderColor,
-    "#cbd2dd": appSettingsFromVelaTheme("light").borderColor,
-  };
+  const lifted = LIFTED_BORDERS;
   const current =
     typeof settings.borderColor === "string" ? settings.borderColor.trim().toLowerCase() : "";
   const replacement = lifted[current];
