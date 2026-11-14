@@ -6,9 +6,14 @@ import { useState, type FormEvent, type KeyboardEvent } from "react";
 import { profileLabel } from "@/lib/live/bridge";
 import type { LiveProfileId } from "@/lib/live/types";
 
-function BinanceMark() {
+const PROFILE_META: Record<LiveProfileId, { host: string; detail: string }> = {
+  "binance-testnet": { host: "Binance Futures Demo", detail: "demo-fapi" },
+  "binance-production": { host: "Binance Futures Live", detail: "fapi" },
+};
+
+function BinanceMark({ size = 18 }: { size?: number }) {
   return (
-    <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
       <path d="M7.0679 12L5.03779 14.0301L3.00256 12L5.03268 9.96989L7.0679 12ZM12.0026 7.06534L15.485 10.5477L17.5151 8.51761L12.0026 3L6.48495 8.51761L8.51506 10.5477L12.0026 7.06534ZM18.9673 9.96989L16.9372 12L18.9673 14.0301L20.9975 12L18.9673 9.96989ZM12.0026 16.9347L8.52018 13.4523L6.49006 15.4824L12.0026 21L17.5151 15.4824L15.485 13.4523L12.0026 16.9347ZM12.0026 14.0301L14.0327 12L12.0026 9.96989L9.96734 12L12.0026 14.0301Z" />
     </svg>
   );
@@ -18,9 +23,11 @@ function BinanceMark() {
  * Operator sign-in for a trading profile, shared by the profile chooser and the
  * topbar menu.
  *
- * Deliberately small: which environment, the one-line risk, the password, two
- * actions. Every colour comes from the active app theme (`--app-*`), so the card
- * follows dark, light, classic and gruvbox without a second palette.
+ * Kept intentionally short — which market you attach to, the one-line risk, the
+ * password, two actions — while still showing the exchange mark and endpoint so
+ * the card reads as a Binance attachment. Every colour is an `--app-*` theme
+ * token (the accent tints the mark, primary button and focus ring), so the card
+ * follows light, dark and custom accents; no fixed gradient edge.
  */
 export function ProfileAuthDialog({
   profileId,
@@ -43,6 +50,7 @@ export function ProfileAuthDialog({
   const [capsLock, setCapsLock] = useState(false);
   const live = profileId === "binance-production";
   const label = profileLabel(profileId);
+  const meta = PROFILE_META[profileId];
 
   const trackCaps = (event: KeyboardEvent<HTMLInputElement>) => {
     if (typeof event.getModifierState !== "function") return;
@@ -62,11 +70,12 @@ export function ProfileAuthDialog({
         className="relative w-[420px] max-w-full rounded-[12px] border border-(--app-border) bg-(--app-elevated) shadow-[0_24px_60px_-24px_rgba(0,0,0,0.55)]"
         style={{ ["--auth-accent" as string]: "var(--app-accent)" }}
       >
-        {/* Meta strip: which profile this is and which environment it attaches to. */}
-        <div className="flex items-center justify-between gap-3 px-5 pt-3.5">
-          <span className="flex items-center gap-2 text-[10px] font-semibold uppercase tracking-[0.16em] text-(--app-faint)">
-            <BinanceMark />
-            Profile access
+        {/* Meta strip: which product this dialog belongs to and which environment. */}
+        <div className="flex items-center justify-between gap-3 border-b border-(--app-border) px-5 py-2.5">
+          <span className="flex items-center gap-1.5 text-[10px] font-semibold uppercase tracking-[0.16em]">
+            <span className="text-(--app-muted)">MAWS</span>
+            <span className="text-(--app-faint)">/</span>
+            <span className="font-medium tracking-[0.12em] text-(--app-faint)">Profile access</span>
           </span>
           <span className="flex items-center gap-1.5 rounded-full border border-(--app-border) px-2 py-0.5">
             <span
@@ -79,23 +88,46 @@ export function ProfileAuthDialog({
           </span>
         </div>
 
-        <div className="px-5 pt-3.5">
-          <h2 id="profile-auth-title" className="text-[16px] font-semibold leading-5 text-(--app-text)">
-            Connect to {label}
-          </h2>
-          <p id="profile-auth-description" className="mt-1 text-[12px] leading-[18px] text-(--app-muted)">
-            {live
-              ? "Attaching can place real orders with real funds."
-              : "Demo trading: orders never touch real funds."}
-          </p>
+        {/* Hero: exchange mark, which profile, and the one risk line that matters. */}
+        <div className="flex items-start gap-3 px-5 pt-4">
+          <span
+            className="flex h-10 w-10 shrink-0 items-center justify-center rounded-[9px] border"
+            style={{
+              color: "var(--app-accent)",
+              borderColor: "color-mix(in srgb, var(--app-accent) 28%, transparent)",
+              background: "color-mix(in srgb, var(--app-accent) 12%, transparent)",
+            }}
+          >
+            <BinanceMark />
+          </span>
+          <div className="min-w-0 pt-0.5">
+            <h2 id="profile-auth-title" className="text-[15px] font-semibold leading-5 text-(--app-text)">
+              Connect to {label}
+            </h2>
+            <p id="profile-auth-description" className="mt-0.5 text-[12px] leading-[17px] text-(--app-muted)">
+              {live
+                ? "Attaching can place real orders with real funds."
+                : "Demo trading: orders never touch real funds."}
+            </p>
+          </div>
         </div>
 
-        <div className="px-5 pt-4">
+        {/* One compact line instead of a facts grid: host and endpoint. */}
+        <div className="mt-3 flex items-center gap-2 px-5 text-[11px] text-(--app-faint)">
+          <span className="text-(--app-muted)">{meta.host}</span>
+          <span aria-hidden="true">·</span>
+          <span className="font-mono text-[10px]">{meta.detail}</span>
+          <span aria-hidden="true">·</span>
+          <span>{live ? "Real funds" : "Simulated funds"}</span>
+        </div>
+
+        <div className="mt-3.5 border-t border-(--app-border) px-5 pt-3.5">
           <div className="mb-1.5 flex items-baseline justify-between gap-2">
             <label
               htmlFor="profile-operator-password"
-              className="text-[11px] font-medium text-(--app-muted)"
+              className="flex items-center gap-1.5 text-[11px] font-medium text-(--app-muted)"
             >
+              <LockKeyhole size={11} aria-hidden="true" />
               Operator password
             </label>
             {capsLock ? (
@@ -108,11 +140,6 @@ export function ProfileAuthDialog({
             ) : null}
           </div>
           <div className="relative">
-            <LockKeyhole
-              size={14}
-              className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-(--app-faint)"
-              aria-hidden="true"
-            />
             <input
               id="profile-operator-password"
               type={revealed ? "text" : "password"}
@@ -124,7 +151,7 @@ export function ProfileAuthDialog({
               onKeyDown={trackCaps}
               placeholder="Enter operator password"
               aria-invalid={error ? true : undefined}
-              className="profile-auth-field h-10 w-full rounded-[6px] border border-(--app-border) bg-(--app-bg) pl-9 pr-10 text-[13px] text-(--app-text) outline-none transition-colors placeholder:text-(--app-faint) hover:border-(--app-muted)"
+              className="profile-auth-field h-10 w-full rounded-[6px] border border-(--app-border) bg-(--app-bg) px-3 pr-10 text-[13px] text-(--app-text) outline-none transition-colors placeholder:text-(--app-faint) hover:border-(--app-muted)"
               style={
                 error
                   ? { borderColor: "color-mix(in srgb, var(--app-down) 65%, transparent)" }
@@ -156,10 +183,14 @@ export function ProfileAuthDialog({
               <CircleAlert size={12} className="mt-[1px] shrink-0" />
               <span>{error}</span>
             </div>
-          ) : null}
+          ) : (
+            <p className="mt-2 text-[10px] leading-4 text-(--app-faint)">
+              Verified server-side against the operator hash, never stored in the browser.
+            </p>
+          )}
         </div>
 
-        <div className="mt-4 flex items-center justify-end gap-2 border-t border-(--app-border) px-5 py-3">
+        <div className="mt-3.5 flex items-center justify-end gap-2 border-t border-(--app-border) px-5 py-3">
           <button
             type="button"
             onClick={onCancel}
