@@ -121,6 +121,39 @@ export function klineRows(count = 120, lastPrice = 100) {
   return rows;
 }
 
+/** REST kline history at 1-minute spacing (Binance row shape). Deterministic:
+ *  the same count + price always yields the same series, so a perf run can be
+ *  compared with the next one. */
+export function minuteKlineRows(count = 5000, lastPrice = 64_230.1) {
+  const stepMs = 60_000;
+  const lastOpen = Math.floor(Date.now() / stepMs) * stepMs;
+  const rows: unknown[] = [];
+  for (let i = count - 1; i >= 0; i--) {
+    const idx = count - 1 - i;
+    // Two overlapping waves plus a deterministic sawtooth: enough structure
+    // that the auto-scaled axis has to do real work while panning.
+    const wave = Math.sin(idx / 47) * 380 + Math.sin(idx / 811) * 1400;
+    const saw = (idx % 97) - 48;
+    const price = Math.round((lastPrice + wave + saw * 1.7) * 10) / 10;
+    const t = lastOpen - i * stepMs;
+    rows.push([
+      t,
+      String(price),
+      String(Math.round((price + 26) * 10) / 10),
+      String(Math.round((price - 26) * 10) / 10),
+      String(price),
+      "120",
+      t + stepMs - 1,
+      "0",
+      "0",
+      "0",
+      "0",
+      "0",
+    ]);
+  }
+  return rows;
+}
+
 export function currentDayOpenSec() {
   return Math.floor(Date.now() / 1000 / 86_400) * 86_400;
 }

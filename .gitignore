@@ -75,3 +75,4 @@ next-env.d.ts
 # agent/tooling files kept locally, never tracked
 /AGENTS.md
 /.vscode/
+/.next-perf/

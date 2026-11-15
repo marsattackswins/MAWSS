@@ -15,6 +15,7 @@
     "test:charting": "vitest run --root lib/charting",
     "test:watch": "jest --watch",
     "test:coverage": "jest --coverage",
+    "perf:pan": "tsx scripts/perf-pan.mjs",
     "test:integration": "node scripts/run-integration-tests.mjs",
     "test:integration:verbose": "MAWS_TEST_VERBOSE=true npm run test:integration",
     "test:integration:setup": "node scripts/check-integration-setup.mjs",
