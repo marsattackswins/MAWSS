@@ -591,6 +591,11 @@ async function main() {
       runs.push({ ...summary, ...metrics, moves, elapsedMs });
       await page.waitForTimeout(600);
     }
+    if (runs.length === 0) {
+      throw new Error(
+        `${label}: every run was discarded as throttled — the browser window is occluded or unfocused; bring it to the front and retry`,
+      );
+    }
     const keys = [
       "p50",
       "p95",

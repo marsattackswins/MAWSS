@@ -40,7 +40,9 @@
     ".next-e2e-localdev/types/**/*.ts",
     ".next-e2e-localdev/dev/types/**/*.ts",
     ".next-perf/types/**/*.ts",
-    ".next-perf/dev/types/**/*.ts"
+    ".next-perf/dev/types/**/*.ts",
+    ".next-perf-dev/types/**/*.ts",
+    ".next-perf-dev/dev/types/**/*.ts"
   ],
   "exclude": [
     "node_modules",

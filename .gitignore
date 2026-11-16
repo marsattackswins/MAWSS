@@ -76,3 +76,4 @@ next-env.d.ts
 /AGENTS.md
 /.vscode/
 /.next-perf/
+/.next-perf-dev/
