@@ -54,6 +54,8 @@ const DEV = args.get("dev") === "true";
 const CHANNEL = args.get("channel") ?? null;
 const NAME = args.get("name") ?? `${DEV ? "dev" : "prod"}-${CHANNEL ?? "bundled"}`;
 const NO_BUILD = args.get("no-build") === "true";
+const SWEEP = args.get("sweep") === "true";
+const TRACE = args.get("trace") === "true";
 if (args.get("runs")) RUNS = Math.max(1, Number(args.get("runs")) || 1);
 
 const disposable = createDisposableContext({ source: {}, purpose: "e2e" });
@@ -61,6 +63,8 @@ let server = null;
 let feed = null;
 let browser = null;
 let tickTimer = null;
+const sweepCells = [];
+let lastSeeded = null;
 
 function log(...parts) {
   console.log(...parts);
@@ -274,6 +278,60 @@ const PAINT_SCRIPT = () => {
     },
     true,
   );
+  // The price/marks layer is WebGL2 (NativeRenderer picks it in "auto" mode), so
+  // a 2D-only wrapper would miss the main draw entirely.
+  const glProto = window.WebGL2RenderingContext?.prototype;
+  if (glProto) {
+    for (const name of ["drawArrays", "drawElements", "drawArraysInstanced", "drawElementsInstanced", "clear", "blitFramebuffer"]) {
+      const original = glProto[name];
+      if (typeof original !== "function") continue;
+      glProto[name] = function instrumentedGl(...rest) {
+        mark();
+        return original.apply(this, rest);
+      };
+    }
+  }
+  // Tag every canvas with the context kind it actually got, for the inventory.
+  const getContext = HTMLCanvasElement.prototype.getContext;
+  HTMLCanvasElement.prototype.getContext = function tagged(type, ...rest) {
+    const ctx = getContext.call(this, type, ...rest);
+    if (ctx && (type === "2d" || type === "webgl2" || type === "webgl")) {
+      if (!this.__mawsKind) this.__mawsKind = type;
+    }
+    return ctx;
+  };
+  window.__mawsCanvasInventory = () => {
+    // One [data-chart-host] wraps the whole grid, so group by the plot's own rect:
+    // every canvas inside one cell is inset:0 over the same box.
+    const canvases = [...document.querySelectorAll("[data-chart-host] .vela-cell canvas")].map((c) => {
+      const rect = c.getBoundingClientRect();
+      return {
+        el: c,
+        rect,
+        kind: c.__mawsKind ?? "unknown",
+        cssW: Math.round(rect.width),
+        cssH: Math.round(rect.height),
+        backingW: c.width,
+        backingH: c.height,
+        dpr: +(c.width / Math.max(1, rect.width)).toFixed(2),
+        pixels: c.width * c.height,
+      };
+    });
+    const groups = new Map();
+    for (const c of canvases) {
+      const key = `${Math.round(c.rect.left)}x${Math.round(c.rect.top)}:${Math.round(c.rect.width)}x${Math.round(c.rect.height)}`;
+      if (!groups.has(key)) groups.set(key, []);
+      groups.get(key).push(c);
+    }
+    return [...groups.entries()].map(([key, list], index) => ({
+      pane: index,
+      box: key,
+      canvases: list
+        .sort((a, b) => b.pixels - a.pixels)
+        .map(({ el, rect, ...rest }) => rest),
+      backingPixels: list.reduce((sum, c) => sum + c.pixels, 0),
+    }));
+  };
   const loop = () => {
     if (state.on) {
       state.frames += 1;
@@ -360,41 +418,101 @@ async function cdpMetrics(cdp) {
   return map;
 }
 
-/** The app's own persisted layout: 4 panes, VPVR on, three more indicators. */
-async function seedHeavyLayout(page) {
-  const applied = await page.evaluate(() => {
-    const key = "maws.workspace.v6";
-    const raw = window.localStorage.getItem(key);
-    if (!raw) return { panes: 0, indicators: 0 };
-    const parsed = JSON.parse(raw);
-    const state = parsed.state ?? parsed;
-    state.layoutCount = 4;
-    const natives = ["volume", { type: "vpvr" }, { type: "ema", inputs: { length: 21 } }, { type: "sma", inputs: { length: 50 } }, { type: "rsi" }];
-    state.panes = (state.panes ?? []).slice(0, 4).map((pane) => ({
-      ...pane,
-      velaState: { ...(pane.velaState ?? {}), indicators: { natives, manifest: [] } },
-    }));
-    window.localStorage.setItem(key, JSON.stringify(parsed));
-    return { panes: state.panes.length, indicators: natives.length };
-  });
+const INDICATOR_POOL = ["ema", "sma", "rsi", "macd", "aroon", "bb"];
+
+/** The app's own persisted layout: panes, indicator entries, VPVR switch. */
+async function seedLayout(page, { panes, indicators, vpvr }) {
+  const natives = [
+    ...(indicators >= 1 ? ["volume"] : []),
+    ...(vpvr ? [{ type: "vpvr" }] : []),
+    ...INDICATOR_POOL.slice(0, Math.max(0, indicators - 1)).map((type) => ({ type })),
+  ];
+  // Run BEFORE the app boots: written from the page, a seed races the store's own
+  // 400ms-debounced flush and the app happily rehydrates its old layout over it.
+  await page.addInitScript(
+    ({ paneCount, nativeList }) => {
+      const key = "maws.workspace.v6";
+      const raw = window.localStorage.getItem(key);
+      if (!raw) return;
+      const parsed = JSON.parse(raw);
+      const state = parsed.state ?? parsed;
+      state.layoutCount = paneCount;
+      state.panes = (state.panes ?? []).slice(0, Math.max(paneCount, 1)).map((pane) => ({
+        ...pane,
+        velaState: { ...(pane.velaState ?? {}), indicators: { natives: nativeList, manifest: [] } },
+      }));
+      window.localStorage.setItem(key, JSON.stringify(parsed));
+    },
+    { paneCount: panes, nativeList: natives },
+  );
   await page.reload();
   await page.waitForSelector("[data-chart-host]", { timeout: 180_000 });
+  await page
+    .waitForFunction(
+      ({ expected }) => document.querySelectorAll("[data-chart-host]").length >= expected,
+      { expected: panes },
+      { timeout: 30_000 },
+    )
+    .catch(() => {});
   await page.waitForTimeout(2500);
-  // Read back through the app's own cell-state bridge: proof the layout stuck.
   const confirmed = await page.evaluate(() => {
     const raw = window.localStorage.getItem("maws.workspace.v6");
-    if (!raw) return { panes: 0, indicators: 0, vpvr: 0 };
-    const parsed = JSON.parse(raw);
-    const state = parsed.state ?? parsed;
-    const panes = state.panes ?? [];
-    const first = panes[0]?.velaState?.indicators?.natives ?? [];
+    const parsed = raw ? JSON.parse(raw) : null;
+    const state = parsed ? (parsed.state ?? parsed) : null;
+    const list = state?.panes ?? [];
+    const first = list[0]?.velaState?.indicators?.natives ?? [];
     return {
-      panes: panes.length,
+      panes: list.length,
+      layoutCount: state?.layoutCount ?? 0,
       indicators: first.length,
       vpvr: first.some((n) => (typeof n === "string" ? n : n?.type) === "vpvr") ? 1 : 0,
+      hosts: document.querySelectorAll("[data-chart-host]").length,
+      canvases: document.querySelectorAll("[data-chart-host] .vela-cell canvas").length,
     };
   });
-  return { applied, confirmed };
+  return { confirmed, natives };
+}
+
+const TRACE_CATEGORIES = [
+  "devtools.timeline",
+  "disabled-by-default-devtools.timeline",
+  "disabled-by-default-devtools.timeline.frame",
+  "v8",
+  "v8.execute",
+  "disabled-by-default-v8.cpu_profiler",
+  "blink.user_timing",
+  "gpu",
+  "cc",
+  "viz",
+  "toplevel",
+];
+
+/** One CDP trace of a single pan, written as raw trace JSON. */
+async function recordTrace(cdp, page, box, file) {
+  const stream = fs.createWriteStream(file);
+  stream.write('{"traceEvents":[');
+  let written = 0;
+  const onChunk = (payload) => {
+    for (const event of payload.value) {
+      stream.write((written === 0 ? "" : ",") + JSON.stringify(event));
+      written += 1;
+    }
+  };
+  cdp.on("Tracing.dataCollected", onChunk);
+  const complete = new Promise((resolve) => cdp.once("Tracing.tracingComplete", resolve));
+  await cdp.send("Tracing.start", {
+    categories: TRACE_CATEGORIES.join(","),
+    options: "sampling-frequency=1000",
+    transferMode: "ReportEvents",
+  });
+  await page.evaluate(() => window.__mawsPaintReset());
+  const moves = await pan(page, box, PAN_MS);
+  await cdp.send("Tracing.end");
+  await complete;
+  cdp.off("Tracing.dataCollected", onChunk);
+  stream.write("]}");
+  await new Promise((resolve) => stream.end(resolve));
+  return moves;
 }
 
 async function main() {
@@ -629,31 +747,100 @@ async function main() {
   };
 
   setTickRate(10);
-  await measure("pan-1pane", () => pan(page, box, PAN_MS));
-  await measure("wheel-zoom", () => wheelBurst(page, box));
+  const captureInventory = () => page.evaluate(() => window.__mawsCanvasInventory());
+  let inventory = await captureInventory();
+  let inventoryTotals = {
+    panes: inventory.length,
+    canvases: inventory.reduce((sum, p) => sum + p.canvases.length, 0),
+    backingPixels: inventory.reduce((sum, p) => sum + p.backingPixels, 0),
+    byKind: inventory.flatMap((p) => p.canvases).reduce((acc, c) => {
+      acc[c.kind] = (acc[c.kind] ?? 0) + 1;
+      return acc;
+    }, {}),
+  };
+  const reportInventory = (label) => {
+    inventoryTotals = {
+      panes: inventory.length,
+      canvases: inventory.reduce((sum, p) => sum + p.canvases.length, 0),
+      backingPixels: inventory.reduce((sum, p) => sum + p.backingPixels, 0),
+      byKind: inventory.flatMap((p) => p.canvases).reduce((acc, c) => {
+        acc[c.kind] = (acc[c.kind] ?? 0) + 1;
+        return acc;
+      }, {}),
+    };
+    log(
+      `canvas inventory (${label}): ${inventoryTotals.panes} plots · ${inventoryTotals.canvases} canvases ` +
+        `(${JSON.stringify(inventoryTotals.byKind)}) · ${inventoryTotals.backingPixels.toLocaleString()} backing px`,
+    );
+  };
+  reportInventory("initial");
 
-  // Heavier: 4 panes, VPVR + 3 indicators, 5,000 candles.
-  const heavy = await seedHeavyLayout(page);
-  log(
-    `heavy layout: panes ${heavy.confirmed.panes}, indicators ${heavy.confirmed.indicators}${heavy.confirmed.vpvr ? " (vpvr on)" : " (vpvr MISSING)"}`,
-  );
-  const grid = await page.locator("[data-chart-host]").first().boundingBox();
-  if (!grid) throw new Error("4-pane chart host has no box");
-  await measure("pan-4pane-5k", () => pan(page, grid, PAN_MS));
+  const panBox = async () => {
+    // The grid centre is the splitter: dragging there resizes panes and never
+    // pans a chart. Always aim inside the first cell's plot.
+    const cell = page.locator("[data-chart-host] .vela-cell").first();
+    const b = (await cell.count()) > 0 ? await cell.boundingBox() : null;
+    const box = b ?? (await page.locator("[data-chart-host]").first().boundingBox());
+    if (!box) throw new Error("chart host has no box");
+    return box;
+  };
 
-  // Same layout, 50 ticks/second.
-  setTickRate(50);
-  await measure("pan-4pane-burst-50tps", () => pan(page, grid, PAN_MS));
-  setTickRate(10);
+  if (SWEEP) {
+    for (const panes of [1, 2, 4]) {
+      for (const indicators of [0, 3, 6]) {
+        for (const vpvr of [false, true]) {
+          const seeded = await seedLayout(page, { panes, indicators, vpvr });
+          const label = `panes${panes}-ind${indicators}-vpvr${vpvr ? "on" : "off"}`;
+          lastSeeded = seeded;
+          sweepCells.push({
+            panes,
+            indicators,
+            vpvr,
+            natives: seeded.natives,
+            confirmed: seeded.confirmed,
+            hosts: seeded.confirmed.hosts,
+          });
+          const cellBox = await panBox();
+          await measure(label, () => pan(page, cellBox, PAN_MS));
+          sweepCells[sweepCells.length - 1].median = results[label].median;
+        }
+      }
+    }
+  } else if (TRACE) {
+    const seeded = await seedLayout(page, { panes: 4, indicators: 6, vpvr: true });
+    lastSeeded = seeded;
+    inventory = await captureInventory();
+    reportInventory("4-pane trace layout");
+    log(`trace layout: ${JSON.stringify(seeded.confirmed)} natives=${JSON.stringify(seeded.natives)}`);
+    const traceFile = path.join(OUT_DIR, `${NAME}-trace.json`);
+    await page.bringToFront();
+    await recordTrace(cdp, page, await panBox(), traceFile);
+    log(`saved trace ${traceFile} (${(fs.statSync(traceFile).size / 1024 / 1024).toFixed(1)} MB)`);
+  } else {
+    await measure("pan-1pane", () => pan(page, box, PAN_MS));
+    await measure("wheel-zoom", () => wheelBurst(page, box));
 
-  // Same layout on 20,000 candles.
-  klineRows = minuteKlineRows(HEAVY_CANDLES);
-  await page.reload();
-  await page.waitForSelector("[data-chart-host]", { timeout: DEV ? 240_000 : 90_000 });
-  await page.waitForTimeout(DEV ? 4000 : 2500);
-  const grid20k = await page.locator("[data-chart-host]").first().boundingBox();
-  if (!grid20k) throw new Error("4-pane 20k chart host has no box");
-  await measure("pan-4pane-20k", () => pan(page, grid20k, PAN_MS));
+    const seeded = await seedLayout(page, { panes: 4, indicators: 6, vpvr: true });
+    lastSeeded = seeded;
+    log(
+      `heavy layout: panes ${seeded.confirmed.panes}, indicators ${seeded.confirmed.indicators}${seeded.confirmed.vpvr ? " (vpvr on)" : " (vpvr MISSING)"}`,
+    );
+    const grid = await panBox();
+    await measure("pan-4pane-5k", () => pan(page, grid, PAN_MS));
+
+    // Same layout, 50 ticks/second.
+    setTickRate(50);
+    await measure("pan-4pane-burst-50tps", () => pan(page, grid, PAN_MS));
+    setTickRate(10);
+
+    // Same layout on 20,000 candles.
+    klineRows = minuteKlineRows(HEAVY_CANDLES);
+    await page.reload();
+    await page.waitForSelector("[data-chart-host]", { timeout: DEV ? 240_000 : 90_000 });
+    await page.waitForTimeout(DEV ? 4000 : 2500);
+    const grid20k = await panBox();
+    await measure("pan-4pane-20k", () => pan(page, grid20k, PAN_MS));
+  }
 
   const machine = {
     mode: DEV ? "dev" : "prod",
@@ -685,10 +872,18 @@ async function main() {
     heavyCandles: HEAVY_CANDLES,
     ticksPerSecond: [10, 50],
     runsPerScenario: RUNS,
-    heavyLayout: heavy.confirmed,
+    heavyLayout: lastSeeded?.confirmed ?? null,
   };
 
-  const payload = { name: NAME, takenAt: new Date().toISOString(), machine, scenarios: results };
+  const payload = {
+    name: NAME,
+    takenAt: new Date().toISOString(),
+    machine,
+    inventory,
+    inventoryTotals,
+    ...(SWEEP ? { sweep: sweepCells } : {}),
+    scenarios: results,
+  };
   const file = path.join(OUT_DIR, `${NAME}.json`);
   fs.writeFileSync(file, JSON.stringify(payload, null, 2));
 
