@@ -56,6 +56,8 @@ const NAME = args.get("name") ?? `${DEV ? "dev" : "prod"}-${CHANNEL ?? "bundled"
 const NO_BUILD = args.get("no-build") === "true";
 const SWEEP = args.get("sweep") === "true";
 const TRACE = args.get("trace") === "true";
+const RATES = args.get("rates") === "true";
+const LAYOUT_FILTER = args.get("layout") ?? "both";
 if (args.get("runs")) RUNS = Math.max(1, Number(args.get("runs")) || 1);
 
 const disposable = createDisposableContext({ source: {}, purpose: "e2e" });
@@ -64,6 +66,7 @@ let feed = null;
 let browser = null;
 let tickTimer = null;
 const sweepCells = [];
+const rateCells = [];
 let lastSeeded = null;
 
 function log(...parts) {
@@ -202,7 +205,10 @@ async function pan(page, box, durationMs) {
   while (Date.now() - started < durationMs) {
     const t = (Date.now() - started) / durationMs;
     // Sweep right then back, so the range stays inside the loaded history.
-    const dx = Math.sin(t * Math.PI * 2) * Math.min(box.width / 4, 240);
+    // Same shape as the in-page driver: sweep plus a net drift, so the viewport
+    // ends visibly shifted and the pan can be told apart from a splitter drag.
+    const amp = Math.min(box.width / 4, 240);
+    const dx = Math.sin(t * Math.PI * 2) * amp * 0.35 + t * amp;
     await page.mouse.move(cx + dx, cy, { steps: 1 });
     step += 1;
     await new Promise((r) => setTimeout(r, 4));
@@ -237,12 +243,17 @@ const PAINT_SCRIPT = () => {
     pending: [],
     latencies: [],
     moves: 0,
+    // A frame that started with a pointer event waiting and still drew nothing.
+    pendingMoves: 0,
+    missedFrames: 0,
+    drewSinceFrame: false,
   };
   window.__mawsPaint = state;
   const mark = () => {
     if (!state.on) return;
     state.paints += 1;
     state.dirty = true;
+    state.drewSinceFrame = true;
     if (state.pending.length > 0) {
       const now = performance.now();
       for (const at of state.pending) state.latencies.push(now - at);
@@ -273,6 +284,7 @@ const PAINT_SCRIPT = () => {
     () => {
       if (!state.on) return;
       state.moves += 1;
+      state.pendingMoves += 1;
       state.pending.push(performance.now());
       if (state.pending.length > 400) state.pending.shift();
     },
@@ -335,10 +347,15 @@ const PAINT_SCRIPT = () => {
   const loop = () => {
     if (state.on) {
       state.frames += 1;
+      // A move that arrived before this frame and produced no draw by the time
+      // the frame ended is a missed frame.
+      if (state.pendingMoves > 0 && !state.drewSinceFrame) state.missedFrames += 1;
+      state.pendingMoves = 0;
       if (state.dirty) {
         state.paintedFrames += 1;
         state.dirty = false;
       }
+      state.drewSinceFrame = false;
     }
     requestAnimationFrame(loop);
   };
@@ -351,6 +368,9 @@ const PAINT_SCRIPT = () => {
     state.pending.length = 0;
     state.latencies.length = 0;
     state.moves = 0;
+    state.pendingMoves = 0;
+    state.missedFrames = 0;
+    state.drewSinceFrame = false;
     state.on = true;
   };
   window.__mawsPaintStop = () => {
@@ -359,11 +379,210 @@ const PAINT_SCRIPT = () => {
       paints: state.paints,
       paintedFrames: state.paintedFrames,
       frames: state.frames,
+      missedFrames: state.missedFrames,
       latencies: state.latencies.slice(),
       moves: state.moves,
     };
   };
 };
+
+/** The biggest VISIBLE cell: the grid keeps dormant pool cells in the DOM too. */
+const visibleCell = `(() => {
+  const cells = [...document.querySelectorAll("[data-chart-host] .vela-cell")];
+  const scored = cells
+    .map((c) => ({ c, r: c.getBoundingClientRect() }))
+    .filter((x) => x.r.width > 50 && x.r.height > 50)
+    .sort((a, b) => b.r.width * b.r.height - a.r.width * a.r.height);
+  return scored[0]?.c ?? null;
+})()`;
+
+/**
+ * In-page pointer driver: dispatches PointerEvents aligned to rAF, `perFrame`
+ * per frame, so the chart sees the ~120/s a 120 Hz mouse produces (and 240/s as
+ * an upper bound) instead of the ~65/s a CDP round-trip allows.
+ *
+ * Split in two phases so the caller can screenshot the chart WHILE the pointer
+ * is still down: the live chart re-anchors to the right edge after a release, so
+ * a before/after comparison at rest cannot tell a pan from a no-op.
+ */
+async function rafPanStart(page, perFrame) {
+  return page.evaluate(({ perFrameCount, cellExpr }) => {
+    const VISIBLE_CELL = () => (0, eval)(cellExpr);
+    const cell = VISIBLE_CELL();
+    if (!cell) throw new Error("no visible .vela-cell");
+    const rect = cell.getBoundingClientRect();
+    const cx = rect.left + rect.width / 2;
+    const cy = rect.top + rect.height / 2;
+    // InputController is attached to the geometry (WebGL2) canvas; hit-testing
+    // can land on an overlay in the multi-pane grid, so address it directly.
+    const target =
+      [...cell.querySelectorAll("canvas")].find((c) => c.__mawsKind === "webgl2") ??
+      document.elementFromPoint(cx, cy) ??
+      cell;
+    // A dedicated id: reusing the real mouse's id 1 after a Playwright drag
+    // leaves the events routed to a stale capture target.
+    const POINTER_ID = 42;
+    const make = (type, x, y, buttons) =>
+      new PointerEvent(type, {
+        bubbles: true,
+        cancelable: true,
+        composed: true,
+        clientX: x,
+        clientY: y,
+        pointerId: POINTER_ID,
+        pointerType: "mouse",
+        isPrimary: true,
+        button: 0,
+        buttons,
+      });
+    target.dispatchEvent(make("pointerdown", cx, cy, 1));
+    // Synthetic pointers have no implicit capture; take it so moves continue to
+    // reach the controller's gesture handler.
+    try {
+      target.setPointerCapture?.(POINTER_ID);
+    } catch {
+      /* capture unsupported for synthetic ids */
+    }
+    const amp = Math.min(rect.width / 4, 240);
+    const state = { target, make, cx, cy, amp, started: performance.now(), dispatched: 0, perFrame: perFrameCount };
+    state.pointerId = POINTER_ID;
+    state.step = () => {
+      const t = (performance.now() - state.started) / 5000;
+      if (t >= 0.6) return;
+      const dx = Math.sin(t * Math.PI * 2) * amp * 0.35 + t * amp;
+      for (let i = 0; i < state.perFrame; i += 1) {
+        state.target.dispatchEvent(state.make("pointermove", state.cx + dx, state.cy, 1));
+        state.dispatched += 1;
+      }
+      requestAnimationFrame(state.step);
+    };
+    window.__mawsRafPan = state;
+    requestAnimationFrame(state.step);
+    return { ok: true };
+  }, { perFrameCount: perFrame, cellExpr: visibleCell });
+}
+
+async function rafPanFinish(page) {
+  return page.evaluate(
+    () =>
+      new Promise((resolve) => {
+        const state = window.__mawsRafPan;
+        if (!state) return resolve(0);
+        const done = () => {
+          state.target.dispatchEvent(state.make("pointerup", state.cx + state.amp, state.cy, 0));
+          window.__mawsRafPan = null;
+          resolve(state.dispatched);
+        };
+        const tick = () => {
+          const t = (performance.now() - state.started) / 5000;
+          if (t >= 1) return done();
+          const dx = Math.sin(t * Math.PI * 2) * state.amp * 0.35 + t * state.amp;
+          for (let i = 0; i < state.perFrame; i += 1) {
+            state.target.dispatchEvent(state.make("pointermove", state.cx + dx, state.cy, 1));
+            state.dispatched += 1;
+          }
+          requestAnimationFrame(tick);
+        };
+        requestAnimationFrame(tick);
+      }),
+  );
+}
+
+
+/** Playwright-driven drag, split so the mid-drag state can be captured. */
+async function panVerified(page, box) {
+  const cx = box.x + box.width / 2;
+  const cy = box.y + box.height / 2;
+  const amp = Math.min(box.width / 4, 240);
+  const before = await cellSnapshot(page);
+  await page.mouse.move(cx, cy);
+  await page.mouse.down();
+  const started = Date.now();
+  let step = 0;
+  const moveTo = async (t) => {
+    const dx = Math.sin(t * Math.PI * 2) * amp * 0.35 + t * amp;
+    await page.mouse.move(cx + dx, cy, { steps: 1 });
+    step += 1;
+  };
+  while ((Date.now() - started) / PAN_MS < 0.6) {
+    await moveTo(Math.min(0.599, (Date.now() - started) / PAN_MS));
+    await new Promise((r) => setTimeout(r, 4));
+  }
+  const mid = await cellSnapshot(page);
+  while ((Date.now() - started) / PAN_MS < 1) {
+    await moveTo(Math.min(1, (Date.now() - started) / PAN_MS));
+    await new Promise((r) => setTimeout(r, 4));
+  }
+  await page.mouse.up();
+  const after = await cellSnapshot(page);
+  return { moves: step, panDiffPct: assertPanned(before, mid, after, "playwright") };
+}
+
+/** In-page rAF drag, verified the same way. */
+async function rafPanVerified(page, perFrame) {
+  const before = await cellSnapshot(page);
+  await rafPanStart(page, perFrame);
+  await page.waitForTimeout(600);
+  const mid = await cellSnapshot(page);
+  const moves = await rafPanFinish(page);
+  const after = await cellSnapshot(page);
+  return { moves, panDiffPct: assertPanned(before, mid, after, `raf${perFrame}`) };
+}
+
+/** Cell box + a real pixel signature from its 2D canvases. */
+async function cellSnapshot(page) {
+  const cell = page.locator("[data-chart-host] .vela-cell").first();
+  const box = await cell.boundingBox();
+  const signature = await page.evaluate((cellExpr) => {
+    const VISIBLE_CELL = () => (0, eval)(cellExpr);
+    const cellEl = VISIBLE_CELL();
+    if (!cellEl) return [];
+    return [...cellEl.querySelectorAll("canvas")]
+      .map((c) => {
+        if (c.__mawsKind !== "2d") return null;
+        const ctx = c.getContext("2d");
+        if (!ctx || c.width === 0 || c.height === 0) return null;
+        // Middle band of the plot: candles/volume live here, the crosshair is
+        // one thin line, so a pan moves far more bytes than a hover does.
+        const w = Math.min(400, c.width);
+        const h = Math.min(60, c.height);
+        const x = Math.max(0, Math.floor((c.width - w) / 2));
+        const y = Math.max(0, Math.floor(c.height / 2));
+        try {
+          const data = ctx.getImageData(x, y, w, h).data;
+          let sum = 0;
+          for (let i = 0; i < data.length; i += 4) sum = (sum + data[i] * 3 + data[i + 1] * 5 + data[i + 2] * 7) % 2147483647;
+          return sum;
+        } catch {
+          return null;
+        }
+      })
+      .filter((v) => v !== null);
+  }, visibleCell);
+  return { box, signature };
+}
+
+/**
+ * A splitter drag resizes cells (the box changes); a pan leaves the box alone
+ * and repaints different bars. Compare the pixel signature taken mid-drag —
+ * the live chart re-anchors on release, so a post-release comparison proves
+ * nothing.
+ */
+function assertPanned(before, mid, after, label) {
+  const boxStr = (b) => (b ? `${Math.round(b.width)}x${Math.round(b.height)}@${Math.round(b.x)},${Math.round(b.y)}` : "null");
+  if (boxStr(before.box) !== boxStr(after.box)) {
+    throw new Error(`${label}: cell box changed (${boxStr(before.box)} → ${boxStr(after.box)}) — the drag resized a splitter, not the viewport`);
+  }
+  const n = Math.min(before.signature.length, mid.signature.length);
+  if (n === 0) throw new Error(`${label}: no readable 2D canvas to verify the pan`);
+  let changed = 0;
+  for (let i = 0; i < n; i += 1) if (before.signature[i] !== mid.signature[i]) changed += 1;
+  const pct = +((changed / n) * 100).toFixed(1);
+  if (changed === 0) {
+    throw new Error(`${label}: no canvas changed mid-drag — the pan did not move the viewport`);
+  }
+  return pct;
+}
 
 const SAMPLER = () => {
   const state = { deltas: [], long: 0, last: 0, on: false };
@@ -660,7 +879,7 @@ async function main() {
   if (!box) throw new Error("chart host has no box");
 
   const results = {};
-  const measure = async (label, action) => {
+  const measure = async (label, action, options = {}) => {
     const runs = [];
     let attempts = 0;
     while (runs.length < RUNS && attempts < RUNS + 3) {
@@ -675,8 +894,10 @@ async function main() {
       });
       const before = await cdpMetrics(cdp);
       const startedAt = Date.now();
-      const moves = await action();
+      const result = await action();
+      const moves = typeof result === "number" ? result : result.moves;
       const elapsedMs = Date.now() - startedAt;
+      const panDiffPct = typeof result === "number" ? 0 : (result.panDiffPct ?? 0);
       const afterMetrics = await cdpMetrics(cdp);
       const raw = await page.evaluate(() => {
         const s = window.__mawsPerf;
@@ -693,6 +914,7 @@ async function main() {
         paintFps,
         paintFrames: raw.paint.paintedFrames,
         paintCalls: raw.paint.paints,
+        missedFrames: raw.paint.missedFrames,
         pointerMoves: raw.paint.moves,
         toDrawP50: +percentile(paintLatencies, 50).toFixed(2),
         toDrawP95: +percentile(paintLatencies, 95).toFixed(2),
@@ -706,7 +928,7 @@ async function main() {
         await page.waitForTimeout(400);
         continue;
       }
-      runs.push({ ...summary, ...metrics, moves, elapsedMs });
+      runs.push({ ...summary, ...metrics, moves, elapsedMs, panDiffPct });
       await page.waitForTimeout(600);
     }
     if (runs.length === 0) {
@@ -735,14 +957,16 @@ async function main() {
       "toDrawP95",
       "toDrawP99",
       "toDrawSamples",
+      "missedFrames",
+      "panDiffPct",
     ];
     const medians = {};
     for (const key of keys) medians[key] = median(runs.map((r) => r[key] ?? 0));
     results[label] = { runs, median: medians };
     log(
       `${label}: raf p99 ${medians.p99}ms · worst ${medians.worst}ms · paint ${medians.paintFps}fps · ` +
-        `pointer→draw p50 ${medians.toDrawP50}ms p99 ${medians.toDrawP99}ms · longtasks ${medians.longTasks} · ` +
-        `layouts ${medians.layouts} · task ${medians.taskMs}ms`,
+        `pointer→draw p50 ${medians.toDrawP50}ms p95 ${medians.toDrawP95}ms p99 ${medians.toDrawP99}ms · ` +
+        `moves ${medians.pointerMoves} · missed frames ${medians.missedFrames} · task ${medians.taskMs}ms`,
     );
   };
 
@@ -804,6 +1028,48 @@ async function main() {
           await measure(label, () => pan(page, cellBox, PAN_MS));
           sweepCells[sweepCells.length - 1].median = results[label].median;
         }
+      }
+    }
+  } else if (RATES) {
+    const layouts = [
+      { key: "1pane", panes: 1, indicators: 0, vpvr: false },
+      { key: "4pane", panes: 4, indicators: 6, vpvr: true },
+    ].filter((l) => LAYOUT_FILTER === "both" || l.key === LAYOUT_FILTER);
+    const drivers = [
+      { key: "playwright", perFrame: 0 },
+      { key: "raf1", perFrame: 1 },
+      { key: "raf2", perFrame: 2 },
+    ];
+    for (const layout of layouts) {
+      const seeded = await seedLayout(page, layout);
+      lastSeeded = seeded;
+      inventory = await captureInventory();
+      reportInventory(`${layout.key} layout`);
+      log(`layout ${layout.key}: ${JSON.stringify(seeded.confirmed)}`);
+      const cellBox = await panBox();
+      for (const driver of drivers) {
+        const label = `${layout.key}-${driver.key}`;
+        const action =
+          driver.perFrame === 0
+            ? () => panVerified(page, cellBox)
+            : () => rafPanVerified(page, driver.perFrame);
+        let failure = null;
+        try {
+          await measure(label, action);
+        } catch (error) {
+          failure = String(error?.message ?? error);
+          log(`${label}: SKIPPED — ${failure}`);
+        }
+        rateCells.push({
+          layout: layout.key,
+          panes: layout.panes,
+          indicators: layout.indicators,
+          vpvr: layout.vpvr,
+          driver: driver.key,
+          eventsPerFrame: driver.perFrame,
+          median: results[label]?.median ?? null,
+          ...(failure ? { skipped: failure } : {}),
+        });
       }
     }
   } else if (TRACE) {
@@ -882,6 +1148,7 @@ async function main() {
     inventory,
     inventoryTotals,
     ...(SWEEP ? { sweep: sweepCells } : {}),
+    ...(RATES ? { rates: rateCells } : {}),
     scenarios: results,
   };
   const file = path.join(OUT_DIR, `${NAME}.json`);
