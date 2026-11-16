@@ -30,6 +30,18 @@ import { X } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 
 type ChartRange = "1D" | "5D" | "1M" | "3M" | "6M" | "YTD" | "1Y" | "5Y" | "All";
+/**
+ * Dev-only perf readout (`?perf=1`). The require sits in a branch that folds to
+ * `null` when NODE_ENV is "production", so a shipped bundle contains neither the
+ * component nor its instrumentation.
+ */
+const DevPerfOverlay =
+  process.env.NODE_ENV === "production"
+    ? null
+    : // eslint-disable-next-line @typescript-eslint/no-require-imports
+      (require("@/components/dev/PerfOverlay") as typeof import("@/components/dev/PerfOverlay"))
+        .PerfOverlay;
+
 
 
 
@@ -363,6 +375,7 @@ export function AppShell() {
       <ChartContextMenu />
       <BuySellContextMenu />
       <LiveNotices />
+      {DevPerfOverlay ? <DevPerfOverlay /> : null}
     </div>
   );
 }
