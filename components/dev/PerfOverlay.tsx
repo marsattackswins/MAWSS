@@ -41,24 +41,29 @@ const DRAW_GL = [
 
 type Snapshot = {
   frame: { samples: number; fps: number; medianMs: number; p99Ms: number };
-  paint: { fps: number; draws: number };
+  paint: { fps: number; draws: number; busiest: { layer: string; draws: number } | null };
   pointer: { eventsPerSecond: number; dragging: boolean };
 };
 
-type PaintCounters = { draws: number; framesWithDraw: number; dirty: boolean };
+type PaintCounters = { draws: number; framesWithDraw: number; dirty: boolean; layers: Map<string, number> };
 
 const EMPTY: Snapshot = {
   frame: { samples: 0, fps: 0, medianMs: 0, p99Ms: 0 },
-  paint: { fps: 0, draws: 0 },
+  paint: { fps: 0, draws: 0, busiest: null },
   pointer: { eventsPerSecond: 0, dragging: false },
 };
 
 /** Wrap the drawing entry points and hand back the undo. */
 function instrumentDraws(counters: PaintCounters): () => void {
   const restores: Array<() => void> = [];
-  const mark = () => {
+  /** Attribute each draw to the canvas it lands on — the chart tags its layers with
+   *  `data-layer`, so the report can name what is actually repainting. */
+  const mark = (ctx: unknown) => {
     counters.draws += 1;
     counters.dirty = true;
+    const canvas = (ctx as { canvas?: HTMLCanvasElement } | null)?.canvas;
+    const layer = canvas?.dataset?.layer ?? 'untagged';
+    counters.layers.set(layer, (counters.layers.get(layer) ?? 0) + 1);
   };
 
   const wrap = (
@@ -70,7 +75,7 @@ function instrumentDraws(counters: PaintCounters): () => void {
       const original = proto[name];
       if (typeof original !== "function") continue;
       const patched = function patched(this: unknown, ...args: unknown[]) {
-        mark();
+        mark(this);
         return (original as (...a: unknown[]) => unknown).apply(this, args);
       };
       proto[name] = patched;
@@ -100,7 +105,7 @@ export function PerfOverlay() {
 
   useEffect(() => {
     if (!enabled) return;
-    const counters: PaintCounters = { draws: 0, framesWithDraw: 0, dirty: false };
+    const counters: PaintCounters = { draws: 0, framesWithDraw: 0, dirty: false, layers: new Map() };
     const restore = instrumentDraws(counters);
 
     const intervals: Array<{ at: number; ms: number }> = [];
@@ -141,9 +146,11 @@ export function PerfOverlay() {
     const tick = window.setInterval(() => {
       drawsInSecond = counters.draws;
       counters.draws = 0;
+      const busiest = [...counters.layers.entries()].sort((a, b) => b[1] - a[1])[0] ?? null;
+      counters.layers.clear();
       const next: Snapshot = {
         frame: frameStats(intervals.map((entry) => entry.ms)),
-        paint: { fps: paintsInSecond, draws: drawsInSecond },
+        paint: { fps: paintsInSecond, draws: drawsInSecond, busiest: busiest ? { layer: busiest[0], draws: busiest[1] } : null },
         pointer: { eventsPerSecond: movesInSecond, dragging: pointerDown },
       };
       paintsInSecond = 0;
@@ -216,6 +223,7 @@ export function PerfOverlay() {
       {row("frame p50 / p99", `${snapshot.frame.medianMs} / ${snapshot.frame.p99Ms} ms`)}
       {row("paint fps", snapshot.paint.fps.toFixed(0))}
       {row("draw calls/s", String(snapshot.paint.draws))}
+      {row("busiest layer", snapshot.paint.busiest ? `${snapshot.paint.busiest.layer} ${snapshot.paint.busiest.draws}` : "—")}
       {row("ptr/s in drag", snapshot.pointer.dragging ? String(snapshot.pointer.eventsPerSecond) : "—")}
       <button
         type="button"

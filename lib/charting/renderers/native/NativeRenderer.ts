@@ -1466,6 +1466,7 @@ export class NativeRenderer implements IChartRenderer {
         // L0 geometry — the swappable backend (WebGL2 if available, else canvas2d)
         // owns the data canvas + gets its rendering context.
         this.dataCanvas = this.createGeometryBackend();
+        this.dataCanvas.dataset.layer = 'data';
 
 
         // L1 chrome (canvas2d): Pine drawings + axes + current-price line. Transparent,
@@ -1484,6 +1485,14 @@ export class NativeRenderer implements IChartRenderer {
         this.cursorCanvas = document.createElement('canvas');
         Object.assign(this.cursorCanvas.style, { position: 'absolute', inset: '0', width: '100%', height: '100%', pointerEvents: 'none' });
 
+        // Layer names on the canvases: dev tooling (the ?perf=1 overlay) and anyone
+        // poking at a chart in DevTools can then say WHICH layer is repainting.
+        this.backdropCanvas.dataset.layer = 'backdrop';
+        this.volumeCanvas.dataset.layer = 'volume';
+        this.chromeCanvas.dataset.layer = 'chrome';
+        this.drawingsCanvas.dataset.layer = 'drawings';
+        this.cursorCanvas.dataset.layer = 'cursor';
+
         this.overlayRoot = document.createElement('div');
         Object.assign(this.overlayRoot.style, { position: 'absolute', inset: '0', pointerEvents: 'none' });
 
@@ -1495,7 +1504,11 @@ export class NativeRenderer implements IChartRenderer {
         Object.assign(this.plot.style, { position: 'absolute', top: '0', right: '0', bottom: '0', left: '0' });
         // SDK renderer layers: one transparent canvas each, stacked by placement —
         // 'below-data' behind the candles, 'above-data' over them (under the chrome/axes).
-        this.extLayers = rendererLayers().map((def) => ({ def, instance: def.create(), canvas: this.createLayerCanvas(), channel: def.id, owner: null, blank: false }));
+        this.extLayers = rendererLayers().map((def) => {
+            const canvas = this.createLayerCanvas();
+            canvas.dataset.layer = `ext-${def.id}`;
+            return { def, instance: def.create(), canvas, channel: def.id, owner: null, blank: false };
+        });
         const below = this.extLayers.filter((l) => l.def.placement === 'below-data').map((l) => l.canvas);
         const above = this.extLayers.filter((l) => l.def.placement !== 'below-data').map((l) => l.canvas);
         this.plot.append(this.backdropCanvas, ...below, this.dataCanvas, this.volumeCanvas, ...above, this.chromeCanvas, this.drawingsCanvas, this.cursorCanvas, this.overlayRoot);
