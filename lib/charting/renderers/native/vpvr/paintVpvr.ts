@@ -30,6 +30,10 @@ export interface VpvrPaintStyle {
  * relative to the largest row. Each row splits into an up segment (left part) and a down
  * segment (right part, against the axis). Rows inside the value area draw brighter; the
  * POC row is outlined. Pure — every coordinate comes from `geom`.
+ *
+ * Segments are collected into four buckets (value-area × colour) and filled once each:
+ * a `fillStyle` + `globalAlpha` write per row was this layer's dominant cost, and rows
+ * never overlap, so bucketing cannot change the result.
  */
 export function paintVpvr(
     ctx: CanvasRenderingContext2D,
@@ -41,6 +45,8 @@ export function paintVpvr(
     const { rightX, maxW, yOf } = geom;
     if (maxTotal <= 0 || maxW <= 0) return;
 
+    // [value area up, value area down, outside up, outside down] — flat x,y,w,h lists.
+    const buckets: number[][] = [[], [], [], []];
     for (let k = 0; k < rows.length; k += 1) {
         const row = rows[k]!;
         const total = row.up + row.down;
@@ -49,15 +55,18 @@ export function paintVpvr(
         const h = Math.max(1, yOf(row.price) - yTop - 1); // 1px inter-row gap
         const w = (total / maxTotal) * maxW;
         const upW = (row.up / total) * w;
-        ctx.globalAlpha = k >= vaFrom && k <= vaTo ? VPVR_VA_ALPHA : VPVR_OUTSIDE_ALPHA;
-        if (upW > 0) {
-            ctx.fillStyle = style.upColor;
-            ctx.fillRect(rightX - w, yTop, upW, h);
-        }
-        if (w - upW > 0) {
-            ctx.fillStyle = style.downColor;
-            ctx.fillRect(rightX - w + upW, yTop, w - upW, h);
-        }
+        const base = k >= vaFrom && k <= vaTo ? 0 : 2;
+        if (upW > 0) buckets[base]!.push(rightX - w, yTop, upW, h);
+        if (w - upW > 0) buckets[base + 1]!.push(rightX - w + upW, yTop, w - upW, h);
+    }
+    for (let i = 0; i < buckets.length; i += 1) {
+        const list = buckets[i]!;
+        if (list.length === 0) continue;
+        ctx.globalAlpha = i < 2 ? VPVR_VA_ALPHA : VPVR_OUTSIDE_ALPHA;
+        ctx.fillStyle = i % 2 === 0 ? style.upColor : style.downColor;
+        ctx.beginPath();
+        for (let j = 0; j < list.length; j += 4) ctx.rect(list[j]!, list[j + 1]!, list[j + 2]!, list[j + 3]!);
+        ctx.fill();
     }
 
     if (style.showPoc) {

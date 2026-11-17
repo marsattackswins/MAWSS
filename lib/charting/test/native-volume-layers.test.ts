@@ -25,10 +25,13 @@ const THEME: VelaTheme = {
 
 interface Rect { op: 'fill' | 'stroke'; style: string; x: number; y: number; w: number; h: number; alpha: number }
 
-/** A minimal recording CanvasRenderingContext2D: rect ops with their style/alpha/coords. */
+/** A minimal recording CanvasRenderingContext2D: rect ops with their style/alpha/coords.
+ *  Batched painters (one path + one fill per colour bucket) record the same per-rect rows:
+ *  `rect()` queues geometry and `fill()` flushes it with the style/alpha live at that moment. */
 function recordingCtx(): { ctx: CanvasRenderingContext2D; rects: Rect[]; clears: () => number } {
     const rects: Rect[] = [];
     let clears = 0;
+    let path: Array<[number, number, number, number]> = [];
     const state = { fillStyle: '', strokeStyle: '', alpha: 1 };
     const noop = (): void => undefined;
     const ctx = {
@@ -40,7 +43,13 @@ function recordingCtx(): { ctx: CanvasRenderingContext2D; rects: Rect[]; clears:
         get globalAlpha() { return state.alpha; },
         lineWidth: 1,
         setTransform: noop, clearRect: () => { clears += 1; }, save: noop, restore: noop,
-        beginPath: noop, rect: noop, clip: noop,
+        beginPath: () => { path = []; },
+        rect: (x: number, y: number, w: number, h: number) => { path.push([x, y, w, h]); },
+        fill: () => {
+            for (const [x, y, w, h] of path) rects.push({ op: 'fill', style: state.fillStyle, x, y, w, h, alpha: state.alpha });
+            path = [];
+        },
+        clip: noop,
         fillRect: (x: number, y: number, w: number, h: number) => rects.push({ op: 'fill', style: state.fillStyle, x, y, w, h, alpha: state.alpha }),
         strokeRect: (x: number, y: number, w: number, h: number) => rects.push({ op: 'stroke', style: state.strokeStyle, x, y, w, h, alpha: state.alpha }),
     } as unknown as CanvasRenderingContext2D;

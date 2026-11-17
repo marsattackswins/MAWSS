@@ -27,6 +27,11 @@ export interface VolumeGeom {
  * Paint the bottom-anchored volume columns: one per visible bar, height proportional to
  * volume relative to the VISIBLE max, colored by bar direction. Pure — every coordinate
  * comes from `geom`.
+ *
+ * Columns of the same direction share one path and one fill: assigning `fillStyle` and
+ * calling `fillRect` per bar dominated this layer's frame cost (a colour string parse
+ * per column, every frame). Runs are built in bar order, so the paint order — and the
+ * blending of the translucent overlapping edges — is unchanged.
  */
 export function paintVolume(
     ctx: CanvasRenderingContext2D,
@@ -36,14 +41,30 @@ export function paintVolume(
 ): void {
     const { i0, i1, xOf, halfW, bottomY, maxH, maxVol } = geom;
     if (maxVol <= 0 || maxH <= 0) return;
-    ctx.globalAlpha = VOLUME_FILL_ALPHA;
+    const w = halfW * 2;
+    let runUp: boolean | null = null;
+    let runOpen = false;
+    const flush = (): void => {
+        if (!runOpen) return;
+        ctx.globalAlpha = VOLUME_FILL_ALPHA;
+        ctx.fillStyle = runUp ? colors.up : colors.down;
+        ctx.fill();
+        runOpen = false;
+    };
     for (let i = i0; i <= i1; i += 1) {
         const b = bars[i];
         const v = b?.volume;
         if (b == null || v == null || !(v > 0)) continue; // volume is optional on OHLCV
+        const up = b.close >= b.open;
+        if (!runOpen || up !== runUp) {
+            flush(); // a direction flip closes the previous run
+            runUp = up;
+            ctx.beginPath();
+            runOpen = true;
+        }
         const h = Math.max(1, (v / maxVol) * maxH);
-        ctx.fillStyle = b.close >= b.open ? colors.up : colors.down;
-        ctx.fillRect(xOf(i) - halfW, bottomY - h, halfW * 2, h);
+        ctx.rect(xOf(i) - halfW, bottomY - h, w, h);
     }
+    flush();
     ctx.globalAlpha = 1;
 }

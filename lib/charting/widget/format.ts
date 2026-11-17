@@ -6,11 +6,24 @@ export function decimalsFor(ref: number): number {
     return a >= 1 ? 2 : a >= 0.01 ? 4 : 6;
 }
 
+/** One `Intl.NumberFormat` per decimal count — axis labels and readouts format every
+ *  frame, and `toLocaleString` with options builds a formatter per call. */
+const priceFormatters = new Map<number, Intl.NumberFormat>();
+
+function priceFormatter(d: number): Intl.NumberFormat {
+    let nf = priceFormatters.get(d);
+    if (!nf) {
+        nf = new Intl.NumberFormat('en-US', { minimumFractionDigits: d, maximumFractionDigits: d });
+        priceFormatters.set(d, nf);
+    }
+    return nf;
+}
+
 /** Locale-formatted price; `'—'` for null/non-finite. */
 export function fmtPrice(n: number | null | undefined, dp?: number): string {
     if (n == null || !Number.isFinite(n)) return '—';
     const d = dp ?? decimalsFor(n);
-    return n.toLocaleString('en-US', { minimumFractionDigits: d, maximumFractionDigits: d });
+    return priceFormatter(d).format(n);
 }
 
 /** Signed change + percent ("+123.45 (+1.23%)") from open→close; `''` when unavailable. */
