@@ -2665,14 +2665,20 @@ export class NativeRenderer implements IChartRenderer {
         if (this.scrollTargetRO != null && clamped.rightOffset !== rightOffset) this.scrollTargetRO = clamped.rightOffset;
         this.coords.setViewport(clamped);
         this.computeScales(); // sets pane.scaleTarget (animator active → no snap)
-        if (this.easeScales(dtMs)) active = true;
-        if (this.easeLiveBar(dtMs)) active = true; // glide the forming bar toward the latest tick
+        const scalesMoved = this.easeScales(dtMs);
+        const liveMoved = this.easeLiveBar(dtMs); // glide the forming bar toward the latest tick
         this.skeletonClockMs += dtMs; // drives the loading-skeleton pulse (harmless when none show)
         this.paintData();
         this.crosshairLayer.render(this.scene, this.coords, this.theme, this.hoverSeparatorY, this.externalCrossPx());
         this.updateLegendValues(); // the animator owns the frame — renderFrame won't run
         this.emitViewportChange();
-        return active;
+        // Keep the loop alive only while something can still be SEEN to change. A frame that
+        // moves nothing is a full repaint for free, and a stuck ease target would otherwise
+        // repaint the whole chart forever — the chart never becomes idle, so every real gesture
+        // starts on an already-loaded frame.
+        const movedPx = Math.abs((clamped.rightOffset - vp.rightOffset) * this.coords.pxPerBar());
+        const movedZoom = Math.abs(clamped.barSpacing - vp.barSpacing) > vp.barSpacing * 1e-4;
+        return active && (movedPx >= 0.05 || movedZoom || scalesMoved || liveMoved);
     }
 
     /** Ease each pane's rendered scale toward its autoscale target (snap within epsilon).
