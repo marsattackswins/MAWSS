@@ -116,6 +116,8 @@ const RIGHT_AXIS_W = AXIS_MASTER_W; // px reserved on the right for one price-ax
 const AXIS_COL_W = AXIS_MERGED_W; // px width of each EXTRA merged-indicator scale column, added right of the master
 const COLLAPSED_PANE_H = 26; // px height of a collapsed pane's strip (legend + expand affordance)
 const TIME_AXIS_H = 22; // px reserved at the bottom for the time axis
+/** A pan (or zoom) smaller than this many device pixels cannot change a pixel on screen. */
+const SUBPIXEL_PAN_PX = 0.5;
 // ── "scroll to most recent bar" affordance (bottom-right, shown only when the latest bar is off-screen and the cursor is nearby) ──
 // Size/border match the playground drawing-toolbar collapse toggle (`.toolbar-toggle`).
 const SCROLL_BTN_SIZE = 26; // px — width & height (`.toolbar-toggle`)
@@ -2520,6 +2522,13 @@ export class NativeRenderer implements IChartRenderer {
         this.panVelocity = 0;
         this.scrollTargetRO = null;
         const clamped = this.clampViewport(vp.barSpacing, vp.rightOffset);
+        // A pointer can move a fraction of a device pixel many times a second (high-rate mice,
+        // slow drags, narrow bars). Such a delta moves nothing on screen, so the frame is
+        // skipped instead of repainting every canvas for an invisible change.
+        const current = this.coords.getViewport();
+        const pansPixels = Math.abs((clamped.rightOffset - current.rightOffset) * this.coords.pxPerBar());
+        const zooms = Math.abs(clamped.barSpacing - current.barSpacing) > current.barSpacing * 1e-9;
+        if (!zooms && pansPixels < SUBPIXEL_PAN_PX) return;
         this.coords.setViewport(clamped);
         this.targetBarSpacing = clamped.barSpacing;
         this.scheduler.invalidate(InvalidateLevel.Full);
