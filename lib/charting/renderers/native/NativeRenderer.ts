@@ -3369,16 +3369,27 @@ export class NativeRenderer implements IChartRenderer {
         canvas.getContext('2d')?.clearRect(0, 0, canvas.width, canvas.height);
     }
 
-    /** Clear a layer once, then skip its paint until content returns. */
+    /** Clear a layer once, then drop it from the compositor until content returns — an empty
+     *  full-size canvas costs a composite every frame, which is exactly the budget a pan needs. */
     private blankLayer(l: ExtLayer): void {
         if (l.blank) return;
         this.clearLayerCanvas(l.canvas);
+        this.setLayerVisible(l.canvas, false);
         l.blank = true;
     }
 
     /** Content is back: resume painting the layer. */
     private showLayer(l: ExtLayer): void {
+        if (l.blank) this.setLayerVisible(l.canvas, true);
         l.blank = false;
+    }
+
+    /** Toggle a layer canvas between painted and skipped, writing the DOM only on a change. */
+    private setLayerVisible(canvas: HTMLCanvasElement | null | undefined, visible: boolean): void {
+        const style = canvas?.style;
+        if (!style) return;
+        const next = visible ? '' : 'none';
+        if (style.display !== next) style.display = next;
     }
 
     /** One frame's args for an SDK renderer layer (shared by the data + cursor paint paths).
@@ -3428,7 +3439,7 @@ export class NativeRenderer implements IChartRenderer {
             });
             // The columns clear this shared canvas when they paint; the profile then lays its
             // rows on top instead of wiping them (one clear + one raster per frame, not two).
-            this.vpvrRenderer.render({
+            const vpvrPainted = this.vpvrRenderer.render({
                 bars: this.scene.bars,
                 data: this.scene.vpvrLayer,
                 visible: this.vpvrActive && !this.vpvrHidden,
@@ -3437,6 +3448,9 @@ export class NativeRenderer implements IChartRenderer {
                 bounds: pane.bounds,
                 theme: this.theme,
             }, { clear: !volumeCleared });
+            // Neither painter drew: take the whole surface out of the compositor instead of
+            // leaving an empty full-size layer to be blended every frame.
+            this.setLayerVisible(this.volumeCanvas, volumeCleared || vpvrPainted);
             // SDK renderer layers: shared paint cycle, own channel data, own canvas. Each
             // paints on its OWNING indicator's pane (the volume layer's rule, generalized) —
             // the price pane for chart-type channels and price-pane overlays alike.

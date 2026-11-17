@@ -108,7 +108,8 @@ export class VolumeRenderer {
         return true;
     }
 
-    /** Clear the stale frame once, then hide the (fully transparent) canvas. */
+    /** Clear the stale frame once, then take the canvas out of the compositor: an empty
+     *  full-size layer still costs a composite every frame (most of all in Firefox). */
     private clearBlank(): void {
         const ctx = this.ctx;
         const canvas = this.canvas;

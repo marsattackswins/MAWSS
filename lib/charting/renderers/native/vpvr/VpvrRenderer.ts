@@ -49,16 +49,16 @@ export class VpvrRenderer {
 
     /** Paint the profile. `opts.clear === false` means the volume columns already cleared the
      *  shared canvas this frame — the rows then land on top instead of wiping them. */
-    render(args: VpvrRenderArgs, opts?: { clear?: boolean }): void {
+    render(args: VpvrRenderArgs, opts?: { clear?: boolean }): boolean {
         const ctx = this.ctx;
         const canvas = this.canvas;
-        if (!ctx || !canvas) return;
+        if (!ctx || !canvas) return false;
         const ownsSurface = opts?.clear !== false;
         const { bars, data, visible, coords, scale, bounds, theme } = args;
 
         if (!data || !visible || bars.length === 0 || bounds.height <= 0) {
             if (ownsSurface) this.clearBlank(); // else the columns' full repaint already erased it
-            return;
+            return false;
         }
 
         const r = coords.visibleLogicalRange();
@@ -66,7 +66,7 @@ export class VpvrRenderer {
         const i1 = Math.min(bars.length - 1, Math.ceil(r.to));
         if (i0 > i1) {
             if (ownsSurface) this.clearBlank();
-            return;
+            return false;
         }
 
         // Memoize the bucketing on the visible window + the forming bar (its OHLCV mutates
@@ -81,7 +81,7 @@ export class VpvrRenderer {
         const profile = this.memo;
         if (!profile) {
             if (ownsSurface) this.clearBlank();
-            return;
+            return false;
         }
 
         const dpr = coords.dpr;
@@ -98,6 +98,7 @@ export class VpvrRenderer {
             yOf: (p) => coords.priceToY(p, scale, bounds),
         }, { upColor: data.upColor, downColor: data.downColor, showPoc: data.showPoc, pocColor: theme.textColor });
         ctx.restore();
+        return true;
     }
 
     /** Clear the stale frame once, then hide the (fully transparent) canvas. */

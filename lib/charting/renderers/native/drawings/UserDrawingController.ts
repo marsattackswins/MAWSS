@@ -1025,17 +1025,28 @@ export class UserDrawingController implements IDrawingsRendererPort {
             || this.interaction.ghost() !== null;
     }
 
-    /** Clear the stale frame once, then hide the (fully transparent) canvas. */
+    /** Clear the stale frame once, then drop the canvas from the compositor: an empty
+     *  full-size layer is still blended every frame (and a chart with no drawings is the
+     *  common case during a pan). */
     private clearBlank(): void {
         const ctx = this.ctx;
         if (!ctx || this.blank) return;
         ctx.setTransform(1, 0, 0, 1, 0, 0);
         ctx.clearRect(0, 0, this.canvas.width, this.canvas.height);
+        this.setCanvasVisible(false);
         this.blank = true;
     }
 
     private show(): void {
+        if (this.blank) this.setCanvasVisible(true);
         this.blank = false;
+    }
+
+    private setCanvasVisible(visible: boolean): void {
+        const style = this.canvas?.style;
+        if (!style) return;
+        const next = visible ? '' : 'none';
+        if (style.display !== next) style.display = next;
     }
 
     destroy(): void {
