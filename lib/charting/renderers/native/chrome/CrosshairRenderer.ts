@@ -19,6 +19,8 @@ import { percentScaleFor } from './ChromeRenderer';
 export class CrosshairRenderer {
     private canvas: HTMLCanvasElement | null = null;
     private ctx: CanvasRenderingContext2D | null = null;
+    /** Nothing painted last time — a frame with no crosshair to show skips its clear too. */
+    private blank = true;
 
     mount(canvas: HTMLCanvasElement): void {
         this.canvas = canvas;
@@ -33,6 +35,21 @@ export class CrosshairRenderer {
         const canvas = this.canvas;
         if (!ctx || !canvas) return;
 
+        // Data frames repaint this layer even with no pointer over the chart. With nothing to
+        // show and the surface already clean, skip the clear as well: it is a full-canvas write
+        // inside the frame budget that changes no pixel.
+        const ch = scene.crosshair;
+        const localCross = ch !== null && ch !== undefined && ch.x >= 0 && ch.x <= coords.width && ch.y >= 0 && ch.y <= coords.height;
+        if (!localCross && external === null && separatorHoverY === null) {
+            if (this.blank) return;
+            const dpr = coords.dpr;
+            ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+            ctx.clearRect(0, 0, canvas.width / dpr, canvas.height / dpr);
+            this.blank = true;
+            return;
+        }
+        this.blank = false;
+
         const dpr = coords.dpr;
         ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
         ctx.clearRect(0, 0, canvas.width / dpr, canvas.height / dpr);
@@ -45,7 +62,6 @@ export class CrosshairRenderer {
         // paints over it, and drawn regardless of the local-crosshair presence guard.
         if (external) this.drawExternal(ctx, external, scene, coords, theme);
 
-        const ch = scene.crosshair;
         const dataW = coords.width;
         const dataH = coords.height;
         if (!ch || ch.x < 0 || ch.x > dataW || ch.y < 0 || ch.y > dataH) return;
@@ -111,6 +127,7 @@ export class CrosshairRenderer {
     destroy(): void {
         this.canvas = null;
         this.ctx = null;
+        this.blank = true;
     }
 
     /** The synced ghost: a dimmed vertical line at the bar the renderer resolved as

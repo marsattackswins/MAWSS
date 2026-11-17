@@ -38,7 +38,7 @@ function setup(): { r: AnyRenderer } {
     r.backdropCanvas = canvas();
     r.dataCanvas = canvas();
     r.volumeCanvas = canvas();
-    r.vpvrCanvas = canvas();
+    r.vpvrCanvas = r.volumeCanvas; // one shared surface (columns + profile)
     r.chromeCanvas = canvas();
     r.drawingsCanvas = canvas();
     r.cursorCanvas = canvas();

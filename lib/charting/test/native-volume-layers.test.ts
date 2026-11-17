@@ -209,3 +209,44 @@ describe('VpvrRenderer (visible-range volume profile)', () => {
         expect(clears()).toBe(2); // no repaint while blank
     });
 });
+
+describe('shared volume + VPVR surface', () => {
+    const BOUNDS = { top: 0, height: H };
+    const VOL = { upColor: '#11AA11', downColor: '#AA1111', heightFrac: 0.2 };
+    const VPVR = { rows: 10, widthFrac: 0.3, upColor: '#2962FF', downColor: '#F7525F', showPoc: true, valueAreaFrac: 0.7 };
+    const SCALE = { min: 95, max: 110 };
+
+    /** Both painters mounted on ONE canvas — the renderer's live arrangement (one layer, not two). */
+    function shared(bars: OHLCV[]) {
+        const coords = makeCoords(bars.length);
+        const rec = recordingCtx();
+        const canvas = { width: W, height: H, getContext: () => rec.ctx } as unknown as HTMLCanvasElement;
+        const volume = new VolumeRenderer();
+        const profile = new VpvrRenderer();
+        volume.mount(canvas);
+        profile.mount(canvas);
+        return { ...rec, coords, volume, profile };
+    }
+
+    it('columns clear the surface once, then the profile paints over them without clearing', () => {
+        const bars = [upBar(0, 100), downBar(1, 100), upBar(2, 60)];
+        const { rects, clears, coords, volume, profile } = shared(bars);
+        const cleared = volume.render({ bars, data: VOL, visible: true, coords, bounds: BOUNDS, fillPane: false });
+        expect(cleared).toBe(true); // it owns the wipe when it paints
+        profile.render({ bars, data: VPVR, visible: true, coords, scale: SCALE, bounds: BOUNDS, theme: THEME }, { clear: !cleared });
+        expect(clears()).toBe(1); // one wipe for both painters, not two
+        expect(rects.some((r) => r.style === VOL.upColor)).toBe(true); // columns survived the profile
+        expect(rects.some((r) => r.style === VPVR.upColor)).toBe(true); // and the profile drew on top
+
+        profile.render({ bars, data: VPVR, visible: true, coords, scale: SCALE, bounds: BOUNDS, theme: THEME }, { clear: true });
+        expect(clears()).toBe(2); // no columns before it ⇒ the profile clears for itself
+    });
+
+    it('a profile that turns off does not wipe the columns it shares the surface with', () => {
+        const bars = [upBar(0, 100), downBar(1, 100)];
+        const { clears, coords, volume, profile } = shared(bars);
+        const cleared = volume.render({ bars, data: VOL, visible: true, coords, bounds: BOUNDS, fillPane: false });
+        profile.render({ bars, data: VPVR, visible: false, coords, scale: SCALE, bounds: BOUNDS, theme: THEME }, { clear: !cleared });
+        expect(clears()).toBe(1); // only the columns' wipe — the hidden profile kept its hands off
+    });
+});

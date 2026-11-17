@@ -51,15 +51,18 @@ export class VolumeRenderer {
         this.blank = true;
     }
 
-    render(args: VolumeRenderArgs): void {
+    /** Paint the columns. Returns whether this call CLEARED the surface it shares with the
+     *  VPVR profile — a full repaint wipes stale pixels for both, so the profile then paints
+     *  without clearing. False means the canvas was left untouched (blank this frame). */
+    render(args: VolumeRenderArgs): boolean {
         const ctx = this.ctx;
         const canvas = this.canvas;
-        if (!ctx || !canvas) return;
+        if (!ctx || !canvas) return false;
         const { bars, data, visible, coords, bounds, fillPane } = args;
 
         if (!data || !visible || bars.length === 0 || bounds.height <= 0) {
             this.clearBlank();
-            return;
+            return false;
         }
 
         // Visible bar-index window (bar index = logical index), padded nowhere — a half-off
@@ -69,7 +72,7 @@ export class VolumeRenderer {
         const i1 = Math.min(bars.length - 1, Math.ceil(r.to));
         if (i0 > i1) {
             this.clearBlank();
-            return;
+            return false;
         }
 
         let maxVol = 0;
@@ -79,7 +82,7 @@ export class VolumeRenderer {
         }
         if (maxVol <= 0) {
             this.clearBlank();
-            return;
+            return false;
         }
 
         this.show(); // put the layer back in the stack before replacing its pixels
@@ -102,6 +105,7 @@ export class VolumeRenderer {
             maxVol,
         }, { up: data.upColor, down: data.downColor });
         ctx.restore();
+        return true;
     }
 
     /** Clear the stale frame once, then hide the (fully transparent) canvas. */

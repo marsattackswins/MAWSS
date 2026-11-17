@@ -176,8 +176,9 @@ export class NativeRenderer implements IChartRenderer {
     private mountContainer: HTMLElement | null = null; // the host-owned element mount() renders into
     private backdropCanvas!: HTMLCanvasElement; // session highlights + gridlines, the pile's very bottom
     private dataCanvas!: HTMLCanvasElement;
-    private volumeCanvas!: HTMLCanvasElement; // bottom-anchored volume columns above grid/candles
-    private vpvrCanvas!: HTMLCanvasElement; // visible-range volume profile (above candles, right edge)
+    private volumeCanvas!: HTMLCanvasElement; // volume columns + the VPVR profile (one shared surface)
+    /** The VPVR profile's surface — the SAME canvas as {@link volumeCanvas}: one layer, two painters. */
+    private vpvrCanvas!: HTMLCanvasElement;
     private chromeCanvas!: HTMLCanvasElement;
     private drawingsCanvas!: HTMLCanvasElement;
     private cursorCanvas!: HTMLCanvasElement;
@@ -1451,19 +1452,19 @@ export class NativeRenderer implements IChartRenderer {
         this.backdropCanvas = document.createElement('canvas');
         Object.assign(this.backdropCanvas.style, { position: 'absolute', inset: '0', width: '100%', height: '100%', pointerEvents: 'none' });
 
-        // L0.25 volume columns: bottom-anchored per-bar volume, ABOVE the geometry canvas so
-        // grid lines and candles cannot paint over them. Transparent + pointer-transparent.
+        // L0.25 volume columns + L0.6 VPVR profile: ONE canvas for both. They paint the same
+        // pane on the same frame, in a fixed order (columns under the profile), so a second
+        // full-size layer would only cost an extra clear, raster and composite per frame.
+        // Still ABOVE the geometry canvas (grid/candles never paint over them), transparent +
+        // pointer-transparent.
         this.volumeCanvas = document.createElement('canvas');
         Object.assign(this.volumeCanvas.style, { position: 'absolute', inset: '0', width: '100%', height: '100%', pointerEvents: 'none' });
+        this.vpvrCanvas = this.volumeCanvas; // same surface — paintData orders the two painters on it
 
         // L0 geometry — the swappable backend (WebGL2 if available, else canvas2d)
         // owns the data canvas + gets its rendering context.
         this.dataCanvas = this.createGeometryBackend();
 
-        // L0.6 VPVR: the visible-range volume profile against the right edge, painted ABOVE
-        // the candles (it reads over them, translucent) but below the chrome/axes.
-        this.vpvrCanvas = document.createElement('canvas');
-        Object.assign(this.vpvrCanvas.style, { position: 'absolute', inset: '0', width: '100%', height: '100%', pointerEvents: 'none' });
 
         // L1 chrome (canvas2d): Pine drawings + axes + current-price line. Transparent,
         // above the geometry layer (so the GL backend never has to rasterize text).
@@ -1495,7 +1496,7 @@ export class NativeRenderer implements IChartRenderer {
         this.extLayers = rendererLayers().map((def) => ({ def, instance: def.create(), canvas: this.createLayerCanvas(), channel: def.id, owner: null, blank: false }));
         const below = this.extLayers.filter((l) => l.def.placement === 'below-data').map((l) => l.canvas);
         const above = this.extLayers.filter((l) => l.def.placement !== 'below-data').map((l) => l.canvas);
-        this.plot.append(this.backdropCanvas, ...below, this.dataCanvas, this.volumeCanvas, this.vpvrCanvas, ...above, this.chromeCanvas, this.drawingsCanvas, this.cursorCanvas, this.overlayRoot);
+        this.plot.append(this.backdropCanvas, ...below, this.dataCanvas, this.volumeCanvas, ...above, this.chromeCanvas, this.drawingsCanvas, this.cursorCanvas, this.overlayRoot);
         this.layerOrderSig = ''; // recomputed on the first data frame (owned layers follow their indicator's z)
         this.wrapper.appendChild(this.plot);
         this.factoryConfig = this.getConfig();
@@ -3417,7 +3418,7 @@ export class NativeRenderer implements IChartRenderer {
             // The volume layer follows its indicator's pane (it can be moved to its own pane);
             // a collapsed host pane shows its legend strip only, so the columns are suppressed.
             const volumePane = this.nativeLayerPane('volume') ?? pane;
-            this.volumeRenderer.render({
+            const volumeCleared = this.volumeRenderer.render({
                 bars: this.scene.bars,
                 data: this.scene.volumeLayer,
                 visible: this.volumeActive && !this.volumeHidden && !volumePane.collapsed,
@@ -3425,6 +3426,8 @@ export class NativeRenderer implements IChartRenderer {
                 bounds: volumePane.bounds,
                 fillPane: volumePane.kind !== 'price',
             });
+            // The columns clear this shared canvas when they paint; the profile then lays its
+            // rows on top instead of wiping them (one clear + one raster per frame, not two).
             this.vpvrRenderer.render({
                 bars: this.scene.bars,
                 data: this.scene.vpvrLayer,
@@ -3433,7 +3436,7 @@ export class NativeRenderer implements IChartRenderer {
                 scale: pane.scale,
                 bounds: pane.bounds,
                 theme: this.theme,
-            });
+            }, { clear: !volumeCleared });
             // SDK renderer layers: shared paint cycle, own channel data, own canvas. Each
             // paints on its OWNING indicator's pane (the volume layer's rule, generalized) —
             // the price pane for chart-type channels and price-pane overlays alike.
@@ -3930,7 +3933,7 @@ export class NativeRenderer implements IChartRenderer {
      *  the DOM stacking and the screenshot compositor must both follow. */
     private canvasPile(): HTMLCanvasElement[] {
         const { below, above } = this.orderedLayerCanvases();
-        return [this.backdropCanvas, ...below, this.dataCanvas, this.volumeCanvas, this.vpvrCanvas, ...above];
+        return [this.backdropCanvas, ...below, this.dataCanvas, this.volumeCanvas, ...above];
     }
 
     /** Re-slot the SDK layer canvases in the plot when the computed order changed (a z
@@ -4331,9 +4334,8 @@ export class NativeRenderer implements IChartRenderer {
         };
         size(this.dataCanvas);
         size(this.backdropCanvas);
-        size(this.volumeCanvas);
+        size(this.volumeCanvas); // volume columns + the VPVR profile share this surface
         for (const l of this.extLayers) size(l.canvas);
-        size(this.vpvrCanvas);
         size(this.chromeCanvas);
         size(this.drawingsCanvas);
         size(this.cursorCanvas);

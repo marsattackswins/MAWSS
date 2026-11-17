@@ -47,14 +47,17 @@ export class VpvrRenderer {
         this.blank = true;
     }
 
-    render(args: VpvrRenderArgs): void {
+    /** Paint the profile. `opts.clear === false` means the volume columns already cleared the
+     *  shared canvas this frame — the rows then land on top instead of wiping them. */
+    render(args: VpvrRenderArgs, opts?: { clear?: boolean }): void {
         const ctx = this.ctx;
         const canvas = this.canvas;
         if (!ctx || !canvas) return;
+        const ownsSurface = opts?.clear !== false;
         const { bars, data, visible, coords, scale, bounds, theme } = args;
 
         if (!data || !visible || bars.length === 0 || bounds.height <= 0) {
-            this.clearBlank();
+            if (ownsSurface) this.clearBlank(); // else the columns' full repaint already erased it
             return;
         }
 
@@ -62,7 +65,7 @@ export class VpvrRenderer {
         const i0 = Math.max(0, Math.floor(r.from));
         const i1 = Math.min(bars.length - 1, Math.ceil(r.to));
         if (i0 > i1) {
-            this.clearBlank();
+            if (ownsSurface) this.clearBlank();
             return;
         }
 
@@ -77,14 +80,14 @@ export class VpvrRenderer {
         }
         const profile = this.memo;
         if (!profile) {
-            this.clearBlank();
+            if (ownsSurface) this.clearBlank();
             return;
         }
 
         const dpr = coords.dpr;
         this.show(); // put the layer back in the stack before replacing its pixels
         ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-        ctx.clearRect(0, 0, canvas.width / dpr, canvas.height / dpr);
+        if (ownsSurface) ctx.clearRect(0, 0, canvas.width / dpr, canvas.height / dpr);
         ctx.save();
         ctx.beginPath();
         ctx.rect(0, bounds.top, coords.width, bounds.height); // clip to the price pane's data area
