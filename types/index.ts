@@ -289,6 +289,10 @@ export type ChartSettings = {
   showOnlyRejectionNotifications: boolean;
   showLegend: boolean;
   showAlertLines: boolean;
+  /** Sound when a price alert fires — separate from execution sounds. */
+  alertSound: boolean;
+  /** Desktop notification when a price alert fires (needs browser permission). */
+  alertDesktop: boolean;
   showOrderLines: boolean;
   showPositionLines: boolean;
   showTpSlLines: boolean;
@@ -382,6 +386,8 @@ export const DEFAULT_CHART_SETTINGS: ChartSettings = {
   showOnlyRejectionNotifications: false,
   showLegend: true,
   showAlertLines: true,
+  alertSound: true,
+  alertDesktop: false,
   showOrderLines: true,
   showPositionLines: true,
   showTpSlLines: true,
@@ -449,6 +455,21 @@ export type PriceAlert = {
   price: number;
   side: "above" | "below";
   enabled: boolean;
+};
+
+/** One firing of a price alert. Session-scoped history (never persisted): it is
+ *  the "what did I miss" list, not a durable audit trail. */
+export type AlertHit = {
+  id: string;
+  alertId: string;
+  symbol: string;
+  /** The level the alert was set at. */
+  price: number;
+  side: "above" | "below";
+  /** The quote price when it crossed. */
+  last: number;
+  /** Epoch ms. */
+  at: number;
 };
 
 export type ChartOrder = {

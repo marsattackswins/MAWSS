@@ -92,8 +92,17 @@ export function useSyncHotSymbols(enabled = true) {
       .join("\0"),
   );
 
+  /** Enabled alerts keep their own symbols subscribed, so a symbol you do not
+   *  have open still streams and its alert can fire. */
+  const alertKey = useAppStore((s) =>
+    s.alerts
+      .filter((a) => a.enabled)
+      .map((a) => a.symbol)
+      .join(","),
+  );
+
   useEffect(() => {
     if (!enabled) return;
     useAppStore.getState().syncHotSymbols();
-  }, [enabled, watchlist, layoutCount, paneKey, tradeKey]);
+  }, [enabled, watchlist, layoutCount, paneKey, tradeKey, alertKey]);
 }

@@ -79,6 +79,7 @@ if (EXPECTED_PERSISTED_KEYS.length !== 44) {
 /** Fields that must NEVER be persisted (runtime-only by design). */
 const RUNTIME_ONLY_KEYS = [
   "hotSymbols", // market-data slice (phase g) — guarded from day one
+  "alertHits", // fired-alert history is per session, never restored
   "searchOpen",
   "settingsOpen",
   "indicatorMenuOpen",

@@ -9,6 +9,7 @@ export function collectHotSymbols(state: {
   panes: Array<{ symbol: string }>;
   orders?: Array<{ symbol: string }>;
   positions?: Array<{ symbol: string }>;
+  alerts?: Array<{ symbol: string; enabled?: boolean }>;
 }): string[] {
   const hot = new Set<string>();
   const add = (raw: string) => {
@@ -19,6 +20,9 @@ export function collectHotSymbols(state: {
   for (const p of state.panes.slice(0, state.layoutCount)) add(p.symbol);
   for (const o of state.orders ?? []) add(o.symbol);
   for (const p of state.positions ?? []) add(p.symbol);
+  // Alerts must stream even for symbols you do not have open: an alert on a
+  // symbol with no quotes could never fire.
+  for (const a of state.alerts ?? []) if (a.enabled !== false) add(a.symbol);
   return [...hot];
 }
 
@@ -52,6 +56,7 @@ export function createMarketDataSlice(set: RootSet, get: RootGet): MarketDataSli
         panes: appState.panes,
         orders: liveState.orders,
         positions: liveState.positions,
+        alerts: appState.alerts,
       });
       set({ hotSymbols: hot });
       mawsFeed.setHotSymbols(hot);

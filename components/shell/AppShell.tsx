@@ -25,6 +25,7 @@ import { timeframeSeconds } from "@/lib/timeframes";
 import { newClientOrderId, submitOrderFromUi } from "@/lib/trading/ui-orders";
 import { resolveOrderQty } from "@/lib/trading/symbol-settings";
 import { useSyncHotSymbols } from "@/lib/use-quotes";
+import { useAlertWatcher } from "@/lib/use-alert-watcher";
 import { applyAppTheme } from "@/lib/app-theme";
 import { X } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
@@ -144,6 +145,7 @@ export function AppShell() {
   const setMaximizedPane = useAppStore((s) => s.setMaximizedPane);
 
   useSyncHotSymbols(ready);
+  useAlertWatcher(ready);
 
   useEffect(() => {
     applyAppTheme(appSettings);

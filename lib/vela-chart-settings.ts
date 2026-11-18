@@ -1,4 +1,5 @@
 import { useAppStore } from "@/lib/store";
+import { setDesktopAlertsEnabled } from "@/lib/alerts/fire";
 import {
   chartSettingsFromVelaTheme,
   themeIndicatorSettings,
@@ -594,6 +595,17 @@ export function mawsHostSections(): MawsHostSection[] {
       rows: [
         t("Alert lines", "showAlertLines"),
         col("Alert line color", "alertLineColor"),
+        t("Alert sound", "alertSound"),
+        {
+          // Desktop popups need browser permission, so the row routes through the
+          // helper that asks for it (and leaves the switch off if refused).
+          kind: "toggle",
+          label: "Desktop notifications",
+          get: () => st().alertDesktop === true,
+          set: (value: boolean) => {
+            void setDesktopAlertsEnabled(value);
+          },
+        },
       ],
     },
 

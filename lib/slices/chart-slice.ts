@@ -40,12 +40,16 @@ import type {
   IndicatorTemplate,
   LayoutCount,
   LayoutSync,
+  AlertHit,
   PriceAlert,
   ReplayState,
   Timeframe,
   WorkspaceState,
 } from "@/types";
 import type { Store } from "@/lib/store";
+
+/** Fired-alert history is a glance-back list, not a log: cap what the panel holds. */
+const ALERT_HIT_LIMIT = 30;
 
 export type ChartRange =
   | "1D"
@@ -73,6 +77,8 @@ export type ChartSliceState = WorkspaceState & {
   indicatorSettings: IndicatorSettingsMap;
   chartSettings: ChartSettings;
   alerts: PriceAlert[];
+  /** Price alerts that fired this session — runtime-only, newest first. */
+  alertHits: AlertHit[];
   maximizedPaneId: string | null;
   /** Temporary focus target within one chart; intentionally not persisted. */
   focusedPane: FocusedPane;
@@ -145,6 +151,7 @@ export type ChartSliceActions = {
   updateAlert: (id: string, patch: Partial<PriceAlert>) => void;
   toggleAlert: (id: string) => void;
   removeAlert: (id: string) => void;
+  recordAlertHit: (hit: AlertHit) => void;
   setMaximizedPane: (id: string | null) => void;
   toggleFocusedPane: (chartPaneId: string, paneId: string) => void;
   clearFocusedPane: () => void;
@@ -233,6 +240,7 @@ export function createChartSlice(set: RootSet, get: RootGet): ChartSlice {
     indicatorSettings: { ...DEFAULT_INDICATOR_SETTINGS },
     chartSettings: DEFAULT_CHART_SETTINGS,
     alerts: [],
+    alertHits: [],
     maximizedPaneId: null,
     focusedPane: null,
     autoScaleByPane: {},
@@ -579,7 +587,13 @@ export function createChartSlice(set: RootSet, get: RootGet): ChartSlice {
         ),
       }),
     removeAlert: (id) =>
-      set({ alerts: get().alerts.filter((a) => a.id !== id) }),
+      set({
+        alerts: get().alerts.filter((a) => a.id !== id),
+        // A removed alert's history would be orphaned rows in the panel.
+        alertHits: get().alertHits.filter((h) => h.alertId !== id),
+      }),
+    recordAlertHit: (hit) =>
+      set({ alertHits: [hit, ...get().alertHits].slice(0, ALERT_HIT_LIMIT) }),
     setMaximizedPane: (id) => set({ maximizedPaneId: id }),
     toggleFocusedPane: (chartPaneId, paneId) => {
       const current = get().focusedPane;

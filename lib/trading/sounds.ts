@@ -1,9 +1,10 @@
 import { useAppStore } from "@/lib/store";
 
 /**
- * trading-sounds.ts — execution feedback sounds for the trading
- * HMI, driven by the persisted `executionSound` / `executionSoundName`
- * chart settings. WebAudio oscillator beeps: no audio assets needed.
+ * sounds.ts — feedback sounds for the trading HMI: order/position execution and
+ * price alerts. Driven by the persisted `executionSound` / `alertSound` /
+ * `executionSoundName` chart settings. WebAudio oscillator beeps: no audio
+ * assets needed.
  */
 
 type SoundName = "alarm" | "beep" | "chime";
@@ -27,13 +28,14 @@ function audioCtx(): AudioContext | null {
   return ctx;
 }
 
-/** Play the configured execution sound (no-op when muted or unsupported). */
-export function playExecutionSound(): void {
-  const s = useAppStore.getState().chartSettings;
-  if (s.executionSound !== true) return;
-  const name = (["alarm", "beep", "chime"] as const).includes(s.executionSoundName as SoundName)
-    ? (s.executionSoundName as SoundName)
+function soundName(value: string): SoundName {
+  return (["alarm", "beep", "chime"] as const).includes(value as SoundName)
+    ? (value as SoundName)
     : "alarm";
+}
+
+/** Play one of the configured tones (no-op when the browser has no WebAudio). */
+function playTone(name: SoundName): void {
   const ac = audioCtx();
   if (!ac) return;
   const profile = PROFILES[name];
@@ -51,4 +53,19 @@ export function playExecutionSound(): void {
     osc.start(start);
     osc.stop(start + profile.durMs / 1000 + 0.05);
   }
+}
+
+/** Play the configured execution sound (no-op when muted or unsupported). */
+export function playExecutionSound(): void {
+  const s = useAppStore.getState().chartSettings;
+  if (s.executionSound !== true) return;
+  playTone(soundName(s.executionSoundName));
+}
+
+/** Alert tone. Its own switch, so muting trade sounds keeps alerts audible —
+ *  and a trade fill never turns into a missed level. */
+export function playAlertSound(): void {
+  const s = useAppStore.getState().chartSettings;
+  if (s.alertSound !== true) return;
+  playTone(soundName(s.executionSoundName));
 }
