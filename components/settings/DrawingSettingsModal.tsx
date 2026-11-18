@@ -281,7 +281,7 @@ function StatsMultiSelect({
             return (
               <label
                 key={key}
-                className="flex cursor-pointer items-center gap-2 px-3 py-1.5 text-[12px] text-(--app-text) hover:bg-(--app-hover)"
+                className="flex cursor-pointer items-center gap-2 px-3 py-2 text-[12px] text-(--app-text) hover:bg-(--app-hover)"
               >
                 <input
                   type="checkbox"
@@ -896,9 +896,9 @@ export function DrawingSettingsModal() {
                 </SettingsSelectWrap>
               </SettingsFieldRow>
 
-              <div className="grid grid-cols-2 gap-x-3 gap-y-1.5 py-1">
+              <div className="grid grid-cols-2 gap-x-3 gap-y-2 py-1">
                 {draft.fibLevels.map((lvl, i) => (
-                  <div key={`${lvl.level}-${i}`} className="flex items-center gap-1.5">
+                  <div key={`${lvl.level}-${i}`} className="flex items-center gap-2">
                     <input
                       type="checkbox"
                       className="accent-[var(--app-accent)]"
@@ -1145,7 +1145,7 @@ export function DrawingSettingsModal() {
                 </div>
               </SettingsFieldRow>
 
-              <div className="flex items-center gap-2 py-1.5">
+              <div className="flex items-center gap-2 py-2">
                 <input
                   type="checkbox"
                   className="accent-[var(--app-accent)]"
@@ -1182,7 +1182,7 @@ export function DrawingSettingsModal() {
                 </svg>
               </div>
 
-              <div className="flex items-center gap-2 py-1.5">
+              <div className="flex items-center gap-2 py-2">
                 <input
                   type="checkbox"
                   className="accent-[var(--app-accent)]"
@@ -1245,7 +1245,7 @@ export function DrawingSettingsModal() {
                 </div>
               </SettingsFieldRow>
 
-              <div className="flex items-center gap-2 py-1.5">
+              <div className="flex items-center gap-2 py-2">
                 <input
                   type="checkbox"
                   className="accent-[var(--app-accent)]"

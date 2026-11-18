@@ -133,7 +133,7 @@ function StatusDot({ tone, pulse = false }: { tone: StatusTone; pulse?: boolean 
 
 function StatusItem({ marker, text, tone, pulse = false, title }: { marker: string; text: string; tone: StatusTone; pulse?: boolean; title: string }) {
   return (
-    <span className="inline-flex items-center gap-1.5 whitespace-nowrap text-[11px] leading-none" title={title} data-status={marker}>
+    <span className="inline-flex items-center gap-2 whitespace-nowrap text-[11px] leading-none" title={title} data-status={marker}>
       <StatusDot tone={tone} pulse={pulse} />
       <span className="font-medium" style={{ color: STATUS_COLOR[tone] }}>
         {text}

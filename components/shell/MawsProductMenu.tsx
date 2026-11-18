@@ -46,7 +46,7 @@ export function MawsProductMenu() {
 
       {menuOpen && (
         <div className="menu min-w-[210px]" data-dropdown-open>
-          <div className="menu-row py-2.5">
+          <div className="menu-row py-2">
             <button
               type="button"
               className="flex w-full items-center gap-2 whitespace-nowrap text-left"
@@ -60,7 +60,7 @@ export function MawsProductMenu() {
             </button>
           </div>
 
-          <div className="menu-row border-t border-(--app-border) py-2.5">
+          <div className="menu-row border-t border-(--app-border) py-2">
             <button
               type="button"
               className="flex w-full items-center gap-2 whitespace-nowrap text-left"
@@ -75,7 +75,7 @@ export function MawsProductMenu() {
             </button>
           </div>
 
-          <div className="menu-row border-t border-(--app-border) py-2.5">
+          <div className="menu-row border-t border-(--app-border) py-2">
             <button
               type="button"
               className="flex w-full items-center gap-2 whitespace-nowrap text-left"

@@ -15,7 +15,7 @@ export const settingsUi = {
   panel:
     "flex max-h-[min(640px,calc(100vh-48px))] w-full flex-col overflow-hidden rounded-[8px] bg-[var(--app-elevated)] shadow-[var(--app-shadow-menu)]",
   header:
-    "flex shrink-0 items-center justify-between border-b border-[var(--app-border)] px-5 py-3.5",
+    "flex shrink-0 items-center justify-between border-b border-[var(--app-border)] px-5 py-3",
   title: "text-[16px] font-semibold text-[var(--app-text)]",
   closeBtn:
     "flex h-7 w-7 items-center justify-center rounded-[4px] text-[var(--app-muted)] hover:bg-[var(--app-hover)] hover:text-[var(--app-text)]",
@@ -28,20 +28,20 @@ export const settingsUi = {
     }`,
   body: "min-h-0 flex-1 overflow-y-auto px-5 py-4",
   footer:
-    "flex shrink-0 items-center justify-between gap-3 border-t border-[var(--app-border)] px-5 py-3.5",
+    "flex shrink-0 items-center justify-between gap-3 border-t border-[var(--app-border)] px-5 py-3",
   sectionTitle:
-    "mb-2.5 flex items-center gap-1.5 text-[11px] font-semibold tracking-[0.08em] text-[var(--app-muted)]",
+    "mb-2 flex items-center gap-2 text-[11px] font-semibold tracking-[0.08em] text-[var(--app-muted)]",
   label: "text-[12px] text-[var(--app-muted)]",
   text: "text-[13px] text-[var(--app-text)]",
   muted: "text-[12px] text-[var(--app-muted)]",
   input:
-    "h-8 rounded-[4px] border border-[var(--app-border)] bg-[var(--app-bg)] px-2.5 text-[13px] text-[var(--app-text)] outline-none focus:border-[var(--app-muted)] disabled:opacity-45",
+    "h-8 rounded-[4px] border border-[var(--app-border)] bg-[var(--app-bg)] px-2 text-[13px] text-[var(--app-text)] outline-none focus:border-[var(--app-muted)] disabled:opacity-45",
   inputSm:
     "h-8 w-[88px] rounded-[4px] border border-[var(--app-border)] bg-[var(--app-bg)] px-2 text-[13px] text-[var(--app-text)] outline-none focus:border-[var(--app-muted)] disabled:opacity-45",
   select:
-    "h-8 appearance-none rounded-[4px] border border-[var(--app-border)] bg-[var(--app-bg)] px-2.5 pr-7 text-[13px] text-[var(--app-text)] outline-none focus:border-[var(--app-muted)] disabled:opacity-45",
+    "h-8 appearance-none rounded-[4px] border border-[var(--app-border)] bg-[var(--app-bg)] px-2 pr-7 text-[13px] text-[var(--app-text)] outline-none focus:border-[var(--app-muted)] disabled:opacity-45",
   navItem: (on: boolean) =>
-    `mx-2 flex w-[calc(100%-16px)] items-center gap-2 rounded-[4px] px-2 py-[7px] text-left text-[13px] ${
+    `mx-2 flex w-[calc(100%-16px)] items-center gap-2 rounded-[4px] px-2 py-2 text-left text-[13px] ${
       on
         ? "bg-[var(--app-hover)] text-[var(--app-text)]"
         : "text-[var(--app-text)] hover:bg-[var(--app-border)]"
@@ -113,7 +113,7 @@ export function SettingsHeader({
       onMouseDown={onMouseDown}
     >
       <div className={`flex min-w-0 items-center gap-2 ${settingsUi.title}`}>{title}</div>
-      <div className="flex items-center gap-0.5">
+      <div className="flex items-center gap-1">
         {trailing}
         <button type="button" className={settingsUi.closeBtn} onClick={onClose} title="Close">
           <X size={16} />
@@ -206,7 +206,7 @@ export function SettingsSection({
         {title}
         {hint ? <CircleHelp size={12} className="text-[var(--app-faint)]" /> : null}
       </div>
-      <div className="space-y-2.5">{children}</div>
+      <div className="space-y-2">{children}</div>
     </div>
   );
 }
@@ -223,7 +223,7 @@ export function SettingsFieldStack({
 }) {
   return (
     <label className="block min-w-0">
-      <span className={`mb-1.5 flex items-center gap-1 ${settingsUi.label}`}>
+      <span className={`mb-2 flex items-center gap-1 ${settingsUi.label}`}>
         {label}
         {hint ? <CircleHelp size={12} className="text-[var(--app-faint)]" /> : null}
       </span>
@@ -267,13 +267,13 @@ export function SettingsCheck({
 }) {
   return (
     <div
-      className={`flex items-start gap-2 py-0.5 ${indent ? "pl-5" : ""} ${
+      className={`flex items-start gap-2 py-1 ${indent ? "pl-5" : ""} ${
         disabled ? "opacity-45" : ""
       }`}
     >
       <input
         type="checkbox"
-        className="mt-[3px] accent-white"
+        className="mt-1 accent-white"
         checked={checked}
         disabled={disabled}
         onChange={(e) => onChange(e.target.checked)}
@@ -283,7 +283,7 @@ export function SettingsCheck({
           <span>{label}</span>
           {extra}
         </div>
-        {hint ? <div className={`mt-0.5 ${settingsUi.muted}`}>{hint}</div> : null}
+        {hint ? <div className={`mt-1 ${settingsUi.muted}`}>{hint}</div> : null}
       </div>
     </div>
   );

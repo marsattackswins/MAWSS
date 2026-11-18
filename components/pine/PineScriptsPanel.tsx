@@ -520,7 +520,7 @@ export function PineScriptsPanel() {
           type="button"
           onClick={run}
           disabled={!draft.trim()}
-          className="flex h-[26px] shrink-0 items-center gap-1 rounded-[4px] border px-2.5 text-[12px] transition-colors hover:bg-(--app-hover) disabled:opacity-40"
+          className="flex h-[26px] shrink-0 items-center gap-1 rounded-[4px] border px-2 text-[12px] transition-colors hover:bg-(--app-hover) disabled:opacity-40"
           style={{ borderColor: BORDER, color: TEXT }}
           title="Run on the active chart"
         >
@@ -545,7 +545,7 @@ export function PineScriptsPanel() {
           <History size={14} />
         </IconButton>
 
-        <span className="ml-auto flex shrink-0 items-center gap-0.5">
+        <span className="ml-auto flex shrink-0 items-center gap-1">
           <IconButton
             title={fullscreen ? "Exit fullscreen" : "Fullscreen"}
             onClick={() => setFullscreen((v) => !v)}
@@ -693,7 +693,7 @@ export function PineScriptsPanel() {
             </div>
           )}
           {logs.map((entry) => (
-            <div key={entry.id} className="flex gap-2 px-2 py-0.5 text-[11px]">
+            <div key={entry.id} className="flex gap-2 px-2 py-1 text-[11px]">
               <span className="shrink-0" style={{ color: MUTED }}>
                 {clock(entry.time)}
               </span>

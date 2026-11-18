@@ -389,7 +389,7 @@ function BuySellStrip({
           <button
             type="button"
             onClick={() => setDropdownOpen((v) => !v)}
-            className={`toolbar-btn gap-1 px-2.5 text-[12px] ${dropdownOpen ? "is-active" : ""}`}
+            className={`toolbar-btn gap-1 px-2 text-[12px] ${dropdownOpen ? "is-active" : ""}`}
             title="Connect a trading profile to trade"
             aria-haspopup="menu"
             aria-expanded={dropdownOpen}
@@ -410,7 +410,7 @@ function BuySellStrip({
               <div className="menu-section-title">Trading Profiles</div>
               <button
                 type="button"
-                className="menu-row flex w-full items-center gap-2.5 px-3 py-2 text-left"
+                className="menu-row flex w-full items-center gap-2 px-3 py-2 text-left"
                 onClick={() => void handleSelectProfile("binance-testnet")}
               >
                 <BinanceIcon />
@@ -418,14 +418,14 @@ function BuySellStrip({
                   <span className="text-[12px] font-medium text-(--app-text)">Testnet</span>
                   <span className="truncate text-[11px] text-(--app-muted)">USDT-M Futures (Testnet)</span>
                 </div>
-                <span className="shrink-0 rounded bg-(--app-up)/15 px-1.5 py-0.5 text-[11px] font-semibold uppercase text-[var(--app-up)]">
+                <span className="shrink-0 rounded bg-(--app-up)/15 px-2 py-1 text-[11px] font-semibold uppercase text-[var(--app-up)]">
                   Test
                 </span>
               </button>
 
               <button
                 type="button"
-                className="menu-row flex w-full items-center gap-2.5 px-3 py-2 text-left"
+                className="menu-row flex w-full items-center gap-2 px-3 py-2 text-left"
                 onClick={() => void handleSelectProfile("binance-production")}
               >
                 <BinanceIcon />
@@ -433,7 +433,7 @@ function BuySellStrip({
                   <span className="text-[12px] font-medium text-(--app-text)">Live</span>
                   <span className="truncate text-[11px] text-(--app-muted)">USDT-M Futures (Live)</span>
                 </div>
-                <span className="shrink-0 rounded bg-[#f0b90b]/15 px-1.5 py-0.5 text-[11px] font-semibold uppercase text-[#f0b90b]">
+                <span className="shrink-0 rounded bg-[#f0b90b]/15 px-2 py-1 text-[11px] font-semibold uppercase text-[#f0b90b]">
                   Live
                 </span>
               </button>
@@ -457,7 +457,7 @@ function BuySellStrip({
         disabled={disabled}
         title={feedTitle}
         aria-label="Sell at bid"
-        className="trade-block trade-block-sell flex h-[32px] shrink-0 items-center gap-1.5 px-2.5 text-[12px] tabular-nums disabled:[&>span]:text-(--app-disabled)"
+        className="trade-block trade-block-sell flex h-[32px] shrink-0 items-center gap-2 px-2 text-[12px] tabular-nums disabled:[&>span]:text-(--app-disabled)"
         onClick={() => {
           if (!quote) return;
           const qty = marginToQty(symbol, marginValue, bid);
@@ -485,7 +485,7 @@ function BuySellStrip({
         </button>
         <input
           aria-label="Order margin"
-          className="w-8 border-b border-(--app-border) bg-transparent pb-0.5 text-center text-[12px] font-medium tabular-nums text-(--app-text) outline-none focus:border-(--app-muted)"
+          className="w-8 border-b border-(--app-border) bg-transparent pb-1 text-center text-[12px] font-medium tabular-nums text-(--app-text) outline-none focus:border-(--app-muted)"
           value={marginDraft ?? marginValue}
           onChange={(e) => {
             setMarginDraft(e.target.value);
@@ -518,7 +518,7 @@ function BuySellStrip({
         disabled={disabled}
         title={feedTitle}
         aria-label="Buy at ask"
-        className="trade-block trade-block-buy flex h-[32px] shrink-0 items-center gap-1.5 px-2.5 text-[12px] tabular-nums disabled:opacity-40"
+        className="trade-block trade-block-buy flex h-[32px] shrink-0 items-center gap-2 px-2 text-[12px] tabular-nums disabled:opacity-40"
         onClick={() => {
           if (!quote) return;
           const qty = marginToQty(symbol, marginValue, ask);
@@ -575,7 +575,7 @@ function BuySellStrip({
                 type="checkbox"
                 checked={productionChecked}
                 onChange={(event) => setProductionChecked(event.target.checked)}
-                className="mt-0.5 accent-[var(--app-warn)]"
+                className="mt-1 accent-[var(--app-warn)]"
               />
               <span>I understand and want to continue.</span>
             </label>
@@ -897,7 +897,7 @@ export function TopBar() {
     journal: (
       <ToolbarBtn
         label="Trade Journal"
-        className="gap-1.5 px-2 text-[13px]"
+        className="gap-2 px-2 text-[13px]"
         onClick={() => {
           closeAllMenus();
           if (settingsOpen) setSettingsOpen(false);
@@ -955,7 +955,7 @@ export function TopBar() {
   ]);
 
   return (
-    <header className="relative z-40 flex min-h-[40px] shrink-0 flex-wrap items-center gap-0.5 overflow-visible bg-[var(--app-bg)] px-2 py-1 text-[var(--app-text)]">
+    <header className="relative z-40 flex min-h-[40px] shrink-0 flex-wrap items-center gap-1 overflow-visible bg-[var(--app-bg)] px-2 py-1 text-[var(--app-text)]">
       <MawsProductMenu />
       <span className="relative z-[2] top-sep" />
 
@@ -963,7 +963,7 @@ export function TopBar() {
         type="button"
         data-symbol-search-trigger
         onClick={openSymbolSearch}
-        className="relative z-[2] flex h-[28px] w-[140px] shrink-0 items-center justify-between gap-1.5 rounded-full bg-[var(--app-elevated)] px-3 hover:bg-[var(--app-border)]"
+        className="relative z-[2] flex h-[28px] w-[140px] shrink-0 items-center justify-between gap-2 rounded-full bg-[var(--app-elevated)] px-3 hover:bg-[var(--app-border)]"
       >
         {/* Market-feed health leads the ticker: the dot describes the series named
             right beside it, and this block never carries trading controls. */}
@@ -1004,7 +1004,7 @@ export function TopBar() {
                 closeAllMenus();
                 setTimeframe(id);
               }}
-              className={`h-[26px] rounded-[4px] px-[7px] text-[13px] ${
+              className={`h-[26px] rounded-[4px] px-2 text-[13px] ${
                 on ? "bg-(--app-hover) text-(--app-text)" : "text-(--app-muted) hover:text-(--app-text)"
               }`}
             >
@@ -1161,11 +1161,11 @@ export function TopBar() {
       {/* Vela's native drawing bar (horizontal, top-docked) — one shared bar for the
           active pane, Vela-owned state; the MAWS extras (undo/redo/hide/Clear) ride
           in its row and are all drag-reorderable with the tools. */}
-      <div className="relative z-[2] mx-0.5 flex min-w-fit flex-1 items-center">
+      <div className="relative z-[2] mx-1 flex min-w-fit flex-1 items-center">
         <VelaDrawingBar />
       </div>
 
-      <div className="relative z-[2] flex shrink-0 items-center gap-0.5">
+      <div className="relative z-[2] flex shrink-0 items-center gap-1">
         {iconOrder.map((id) => (
           <div
             key={id}

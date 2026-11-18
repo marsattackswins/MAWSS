@@ -62,7 +62,7 @@ function Metric({
   const color =
     tone === "up" ? "text-[var(--app-up)]" : tone === "down" ? "text-[var(--app-down)]" : "text-(--app-text)";
   return (
-    <span className="flex flex-col justify-center gap-[3px] whitespace-nowrap border-l border-[var(--maws-border)] px-4 py-[5px] first:border-l-0">
+    <span className="flex flex-col justify-center gap-1 whitespace-nowrap border-l border-[var(--maws-border)] px-4 py-1 first:border-l-0">
       <span className="text-[11px] font-semibold uppercase leading-none tracking-[0.08em] text-(--app-muted)">{label}</span>
       <span className={`text-[13px] font-semibold leading-none ${color}`}>{value}</span>
     </span>
@@ -147,7 +147,7 @@ function StatusTone({ status }: { status: string }) {
 
 function SymbolChip({ symbol }: { symbol: string }) {
   return (
-    <span className="inline-flex items-center rounded-[4px] bg-(--app-hover) px-1.5 py-0.5 text-[11px] text-(--app-text)">
+    <span className="inline-flex items-center rounded-[4px] bg-(--app-hover) px-2 py-1 text-[11px] text-(--app-text)">
       {formatTicker(symbol)}
     </span>
   );
@@ -155,7 +155,7 @@ function SymbolChip({ symbol }: { symbol: string }) {
 
 function TableTools() {
   return (
-    <span className="flex justify-end gap-1.5 text-(--app-muted)">
+    <span className="flex justify-end gap-2 text-(--app-muted)">
       <Download size={13} />
       <Columns3 size={13} />
     </span>
@@ -486,7 +486,7 @@ export function PositionsPanel() {
           )}
         </div>
 
-        <div className="ml-auto flex shrink-0 items-center gap-0.5">
+        <div className="ml-auto flex shrink-0 items-center gap-1">
           <button
             type="button"
             className="flex h-6 w-6 items-center justify-center rounded-[4px] text-(--app-muted) hover:bg-(--app-hover) hover:text-(--app-text)"
@@ -523,18 +523,18 @@ export function PositionsPanel() {
             <table className="w-full min-w-[980px] text-left text-[12px]">
               <thead className="sticky top-0 bg-[var(--maws-panel)] text-(--app-muted)">
                 <tr>
-                  <th className="px-2 py-1.5 font-normal">Symbol</th>
-                  <th className="px-2 py-1.5 font-normal">Side</th>
-                  <th className="px-2 py-1.5 font-normal">Avg fill price</th>
-                  <th className="px-2 py-1.5 font-normal">Take profit</th>
-                  <th className="px-2 py-1.5 font-normal">Stop loss</th>
-                  <th className="px-2 py-1.5 font-normal">Margin</th>
-                  <th className="px-2 py-1.5 font-normal">Leverage</th>
-                  <th className="px-2 py-1.5 font-normal">Trade value</th>
-                  <th className="px-2 py-1.5 font-normal">Unrealized P&L %</th>
-                  <th className="px-2 py-1.5 font-normal">Unrealized P&L</th>
-                  <th className="px-2 py-1.5 font-normal">Expiration date</th>
-                  <th className="px-2 py-1.5 font-normal">
+                  <th className="px-2 py-2 font-normal">Symbol</th>
+                  <th className="px-2 py-2 font-normal">Side</th>
+                  <th className="px-2 py-2 font-normal">Avg fill price</th>
+                  <th className="px-2 py-2 font-normal">Take profit</th>
+                  <th className="px-2 py-2 font-normal">Stop loss</th>
+                  <th className="px-2 py-2 font-normal">Margin</th>
+                  <th className="px-2 py-2 font-normal">Leverage</th>
+                  <th className="px-2 py-2 font-normal">Trade value</th>
+                  <th className="px-2 py-2 font-normal">Unrealized P&L %</th>
+                  <th className="px-2 py-2 font-normal">Unrealized P&L</th>
+                  <th className="px-2 py-2 font-normal">Expiration date</th>
+                  <th className="px-2 py-2 font-normal">
                     <span className="flex justify-end gap-1 text-(--app-muted)">
                       <Download size={13} />
                       <Columns3 size={13} />
@@ -554,7 +554,7 @@ export function PositionsPanel() {
                   const pct = initialMargin === 0 ? 0 : (pnl / initialMargin) * 100;
                   return (
                     <tr key={p.id} className="border-t border-(--app-border) text-(--app-text)">
-                      <td className="px-2 py-1.5">
+                      <td className="px-2 py-2">
                         {formatTicker(p.symbol)}
                         {p.protectionStatus === "UNPROTECTED" && (
                           <span className="ml-1 text-[var(--app-down)]" title="The recorded TP/SL protection is missing or could not be confirmed">
@@ -562,24 +562,24 @@ export function PositionsPanel() {
                           </span>
                         )}
                       </td>
-                      <td className={`px-2 py-1.5 ${p.side === "long" ? "text-[var(--app-accent)]" : "text-[var(--app-down)]"}`}>
+                      <td className={`px-2 py-2 ${p.side === "long" ? "text-[var(--app-accent)]" : "text-[var(--app-down)]"}`}>
                         {p.side === "long" ? "Buy" : "Sell"}
                       </td>
-                      <td className="px-2 py-1.5">{formatPrice(p.symbol, p.entry)}</td>
-                      <td className="px-2 py-1.5">{p.tp == null ? "—" : formatPrice(p.symbol, p.tp)}</td>
-                      <td className="px-2 py-1.5">{p.sl == null ? "—" : formatPrice(p.symbol, p.sl)}</td>
-                      <td className="px-2 py-1.5">{formatNum(mgn)}</td>
-                      <td className="px-2 py-1.5">{p.leverage}x</td>
-                      <td className="px-2 py-1.5">{formatNum(notional)}</td>
-                      <td className={`px-2 py-1.5 ${pct >= 0 ? "text-[var(--app-up)]" : "text-[var(--app-down)]"}`}>
+                      <td className="px-2 py-2">{formatPrice(p.symbol, p.entry)}</td>
+                      <td className="px-2 py-2">{p.tp == null ? "—" : formatPrice(p.symbol, p.tp)}</td>
+                      <td className="px-2 py-2">{p.sl == null ? "—" : formatPrice(p.symbol, p.sl)}</td>
+                      <td className="px-2 py-2">{formatNum(mgn)}</td>
+                      <td className="px-2 py-2">{p.leverage}x</td>
+                      <td className="px-2 py-2">{formatNum(notional)}</td>
+                      <td className={`px-2 py-2 ${pct >= 0 ? "text-[var(--app-up)]" : "text-[var(--app-down)]"}`}>
                         {pct >= 0 ? "+" : ""}
                         {formatNum(pct)}%
                       </td>
-                      <td className={`px-2 py-1.5 ${pnl >= 0 ? "text-[var(--app-up)]" : "text-[var(--app-down)]"}`}>
+                      <td className={`px-2 py-2 ${pnl >= 0 ? "text-[var(--app-up)]" : "text-[var(--app-down)]"}`}>
                         <PnlCell pnl={pnl} markPriceStale={p.markPriceStale} markAgeMs={p.markAgeMs} />
                       </td>
-                      <td className="px-2 py-1.5 text-(--app-muted)">—</td>
-                      <td className="px-2 py-1.5 text-right">
+                      <td className="px-2 py-2 text-(--app-muted)">—</td>
+                      <td className="px-2 py-2 text-right">
                         {live && (p.tp != null || p.sl != null || p.protectionStatus != null) && (
                           <button
                             type="button"
@@ -622,25 +622,25 @@ export function PositionsPanel() {
             <table className="w-full text-left text-[12px]">
               <thead className="sticky top-0 bg-[var(--maws-panel)] text-(--app-muted)">
                 <tr>
-                  <th className="px-2 py-1.5 font-normal">Symbol</th>
-                  <th className="px-2 py-1.5 font-normal">Side</th>
-                  <th className="px-2 py-1.5 font-normal">Type</th>
-                  <th className="px-2 py-1.5 font-normal">Qty</th>
-                  <th className="px-2 py-1.5 font-normal">Price</th>
-                  <th className="px-2 py-1.5 font-normal" />
+                  <th className="px-2 py-2 font-normal">Symbol</th>
+                  <th className="px-2 py-2 font-normal">Side</th>
+                  <th className="px-2 py-2 font-normal">Type</th>
+                  <th className="px-2 py-2 font-normal">Qty</th>
+                  <th className="px-2 py-2 font-normal">Price</th>
+                  <th className="px-2 py-2 font-normal" />
                 </tr>
               </thead>
               <tbody>
                 {ordRows.map((o) => (
                   <tr key={o.id} className="border-t border-(--app-border) text-(--app-text)">
-                    <td className="px-2 py-1.5">{formatTicker(o.symbol)}</td>
-                    <td className={`px-2 py-1.5 ${o.side === "buy" ? "text-[var(--app-accent)]" : "text-[var(--app-down)]"}`}>
+                    <td className="px-2 py-2">{formatTicker(o.symbol)}</td>
+                    <td className={`px-2 py-2 ${o.side === "buy" ? "text-[var(--app-accent)]" : "text-[var(--app-down)]"}`}>
                       {o.side === "buy" ? "Buy" : "Sell"}
                     </td>
-                    <td className="px-2 py-1.5 capitalize">{o.type}</td>
-                    <td className="px-2 py-1.5">{o.qty}</td>
-                    <td className="px-2 py-1.5">{formatPrice(o.symbol, o.price)}</td>
-                    <td className="px-2 py-1.5 text-right">
+                    <td className="px-2 py-2 capitalize">{o.type}</td>
+                    <td className="px-2 py-2">{o.qty}</td>
+                    <td className="px-2 py-2">{formatPrice(o.symbol, o.price)}</td>
+                    <td className="px-2 py-2 text-right">
                       <button
                         type="button"
                         disabled={mutationBlocked}
@@ -665,7 +665,7 @@ export function PositionsPanel() {
             <Empty text="There is no order history yet" />
           ) : (
             <div className="flex h-full min-h-0 flex-col">
-              <div className="flex shrink-0 items-center gap-1.5 px-2 py-1.5">
+              <div className="flex shrink-0 items-center gap-2 px-2 py-2">
                 {(
                   [
                     { id: "all", label: "All", count: histRows.length },
@@ -680,7 +680,7 @@ export function PositionsPanel() {
                       key={f.id}
                       type="button"
                       onClick={() => setOrderFilter(f.id)}
-                      className={`h-[22px] rounded-[4px] px-2.5 text-[12px] ${
+                      className={`h-[22px] rounded-[4px] px-2 text-[12px] ${
                         on
                           ? "bg-(--app-hover) text-(--app-text)"
                           : "text-(--app-muted) hover:text-(--app-text)"
@@ -699,69 +699,69 @@ export function PositionsPanel() {
                 <table className="w-full min-w-[1280px] text-left text-[12px]">
                   <thead className="sticky top-0 bg-[var(--maws-panel)] text-(--app-muted)">
                     <tr>
-                      <th className="px-2 py-1.5 font-normal">Symbol</th>
-                      <th className="px-2 py-1.5 font-normal">Side</th>
-                      <th className="px-2 py-1.5 font-normal">Type</th>
-                      <th className="px-2 py-1.5 font-normal">Qty</th>
-                      <th className="px-2 py-1.5 font-normal">Limit price</th>
-                      <th className="px-2 py-1.5 font-normal">Stop price</th>
-                      <th className="px-2 py-1.5 font-normal">Fill price</th>
-                      <th className="px-2 py-1.5 font-normal">Status</th>
-                      <th className="px-2 py-1.5 font-normal">Placing time</th>
-                      <th className="px-2 py-1.5 font-normal">Closing time</th>
-                      <th className="px-2 py-1.5 font-normal">Order ID</th>
-                      <th className="px-2 py-1.5 font-normal">Level ID</th>
-                      <th className="px-2 py-1.5 font-normal">Leverage</th>
-                      <th className="px-2 py-1.5 font-normal">Margin</th>
+                      <th className="px-2 py-2 font-normal">Symbol</th>
+                      <th className="px-2 py-2 font-normal">Side</th>
+                      <th className="px-2 py-2 font-normal">Type</th>
+                      <th className="px-2 py-2 font-normal">Qty</th>
+                      <th className="px-2 py-2 font-normal">Limit price</th>
+                      <th className="px-2 py-2 font-normal">Stop price</th>
+                      <th className="px-2 py-2 font-normal">Fill price</th>
+                      <th className="px-2 py-2 font-normal">Status</th>
+                      <th className="px-2 py-2 font-normal">Placing time</th>
+                      <th className="px-2 py-2 font-normal">Closing time</th>
+                      <th className="px-2 py-2 font-normal">Order ID</th>
+                      <th className="px-2 py-2 font-normal">Level ID</th>
+                      <th className="px-2 py-2 font-normal">Leverage</th>
+                      <th className="px-2 py-2 font-normal">Margin</th>
                     </tr>
                   </thead>
                   <tbody>
                     {filteredOrders.map((o) => (
                       <tr key={o.id} className="border-t border-(--app-border) text-(--app-text)">
-                        <td className="px-2 py-1.5">
+                        <td className="px-2 py-2">
                           <SymbolChip symbol={o.symbol} />
                         </td>
                         <td
-                          className={`px-2 py-1.5 ${
+                          className={`px-2 py-2 ${
                             o.side === "buy" ? "text-[var(--app-accent)]" : "text-[var(--app-down)]"
                           }`}
                         >
                           {o.side === "buy" ? "Buy" : "Sell"}
                         </td>
-                        <td className="px-2 py-1.5 capitalize">{o.type}</td>
-                        <td className="px-2 py-1.5">{o.qty}</td>
-                        <td className="px-2 py-1.5 text-(--app-muted)">
+                        <td className="px-2 py-2 capitalize">{o.type}</td>
+                        <td className="px-2 py-2">{o.qty}</td>
+                        <td className="px-2 py-2 text-(--app-muted)">
                           {o.limitPrice != null
                             ? formatPrice(o.symbol, o.limitPrice)
                             : ""}
                         </td>
-                        <td className="px-2 py-1.5 text-(--app-muted)">
+                        <td className="px-2 py-2 text-(--app-muted)">
                           {o.stopPrice != null
                             ? formatPrice(o.symbol, o.stopPrice)
                             : ""}
                         </td>
-                        <td className="px-2 py-1.5">
+                        <td className="px-2 py-2">
                           {o.fillPrice != null || o.status === "filled"
                             ? formatPrice(o.symbol, o.fillPrice ?? o.price)
                             : ""}
                         </td>
-                        <td className="px-2 py-1.5">
+                        <td className="px-2 py-2">
                           <StatusTone status={o.status} />
                         </td>
-                        <td className="px-2 py-1.5 whitespace-nowrap text-(--app-text)">
+                        <td className="px-2 py-2 whitespace-nowrap text-(--app-text)">
                           {formatStamp(o.time, stampTz)}
                         </td>
-                        <td className="px-2 py-1.5 whitespace-nowrap text-(--app-text)">
+                        <td className="px-2 py-2 whitespace-nowrap text-(--app-text)">
                           {formatStamp(o.closingTime ?? o.time, stampTz)}
                         </td>
-                        <td className="px-2 py-1.5 font-mono text-[11px] text-(--app-muted)">
+                        <td className="px-2 py-2 font-mono text-[11px] text-(--app-muted)">
                           {o.id}
                         </td>
-                        <td className="px-2 py-1.5 text-(--app-muted)" />
-                        <td className="px-2 py-1.5">
+                        <td className="px-2 py-2 text-(--app-muted)" />
+                        <td className="px-2 py-2">
                           {o.leverage != null ? `${o.leverage}x` : "—"}
                         </td>
-                        <td className="px-2 py-1.5 whitespace-nowrap">
+                        <td className="px-2 py-2 whitespace-nowrap">
                           {o.margin != null
                             ? `${formatNum(o.margin)} usd`
                             : "—"}
@@ -787,11 +787,11 @@ export function PositionsPanel() {
                 <table className="w-full min-w-[960px] text-left text-[12px]">
                   <thead className="sticky top-0 bg-[var(--maws-panel)] text-(--app-muted)">
                     <tr>
-                      <th className="px-2 py-1.5 font-normal">Time</th>
-                      <th className="px-2 py-1.5 font-normal">Balance before</th>
-                      <th className="px-2 py-1.5 font-normal">Realized PnL</th>
-                      <th className="px-2 py-1.5 font-normal">Balance after</th>
-                      <th className="px-2 py-1.5 font-normal">Action</th>
+                      <th className="px-2 py-2 font-normal">Time</th>
+                      <th className="px-2 py-2 font-normal">Balance before</th>
+                      <th className="px-2 py-2 font-normal">Realized PnL</th>
+                      <th className="px-2 py-2 font-normal">Balance after</th>
+                      <th className="px-2 py-2 font-normal">Action</th>
                     </tr>
                   </thead>
                   <tbody>
@@ -806,19 +806,19 @@ export function PositionsPanel() {
                             : "text-(--app-text)";
                       return (
                         <tr key={b.id} className="border-t border-(--app-border) text-(--app-text)">
-                          <td className="px-2 py-1.5 whitespace-nowrap">
+                          <td className="px-2 py-2 whitespace-nowrap">
                             {formatStamp(b.time, stampTz)}
                           </td>
-                          <td className="px-2 py-1.5">{formatNum(before)}</td>
-                          <td className={`px-2 py-1.5 whitespace-nowrap ${isPnl ? pnlColor : "text-(--app-muted)"}`}>
+                          <td className="px-2 py-2">{formatNum(before)}</td>
+                          <td className={`px-2 py-2 whitespace-nowrap ${isPnl ? pnlColor : "text-(--app-muted)"}`}>
                             {isPnl
                               ? `${b.amount < 0 ? "-" : ""}${formatNum(Math.abs(b.amount))} USD`
                               : b.type === "deposit" || b.type === "withdrawal"
                                 ? `${b.amount < 0 ? "-" : ""}${formatNum(Math.abs(b.amount))} USD`
                                 : "—"}
                           </td>
-                          <td className="px-2 py-1.5">{formatNum(b.balanceAfter)}</td>
-                          <td className="max-w-[520px] px-2 py-1.5 text-[11px] leading-snug text-(--app-text)">
+                          <td className="px-2 py-2">{formatNum(b.balanceAfter)}</td>
+                          <td className="max-w-[520px] px-2 py-2 text-[11px] leading-snug text-(--app-text)">
                             {b.note}
                           </td>
                         </tr>
@@ -845,17 +845,17 @@ export function PositionsPanel() {
                 <table className="w-full min-w-[640px] text-left text-[12px]">
                   <thead className="sticky top-0 bg-[var(--maws-panel)] text-(--app-muted)">
                     <tr>
-                      <th className="w-[180px] px-2 py-1.5 font-normal">Time</th>
-                      <th className="px-2 py-1.5 font-normal">Text</th>
+                      <th className="w-[180px] px-2 py-2 font-normal">Time</th>
+                      <th className="px-2 py-2 font-normal">Text</th>
                     </tr>
                   </thead>
                   <tbody>
                     {journalRows.map((j) => (
                       <tr key={j.id} className="border-t border-(--app-border) text-(--app-text)">
-                        <td className="px-2 py-1.5 whitespace-nowrap align-top">
+                        <td className="px-2 py-2 whitespace-nowrap align-top">
                           {formatStamp(j.time, stampTz)}
                         </td>
-                        <td className="px-2 py-1.5 leading-snug">{j.text}</td>
+                        <td className="px-2 py-2 leading-snug">{j.text}</td>
                       </tr>
                     ))}
                   </tbody>

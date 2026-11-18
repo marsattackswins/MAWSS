@@ -182,7 +182,7 @@ function TitleBar() {
                       activateWatchlist(watchlist.id);
                       setSwitcherOpen(false);
                     }}
-                    className="block w-full truncate px-3 py-1.5 text-left text-[12px] hover:bg-(--app-hover)"
+                    className="block w-full truncate px-3 py-2 text-left text-[12px] hover:bg-(--app-hover)"
                     style={{ color: "var(--app-text)" }}
                   >
                     {watchlist.name}
@@ -222,7 +222,7 @@ function TitleBar() {
                 type="button"
                 role="menuitem"
                 onClick={rename}
-                className="block w-full px-3 py-1.5 text-left text-[12px] hover:bg-(--app-hover)"
+                className="block w-full px-3 py-2 text-left text-[12px] hover:bg-(--app-hover)"
                 style={{ color: "var(--app-text)" }}
               >
                 Rename
@@ -231,7 +231,7 @@ function TitleBar() {
                 type="button"
                 role="menuitem"
                 onClick={addNewWatchlist}
-                className="block w-full px-3 py-1.5 text-left text-[12px] hover:bg-(--app-hover)"
+                className="block w-full px-3 py-2 text-left text-[12px] hover:bg-(--app-hover)"
                 style={{ color: "var(--app-text)" }}
               >
                 Add new
@@ -240,7 +240,7 @@ function TitleBar() {
                 type="button"
                 role="menuitem"
                 onClick={deleteWatchlist}
-                className="block w-full px-3 py-1.5 text-left text-[12px] hover:bg-(--app-hover)"
+                className="block w-full px-3 py-2 text-left text-[12px] hover:bg-(--app-hover)"
                 style={{ color: "var(--app-down)" }}
               >
                 Delete
@@ -363,7 +363,7 @@ const WatchlistRow = memo(function WatchlistRow({
         className={`flex h-[36px] w-full items-center gap-0 select-none px-3 ${dragging ? "cursor-grabbing" : "cursor-default"}`}
       >
         {/* logo */}
-        <AssetLogo symbol={symbol} size={20} className="mr-2.5 shrink-0" />
+        <AssetLogo symbol={symbol} size={20} className="mr-2 shrink-0" />
 
         {/* ticker — single line */}
         <span
@@ -374,7 +374,7 @@ const WatchlistRow = memo(function WatchlistRow({
         </span>
 
         {/* last price */}
-        <div className="shrink-0 text-right pr-1.5" style={{ width: lastWidth }}>
+        <div className="shrink-0 text-right pr-2" style={{ width: lastWidth }}>
           {last == null ? (
             <span className="text-[12px] tabular-nums" style={{ color: "var(--app-muted)" }}>—</span>
           ) : (
@@ -434,7 +434,7 @@ function PendingRow({
       {/* placeholder for logo alignment (was the signal dot) */}
       <span className="mr-2 w-5 shrink-0" />
 
-      <AssetLogo symbol={symbol} size={20} className="mr-2.5 shrink-0" />
+      <AssetLogo symbol={symbol} size={20} className="mr-2 shrink-0" />
 
       {/* ticker — single line */}
       <span
@@ -444,7 +444,7 @@ function PendingRow({
         {formatTicker(symbol)}
       </span>
 
-      <div className="shrink-0 text-right pr-1.5" style={{ width: lastWidth }}>
+      <div className="shrink-0 text-right pr-2" style={{ width: lastWidth }}>
         {quote ? (
           <DigitFlashPrice symbol={symbol} value={quote.last} />
         ) : (

@@ -201,7 +201,7 @@ export function ReplaySeekOverlay({ pane, hostRef }: Props) {
 
       {/* Bottom tooltip — always visible while in seek mode */}
       <div
-        className="absolute bottom-0 left-1/2 z-10 -translate-x-1/2 rounded-t-[4px] px-3 py-1.5 text-[12px]"
+        className="absolute bottom-0 left-1/2 z-10 -translate-x-1/2 rounded-t-[4px] px-3 py-2 text-[12px]"
         style={{
           background: "rgba(19,23,34,0.92)",
           border: "1px solid rgba(255,255,255,0.12)",

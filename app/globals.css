@@ -27,6 +27,13 @@
   /* Shared elevation — one menu shadow, one dialog shadow. */
   --app-shadow-menu: 0 8px 28px rgba(0, 0, 0, 0.55);
   --app-shadow-dialog: 0 16px 60px rgba(0, 0, 0, 0.65);
+  /* Spacing: one 4px grid, four named steps. Every gap, inset and row in the
+   * shell comes from these — the 6px/7px/10px/14px one-offs are what made two
+   * panels look like they were built by different people. */
+  --app-gap-tight: 4px;
+  --app-gap: 8px;
+  --app-gap-roomy: 12px;
+  --app-inset: 20px;
   --maws-bg: var(--app-bg);
   --maws-panel: var(--app-panel);
   --maws-elevated: var(--app-elevated);
@@ -184,7 +191,7 @@ input[type="number"]::-webkit-inner-spin-button {
   background: var(--app-menu);
   padding: 4px 0;
   border-radius: 8px;
-  box-shadow: 0 8px 28px rgba(0, 0, 0, 0.65);
+  box-shadow: var(--app-shadow-menu);
   color: var(--app-text);
 }
 
@@ -215,8 +222,8 @@ input[type="number"]::-webkit-inner-spin-button {
 
 /* Section header inside a dropdown menu (e.g. the add-indicator catalog). */
 .menu-section-title {
-  padding: 6px 12px 2px;
-  font-size: 10px;
+  padding: var(--app-gap) var(--app-gap-roomy) var(--app-gap-tight);
+  font-size: 11px;
   font-weight: 600;
   letter-spacing: 0.06em;
   text-transform: uppercase;
@@ -273,18 +280,18 @@ input[type="number"]::-webkit-inner-spin-button {
   position: fixed;
   z-index: 80;
   width: 300px;
-  padding: 6px 0;
+  padding: var(--app-gap-tight) 0;
   border: 1px solid var(--app-border);
   border-radius: 8px;
   background: var(--app-menu);
-  box-shadow: 0 8px 28px rgba(0, 0, 0, 0.65);
+  box-shadow: var(--app-shadow-menu);
 }
 
 .ctx-item {
   display: flex;
   width: 100%;
   align-items: center;
-  gap: 10px;
+  gap: var(--app-gap);
   padding: 8px 12px;
   color: var(--app-text);
   text-align: left;
@@ -311,7 +318,7 @@ input[type="number"]::-webkit-inner-spin-button {
   flex-direction: row;
   align-items: center;
   justify-content: space-between;
-  gap: 16px;
+  gap: var(--app-gap-roomy);
 }
 
 .ctx-label {
@@ -354,7 +361,7 @@ input[type="number"]::-webkit-inner-spin-button {
   border-radius: 8px;
   background: var(--app-menu);
   padding: 4px 0;
-  box-shadow: 0 8px 28px rgba(0, 0, 0, 0.65);
+  box-shadow: var(--app-shadow-menu);
 }
 
 .ctx-sep {
@@ -385,11 +392,11 @@ input[type="number"]::-webkit-inner-spin-button {
 
 .scale-menu-dropdown {
   width: 256px;
-  padding: 6px 0;
+  padding: var(--app-gap-tight) 0;
   border: 1px solid var(--app-border);
   border-radius: 8px;
   background: var(--app-menu);
-  box-shadow: 0 8px 28px rgba(0, 0, 0, 0.65);
+  box-shadow: var(--app-shadow-menu);
   overflow: hidden;
 }
 
@@ -404,8 +411,8 @@ input[type="number"]::-webkit-inner-spin-button {
 .scale-menu-tz-header {
   display: flex;
   align-items: center;
-  gap: 6px;
-  padding: 6px 10px 6px 8px;
+  gap: var(--app-gap);
+  padding: var(--app-gap-tight) var(--app-gap);
   border-bottom: 1px solid var(--app-border);
 }
 
@@ -420,7 +427,7 @@ input[type="number"]::-webkit-inner-spin-button {
   color: var(--app-muted);
   cursor: pointer;
   flex-shrink: 0;
-  border-radius: 3px;
+  border-radius: 4px;
 }
 .scale-menu-tz-back:hover {
   background: var(--app-hover);
@@ -434,14 +441,14 @@ input[type="number"]::-webkit-inner-spin-button {
 }
 
 .scale-menu-tz-search {
-  padding: 6px 8px;
+  padding: var(--app-gap);
   border-bottom: 1px solid var(--app-border);
 }
 
 .scale-menu-tz-search-label {
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: var(--app-gap);
   height: 28px;
   padding: 0 8px;
   border: 1px solid var(--app-border);
@@ -486,7 +493,7 @@ input[type="number"]::-webkit-inner-spin-button {
   top: 0;
   z-index: 1;
   padding: 4px 12px;
-  font-size: 10px;
+  font-size: 11px;
   font-weight: 600;
   letter-spacing: 0.08em;
   color: var(--app-muted);
@@ -498,7 +505,7 @@ input[type="number"]::-webkit-inner-spin-button {
   align-items: center;
   gap: 8px;
   width: 100%;
-  padding: 5px 10px;
+  padding: var(--app-gap) var(--app-gap-roomy);
   font-size: 12px;
   color: var(--app-text);
   text-align: left;
@@ -549,7 +556,7 @@ input[type="number"]::-webkit-inner-spin-button {
   align-items: center;
   justify-content: space-between;
   gap: 8px;
-  padding: 5px 12px;
+  padding: var(--app-gap) var(--app-gap-roomy);
 }
 
 .scale-menu-sub-label {
@@ -564,9 +571,9 @@ input[type="number"]::-webkit-inner-spin-button {
 }
 
 .scale-menu-sub-opt {
-  padding: 2px 6px;
+  padding: var(--app-gap-tight) var(--app-gap);
   font-size: 11px;
-  border-radius: 3px;
+  border-radius: 4px;
   border: 1px solid var(--app-border);
   background: transparent;
   color: var(--app-muted);
@@ -585,9 +592,9 @@ input[type="number"]::-webkit-inner-spin-button {
 .scale-menu-check-row {
   display: flex;
   align-items: center;
-  gap: 10px;
+  gap: var(--app-gap);
   width: 100%;
-  padding: 7px 12px;
+  padding: var(--app-gap) var(--app-gap-roomy);
   font-size: 13px;
   color: var(--app-text);
   text-align: left;
@@ -663,18 +670,18 @@ input[type="number"]::-webkit-inner-spin-button {
 .plus-menu {
   z-index: 90;
   width: 340px;
-  padding: 6px 0;
+  padding: var(--app-gap-tight) 0;
   border: 1px solid var(--app-border);
   border-radius: 8px;
   background: var(--app-menu);
-  box-shadow: 0 8px 28px rgba(0, 0, 0, 0.65);
+  box-shadow: var(--app-shadow-menu);
 }
 
 .plus-row {
   display: flex;
   width: 100%;
   align-items: center;
-  gap: 10px;
+  gap: var(--app-gap);
   padding: 8px 12px;
   color: var(--app-text);
   text-align: left;
@@ -789,13 +796,13 @@ input[type="number"]::-webkit-inner-spin-button {
 
 /* ── Topbar trade strip: Sell / qty / Buy each in their own rounded block ── */
 .trade-block {
-  border-radius: 10px;
+  border-radius: 4px;
   transition: border-color 0.15s, background 0.15s;
 }
 /* Margin block: mirrors the Trade button's hover highlight; no border/outline. */
 .trade-hover {
   background: rgba(255, 255, 255, 0.02);
-  border-radius: 10px;
+  border-radius: 4px;
   transition: background 0.15s;
 }
 .trade-block:hover {

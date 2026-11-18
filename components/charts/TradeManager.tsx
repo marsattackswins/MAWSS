@@ -301,7 +301,7 @@ function PositionPill({
             style={{ top: drag.y, borderColor: exitColor(drag.leg) }}
           />
           <span
-            className="pointer-events-none absolute rounded-[4px] px-1 py-0.5 text-[11px] font-semibold tabular-nums text-black"
+            className="pointer-events-none absolute rounded-[4px] px-1 py-1 text-[11px] font-semibold tabular-nums text-black"
             style={{
               top: drag.y,
               background: exitHex(drag.leg),
@@ -329,7 +329,7 @@ function PositionPill({
           }`}
         >
           <span
-            className={`flex items-center gap-1 px-1.5 py-1 font-semibold ${
+            className={`flex items-center gap-1 px-2 py-1 font-semibold ${
               long ? "bg-(--app-up)/15 text-[var(--app-up)]" : "bg-(--app-down)/15 text-[var(--app-down)]"
             }`}
             title={`${long ? "Long" : "Short"} ${position.qty} ${position.symbol} @ ${formatPrice(
@@ -340,7 +340,7 @@ function PositionPill({
             {long ? "LONG" : "SHORT"} {position.qty}
           </span>
           <span
-            className={`flex items-center px-1.5 py-1 tabular-nums ${
+            className={`flex items-center px-2 py-1 tabular-nums ${
               pnl != null && pnl >= 0 ? "text-[var(--app-up)]" : "text-[var(--app-down)]"
             }`}
             title="Open P&L"
@@ -350,13 +350,13 @@ function PositionPill({
 
           <span
             {...handleProps("tp")}
-            className="flex cursor-ns-resize items-center border-l border-(--app-border) px-1.5 py-1 tabular-nums text-(--app-muted) hover:bg-(--app-hover) hover:text-(--app-text)"
+            className="flex cursor-ns-resize items-center border-l border-(--app-border) px-2 py-1 tabular-nums text-(--app-muted) hover:bg-(--app-hover) hover:text-(--app-text)"
           >
             {position.tp != null ? `TP ${formatPrice(position.symbol, position.tp)}` : "+TP"}
           </span>
           <span
             {...handleProps("sl")}
-            className="flex cursor-ns-resize items-center border-l border-(--app-border) px-1.5 py-1 tabular-nums text-(--app-muted) hover:bg-(--app-hover) hover:text-(--app-text)"
+            className="flex cursor-ns-resize items-center border-l border-(--app-border) px-2 py-1 tabular-nums text-(--app-muted) hover:bg-(--app-hover) hover:text-(--app-text)"
           >
             {position.sl != null ? `SL ${formatPrice(position.symbol, position.sl)}` : "+SL"}
           </span>
@@ -366,7 +366,7 @@ function PositionPill({
             title="Reverse is disabled. Close the position, then open the opposite side."
             aria-label="Reverse is disabled. Close the position, then open the opposite side."
             disabled
-            className="flex items-center border-l border-(--app-border) px-1.5 py-1 text-(--app-muted) hover:bg-(--app-hover) hover:text-(--app-text) disabled:opacity-40"
+            className="flex items-center border-l border-(--app-border) px-2 py-1 text-(--app-muted) hover:bg-(--app-hover) hover:text-(--app-text) disabled:opacity-40"
           >
             <ArrowLeftRight size={11} />
           </button>
@@ -375,7 +375,7 @@ function PositionPill({
             title="Close position"
             aria-label="Close position"
             disabled={busy}
-            className="flex items-center border-l border-(--app-border) px-1.5 py-1 text-(--app-muted) hover:bg-(--app-hover) hover:text-(--app-text) disabled:opacity-40"
+            className="flex items-center border-l border-(--app-border) px-2 py-1 text-(--app-muted) hover:bg-(--app-hover) hover:text-(--app-text) disabled:opacity-40"
             onClick={() => {
               setSideMenu(false);
               setMenu((v) => !v);

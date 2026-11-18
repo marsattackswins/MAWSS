@@ -71,13 +71,13 @@ export function ProfileAuthDialog({
         style={{ ["--auth-accent" as string]: "var(--app-accent)" }}
       >
         {/* Meta strip: which product this dialog belongs to and which environment. */}
-        <div className="flex items-center justify-between gap-3 border-b border-(--app-border) px-5 py-2.5">
-          <span className="flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-[0.14em]">
+        <div className="flex items-center justify-between gap-3 border-b border-(--app-border) px-5 py-2">
+          <span className="flex items-center gap-2 text-[11px] font-semibold uppercase tracking-[0.14em]">
             <span className="text-(--app-muted)">MAWS</span>
             <span className="text-(--app-faint)">/</span>
             <span className="font-medium tracking-[0.10em] text-(--app-muted)">Profile access</span>
           </span>
-          <span className="flex items-center gap-1.5 rounded-full border border-(--app-border) px-2 py-0.5">
+          <span className="flex items-center gap-2 rounded-full border border-(--app-border) px-2 py-1">
             <span
               className="size-1.5 rounded-full"
               style={{ background: live ? "var(--app-down)" : "var(--app-up)" }}
@@ -100,7 +100,7 @@ export function ProfileAuthDialog({
           >
             <BinanceMark />
           </span>
-          <div className="min-w-0 pt-0.5">
+          <div className="min-w-0 pt-1">
             <h2 id="profile-auth-title" className="text-[16px] font-semibold leading-6 text-(--app-text)">
               Connect to {label}
             </h2>
@@ -121,11 +121,11 @@ export function ProfileAuthDialog({
           <span>{live ? "Real funds" : "Simulated funds"}</span>
         </div>
 
-        <div className="mt-3.5 border-t border-(--app-border) px-5 pt-3.5">
-          <div className="mb-1.5 flex items-baseline justify-between gap-2">
+        <div className="mt-3 border-t border-(--app-border) px-5 pt-3">
+          <div className="mb-2 flex items-baseline justify-between gap-2">
             <label
               htmlFor="profile-operator-password"
-              className="flex items-center gap-1.5 text-[12px] font-medium text-(--app-text)"
+              className="flex items-center gap-2 text-[12px] font-medium text-(--app-text)"
             >
               <LockKeyhole size={12} aria-hidden="true" />
               Operator password
@@ -173,7 +173,7 @@ export function ProfileAuthDialog({
           {error ? (
             <div
               role="alert"
-              className="mt-2 flex items-start gap-2 rounded-[4px] border px-2.5 py-2 text-[12px] leading-4"
+              className="mt-2 flex items-start gap-2 rounded-[4px] border px-2 py-2 text-[12px] leading-4"
               style={{
                 borderColor: "color-mix(in srgb, var(--app-down) 40%, transparent)",
                 background: "color-mix(in srgb, var(--app-down) 10%, transparent)",
@@ -186,7 +186,7 @@ export function ProfileAuthDialog({
           ) : null}
         </div>
 
-        <div className="mt-3.5 flex items-center justify-end gap-2 border-t border-(--app-border) px-5 py-3">
+        <div className="mt-3 flex items-center justify-end gap-2 border-t border-(--app-border) px-5 py-3">
           <button
             type="button"
             onClick={onCancel}
@@ -197,7 +197,7 @@ export function ProfileAuthDialog({
           <button
             type="submit"
             disabled={busy || password.length === 0}
-            className="accent-button group flex h-9 items-center gap-1.5 rounded-[4px] px-4 text-[13px] font-semibold transition-[filter] hover:brightness-110"
+            className="accent-button group flex h-9 items-center gap-2 rounded-[4px] px-4 text-[13px] font-semibold transition-[filter] hover:brightness-110"
           >
             {busy ? <LoaderCircle size={13} className="animate-spin" /> : null}
             {busy ? "Connecting…" : "Connect"}

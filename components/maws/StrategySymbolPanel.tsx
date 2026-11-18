@@ -135,7 +135,7 @@ function PriceFigure({
           {getSymbol(symbol).quote}
         </span>
       </div>
-      <div className="mt-1.5 text-[13px]" style={{ color: up ? "var(--app-up)" : "var(--app-down)" }}>
+      <div className="mt-2 text-[13px]" style={{ color: up ? "var(--app-up)" : "var(--app-down)" }}>
         {quote
           ? `${up ? "+" : ""}${formatPrice(symbol, quote.change)}  ${up ? "+" : ""}${quote.changePct.toFixed(2)}%`
           : "—"}
@@ -283,7 +283,7 @@ function MarketStateLine() {
   const open = openSessions(at);
   const next = state.next;
   return (
-    <span className="flex min-w-0 shrink items-center gap-2.5">
+    <span className="flex min-w-0 shrink items-center gap-2">
       {open.length > 0
         ? open.map((s) => (
             <SessionPip key={s.name} color={s.color} label={s.name} />
@@ -306,7 +306,7 @@ function SessionPip({
   muted?: boolean;
 }) {
   return (
-    <span className="flex min-w-0 shrink items-center gap-1.5">
+    <span className="flex min-w-0 shrink items-center gap-2">
       <span className="h-1.5 w-1.5 shrink-0 rounded-full" style={{ backgroundColor: color }} />
       <span
         className={`truncate text-[12px] leading-none ${muted ? "text-(--app-muted)" : "text-(--app-text)"}`}
@@ -402,10 +402,10 @@ function NewsBlock({
             onToggle();
           }
         }}
-        className="w-full cursor-pointer rounded-[8px] border border-(--app-border) bg-(--app-elevated) px-3 py-2.5 text-left"
+        className="w-full cursor-pointer rounded-[8px] border border-(--app-border) bg-(--app-elevated) px-3 py-2 text-left"
       >
         <div className="flex items-center justify-between gap-2">
-          <span className="flex min-w-0 items-center gap-1.5 text-[13px] font-semibold text-(--app-text)">
+          <span className="flex min-w-0 items-center gap-2 text-[13px] font-semibold text-(--app-text)">
             <span className="min-w-0 truncate">News</span>
             {headline?.url ? (
               <a
@@ -414,7 +414,7 @@ function NewsBlock({
                 rel="noopener noreferrer"
                 title="Open the news source in the browser"
                 onClick={(e) => e.stopPropagation()}
-                className="shrink-0 rounded p-0.5 text-(--app-muted) transition-colors hover:bg-(--app-hover) hover:text-(--app-text)"
+                className="shrink-0 rounded p-1 text-(--app-muted) transition-colors hover:bg-(--app-hover) hover:text-(--app-text)"
               >
                 <ExternalLink size={13} />
               </a>

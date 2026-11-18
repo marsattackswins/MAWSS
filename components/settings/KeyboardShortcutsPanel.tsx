@@ -96,17 +96,17 @@ export function KeyboardShortcutsPanel({ active }: { active: boolean }) {
               return (
                 <div
                   key={def.id}
-                  className="flex items-center justify-between gap-3 rounded-[4px] px-1 py-1.5 hover:bg-[#222]"
+                  className="flex items-center justify-between gap-3 rounded-[4px] px-1 py-2 hover:bg-[#222]"
                 >
                   <span className={settingsUi.text}>{def.label}</span>
-                  <div className="flex shrink-0 items-center gap-1.5">
+                  <div className="flex shrink-0 items-center gap-2">
                     <button
                       type="button"
                       onClick={() => {
                         setConflict(null);
                         setRecording(isRec ? null : def.id);
                       }}
-                      className={`min-w-[108px] rounded-[4px] border px-2.5 py-1.5 text-[12px] font-medium tabular-nums ${
+                      className={`min-w-[108px] rounded-[4px] border px-2 py-2 text-[12px] font-medium tabular-nums ${
                         isRec
                           ? "border-white bg-(--app-hover) text-white"
                           : "border-[var(--app-border)] bg-(--app-hover) text-(--app-text) hover:border-[var(--app-muted)]"
@@ -117,7 +117,7 @@ export function KeyboardShortcutsPanel({ active }: { active: boolean }) {
                     <button
                       type="button"
                       title="Clear"
-                      className="rounded-[4px] px-1.5 py-1 text-[11px] text-(--app-muted) hover:bg-(--app-hover) hover:text-(--app-text)"
+                      className="rounded-[4px] px-2 py-1 text-[11px] text-(--app-muted) hover:bg-(--app-hover) hover:text-(--app-text)"
                       onClick={() => {
                         setRecording(null);
                         assign(def.id, null);
@@ -128,7 +128,7 @@ export function KeyboardShortcutsPanel({ active }: { active: boolean }) {
                     <button
                       type="button"
                       title="Reset"
-                      className="rounded-[4px] px-1.5 py-1 text-[11px] text-(--app-muted) hover:bg-(--app-hover) hover:text-(--app-text)"
+                      className="rounded-[4px] px-2 py-1 text-[11px] text-(--app-muted) hover:bg-(--app-hover) hover:text-(--app-text)"
                       onClick={() => {
                         setRecording(null);
                         assign(def.id, DEFAULT_SHORTCUTS[def.id]);

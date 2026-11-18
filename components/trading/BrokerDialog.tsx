@@ -268,7 +268,7 @@ export function BrokerDialog() {
         ) : null}
         {livePhase === "degraded" || livePhase === "failed" || livePhase === "detached" ? (
           <div className="mx-5 mb-3 flex items-start gap-2 rounded-[4px] border border-(--app-down)/40 bg-(--app-down)/10 px-3 py-2 text-[12px] text-[var(--app-down)]" role="alert">
-            <CircleAlert size={14} className="mt-0.5 shrink-0" />
+            <CircleAlert size={14} className="mt-1 shrink-0" />
             <span>{profileErrorMessage(liveReason)}{liveManagerError ? ` ${liveManagerError}.` : ""} {profilePhaseLabel(livePhase)}. Normal trading remains disabled until a ready profile is confirmed.</span>
           </div>
         ) : null}
@@ -277,7 +277,7 @@ export function BrokerDialog() {
             <span>Log in to connect Testnet or Live</span>
             <a
               href="/login?next=/"
-              className="rounded-[4px] bg-[var(--app-accent)] px-3 py-1.5 text-[12px] font-semibold text-white"
+              className="rounded-[4px] bg-[var(--app-accent)] px-3 py-2 text-[12px] font-semibold text-white"
             >
               Log in
             </a>
@@ -350,7 +350,7 @@ export function BrokerDialog() {
             <p className="text-[13px] leading-5 text-(--app-text)">Existing orders and positions will not be cancelled or closed.</p>
             <p className="text-[13px] leading-5 text-(--app-text)">Switching may be blocked if exposure exists.</p>
             <label className="mt-4 flex cursor-pointer items-start gap-2 text-[12px] text-(--app-text)">
-              <input type="checkbox" checked={productionChecked} onChange={(event) => setProductionChecked(event.target.checked)} className="mt-0.5 accent-[var(--app-warn)]" />
+              <input type="checkbox" checked={productionChecked} onChange={(event) => setProductionChecked(event.target.checked)} className="mt-1 accent-[var(--app-warn)]" />
               <span>I understand and want to continue.</span>
             </label>
             <div className="mt-5 flex justify-end gap-2">

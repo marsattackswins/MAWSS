@@ -372,7 +372,7 @@ export function MarketSessions({
             onToggle();
           }
         }}
-        className="cursor-pointer rounded-[8px] border border-(--app-border) bg-(--app-elevated) px-3 py-2.5"
+        className="cursor-pointer rounded-[8px] border border-(--app-border) bg-(--app-elevated) px-3 py-2"
       >
         {/* Fixed header — stays put while the strip below it slides, so folding reads
             as a drawer opening under a label, exactly like the News card. */}
@@ -398,13 +398,13 @@ export function MarketSessions({
         <div
           className={
             expanded
-              ? "mt-3 space-y-1.5 border-t border-(--app-border) pt-2.5 text-[11px]"
-              : "mt-4 space-y-1.5 text-[11px]"
+              ? "mt-3 space-y-2 border-t border-(--app-border) pt-2 text-[11px]"
+              : "mt-4 space-y-2 text-[11px]"
           }
         >
           {currentNames ? (
             <div className="flex items-center justify-between gap-2">
-              <span className="flex min-w-0 items-center gap-1.5 text-(--app-text)">
+              <span className="flex min-w-0 items-center gap-2 text-(--app-text)">
               {/* Each pip borrows its venue's own timeline colour, so the rows read as
                   "these sessions" rather than generic open/closed status dots. With an
                   overlap the first (earliest-opening) venue claims the current pip. */}
@@ -420,7 +420,7 @@ export function MarketSessions({
             </div>
           ) : null}
           <div className="flex items-center justify-between gap-2">
-            <span className="flex min-w-0 items-center gap-1.5 text-(--app-text)">
+            <span className="flex min-w-0 items-center gap-2 text-(--app-text)">
               <span
                 className="h-1.5 w-1.5 shrink-0 rounded-full"
                 style={{ backgroundColor: state.next ? state.next.session.color : "var(--app-up)" }}

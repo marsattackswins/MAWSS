@@ -4,7 +4,7 @@ import { settingsUi } from "@/components/settings/settings-ui";
 import type { ObjectVisibility, VisibilityBand } from "@/types";
 import { cloneVisibility } from "@/lib/visibility";
 
-const inputClass = `${settingsUi.input} w-[52px] px-1.5 text-center`;
+const inputClass = `${settingsUi.input} w-[52px] px-2 text-center`;
 
 function BandRow({
   label,
@@ -18,7 +18,7 @@ function BandRow({
   hasRange?: boolean;
 }) {
   return (
-    <div className={`flex items-center gap-2 py-1.5 ${settingsUi.text}`}>
+    <div className={`flex items-center gap-2 py-2 ${settingsUi.text}`}>
       <label className="flex min-w-[72px] items-center gap-2">
         <input
           type="checkbox"
@@ -71,8 +71,8 @@ export function VisibilitySettingsPanel({
   const set = (patch: Partial<ObjectVisibility>) => onChange({ ...vis, ...patch });
 
   return (
-    <div className="space-y-0.5">
-      <label className={`flex items-center gap-2 py-1.5 ${settingsUi.text}`}>
+    <div className="space-y-1">
+      <label className={`flex items-center gap-2 py-2 ${settingsUi.text}`}>
         <input
           type="checkbox"
           className="accent-white"
@@ -87,7 +87,7 @@ export function VisibilitySettingsPanel({
       <BandRow label="Days" band={vis.days} onChange={(days) => set({ days })} />
       <BandRow label="Weeks" band={vis.weeks} onChange={(weeks) => set({ weeks })} />
       <BandRow label="Months" band={vis.months} onChange={(months) => set({ months })} />
-      <label className={`flex items-center gap-2 py-1.5 ${settingsUi.text}`}>
+      <label className={`flex items-center gap-2 py-2 ${settingsUi.text}`}>
         <input
           type="checkbox"
           className="accent-white"

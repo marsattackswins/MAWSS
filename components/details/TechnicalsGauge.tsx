@@ -45,11 +45,11 @@ const SIDE_COLOR: Record<string, string> = {
  */
 export function TechnicalsRows({ rows }: { rows: TechnicalsRow[] }) {
   return (
-    <ul className="flex flex-col gap-1.5">
+    <ul className="flex flex-col gap-2">
       {rows.map((row) => (
         <li key={row.label} className="flex items-center justify-between gap-2">
           <span className="truncate text-[12px] leading-4 text-(--app-muted)">{row.label}</span>
-          <span className="flex shrink-0 items-center gap-1.5">
+          <span className="flex shrink-0 items-center gap-2">
             <span className="text-[12px] leading-4 tabular-nums text-(--app-text)">
               {row.value}
             </span>
@@ -159,7 +159,7 @@ export function TechnicalsGauge({
               }
             : undefined
         }
-        className={`rounded-[8px] border border-(--app-border) bg-(--app-elevated) px-3 py-2.5 ${
+        className={`rounded-[8px] border border-(--app-border) bg-(--app-elevated) px-3 py-2 ${
           collapsible ? "cursor-pointer" : ""
         }`}
       >

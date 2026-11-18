@@ -124,7 +124,7 @@ export function VelaTemplateMenu() {
                       >
                         {tpl.name}
                       </div>
-                      <div className="mt-0.5 line-clamp-2 text-[11px] leading-[15px] text-(--app-muted)">
+                      <div className="mt-1 line-clamp-2 text-[11px] leading-[15px] text-(--app-muted)">
                         {templateIndicatorSummary(tpl)}
                       </div>
                     </button>

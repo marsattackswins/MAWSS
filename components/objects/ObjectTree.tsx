@@ -71,7 +71,7 @@ export function ObjectTree() {
                     return (
                     <div
                       key={study.id}
-                      className="flex items-center gap-1 px-2 py-0.5 text-[12px] text-(--app-text)"
+                      className="flex items-center gap-1 px-2 py-1 text-[12px] text-(--app-text)"
                     >
                       <span className={`flex-1 ${hidden ? "text-(--app-meta)" : ""}`}>
                         {indicatorTitle(study.type, pane.symbol)}
@@ -101,7 +101,7 @@ export function ObjectTree() {
                   {pane.drawings.map((d) => (
                     <div
                       key={d.id}
-                      className={`flex cursor-pointer items-center gap-1 px-2 py-0.5 text-[12px] ${
+                      className={`flex cursor-pointer items-center gap-1 px-2 py-1 text-[12px] ${
                         selectedDrawingId === d.id ? "bg-[var(--maws-elevated)] text-(--app-text)" : "text-(--app-text)"
                       }`}
                       onClick={() => {

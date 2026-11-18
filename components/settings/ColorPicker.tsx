@@ -19,7 +19,7 @@ const labelClass = "text-[12px] text-(--app-muted)";
 const inputClass =
   "h-7 min-w-0 rounded-[4px] border border-[var(--app-border)] bg-(--app-hover) px-2 text-[12px] text-(--app-text) outline-none focus:border-[var(--app-muted)]";
 const primaryBtnClass =
-  "h-7 shrink-0 rounded-[4px] bg-white px-2.5 text-[12px] font-semibold text-black hover:bg-[#e0e3eb]";
+  "h-7 shrink-0 rounded-[4px] bg-white px-2 text-[12px] font-semibold text-black hover:bg-[#e0e3eb]";
 
 const CUSTOM_KEY = "maws.custom-colors.v1";
 const MAX_CUSTOM = 17;
@@ -275,8 +275,8 @@ function CustomColorEditor({
   const current = hsvaToHex(hsva);
 
   return (
-    <div className={`box-border w-[228px] p-2.5 ${popoverShell}`}>
-      <div className="mb-2.5 flex items-center gap-1.5">
+    <div className={`box-border w-[228px] p-2 ${popoverShell}`}>
+      <div className="mb-2 flex items-center gap-2">
         <div
           className="h-7 w-7 shrink-0 rounded-[4px] border border-[var(--app-border)]"
           style={{ backgroundColor: current }}
@@ -494,7 +494,7 @@ export function SettingsColorSwatch({
                   onClose={() => setCustomOpen(false)}
                 />
               ) : (
-                <div className={`box-border w-[200px] p-2.5 ${popoverShell}`}>
+                <div className={`box-border w-[200px] p-2 ${popoverShell}`}>
                   <div className="grid grid-cols-10 gap-[2px]">
                     {COLOR_PRESETS.flatMap((row, ri) =>
                       row.map((c, ci) => (
@@ -508,7 +508,7 @@ export function SettingsColorSwatch({
                     )}
                   </div>
 
-                  <div className={`my-2.5 ${divider}`} />
+                  <div className={`my-2 ${divider}`} />
 
                   <div className="grid grid-cols-10 gap-[2px]">
                     {customColors.map((c) => (
@@ -538,7 +538,7 @@ export function SettingsColorSwatch({
 
                   {showOpacity ? (
                     <div className="mt-3">
-                      <div className={`mb-1.5 ${labelClass}`}>Opacity</div>
+                      <div className={`mb-2 ${labelClass}`}>Opacity</div>
                       <div className="flex items-center gap-2">
                         <div className="relative h-2 min-w-0 flex-1 overflow-hidden rounded-full border border-(--app-border)">
                           <div

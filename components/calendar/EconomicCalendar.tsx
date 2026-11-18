@@ -76,8 +76,8 @@ function EventCard({
         aria-hidden
       />
 
-      <div className="px-3 py-2.5 pr-3 pb-6 pl-3.5">
-        <div className="flex flex-col gap-1.5">
+      <div className="px-3 pt-2 pb-6">
+        <div className="flex flex-col gap-2">
           <div className="flex items-baseline justify-between gap-3 text-[11px] leading-[16px]">
             <div className="flex min-w-0 items-baseline gap-2 text-(--app-muted)">
               <span className="shrink-0 tabular-nums font-medium text-(--app-text)">
@@ -125,21 +125,21 @@ function EventCard({
         </div>
 
         {open && guide && (
-          <div className="mt-2 space-y-2.5 border-t border-(--app-border) pt-2.5 text-[11px] leading-snug">
+          <div className="mt-2 space-y-2 border-t border-(--app-border) pt-2 text-[11px] leading-snug">
             <div>
-              <div className="mb-0.5 text-[11px] font-semibold uppercase tracking-wide text-(--app-meta)">
+              <div className="mb-1 text-[11px] font-semibold uppercase tracking-wide text-(--app-meta)">
                 Description
               </div>
               <p className="text-(--app-muted)">{guide.description}</p>
             </div>
             <div>
-              <div className="mb-0.5 text-[11px] font-semibold uppercase tracking-wide text-(--app-meta)">
+              <div className="mb-1 text-[11px] font-semibold uppercase tracking-wide text-(--app-meta)">
                 Usual effect
               </div>
               <p className="text-(--app-muted)">{guide.usualEffect}</p>
             </div>
             <div>
-              <div className="mb-0.5 text-[11px] font-semibold uppercase tracking-wide text-(--app-meta)">
+              <div className="mb-1 text-[11px] font-semibold uppercase tracking-wide text-(--app-meta)">
                 Why traders care
               </div>
               <p className="text-(--app-muted)">{guide.whyTradersCare}</p>
@@ -291,7 +291,7 @@ export function EconomicCalendar() {
             Reload
           </button>
         </div>
-        <div className="flex items-center gap-0.5">
+        <div className="flex items-center gap-1">
           <button
             type="button"
             title="Previous day"
@@ -333,7 +333,7 @@ export function EconomicCalendar() {
           </div>
         )}
 
-        <div className="flex flex-col gap-1.5">
+        <div className="flex flex-col gap-2">
           {dayEvents.map((event) => (
             <EventCard
               key={event.id}

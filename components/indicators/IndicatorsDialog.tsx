@@ -253,7 +253,7 @@ export function IndicatorsDialog() {
                 <div className="px-5 pt-3">
                   <div className="mb-1 text-[11px] font-semibold uppercase tracking-[0.08em] text-(--app-muted)">On chart</div>
                   {liveScripts.map((l) => (
-                    <div key={l.id} className="group flex items-center gap-2 rounded-[4px] px-2 py-1.5 hover:bg-[var(--app-hover)]">
+                    <div key={l.id} className="group flex items-center gap-2 rounded-[4px] px-2 py-2 hover:bg-[var(--app-hover)]">
                       <span className="min-w-0 flex-1 truncate text-[13px] text-[var(--app-text)]">{l.title}</span>
                       <button
                         type="button"
@@ -296,7 +296,7 @@ export function IndicatorsDialog() {
               <div className="px-5 pt-3">
                 {scriptRows.length ? (
                   scriptRows.map((s) => (
-                    <div key={s.id} className="group flex items-center gap-2 rounded-[4px] px-2 py-1.5 hover:bg-[var(--app-hover)]">
+                    <div key={s.id} className="group flex items-center gap-2 rounded-[4px] px-2 py-2 hover:bg-[var(--app-hover)]">
                       <button
                         type="button"
                         className="min-w-0 flex-1 truncate text-left text-[13px] text-[var(--app-text)] hover:underline"
@@ -344,7 +344,7 @@ export function IndicatorsDialog() {
                   return (
                     <div
                       key={favKey}
-                      className="group flex cursor-pointer items-center gap-2 px-3 py-[7px] hover:bg-[var(--app-hover)]"
+                      className="group flex cursor-pointer items-center gap-2 px-3 py-2 hover:bg-[var(--app-hover)]"
                       onClick={() => {
                         if (kind === "native") addNative(key);
                         else {
