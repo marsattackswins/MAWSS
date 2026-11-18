@@ -4,6 +4,7 @@ import { useMemo } from "react";
 import { formatTicker } from "@/lib/maws/universe";
 import { computePerformanceStats } from "@/lib/trading/performance";
 import { formatNum } from "@/lib/trading/format";
+import { PanelEmpty, PanelWaiting } from "@/components/ui/panel-states";
 import type { OrderHistoryEntry } from "@/types";
 
 /**
@@ -39,19 +40,18 @@ function StatCell({
   );
 }
 
-function Empty({ text }: { text: string }) {
-  return (
-    <div className="flex h-full min-h-[120px] items-center justify-center text-[13px] text-(--app-muted)">
-      {text}
-    </div>
-  );
-}
-
 const pctText = (rate: number | null) => (rate == null ? "—" : `${Math.round(rate * 100)}%`);
 
 const signed = (v: number) => (v >= 0 ? "+" : "") + formatNum(v);
 
-export function PerformancePanel({ histRows }: { histRows: OrderHistoryEntry[] }) {
+export function PerformancePanel({
+  histRows,
+  waiting = false,
+}: {
+  histRows: OrderHistoryEntry[];
+  /** The account is still connecting: ghost rows beat a table of zeros. */
+  waiting?: boolean;
+}) {
   const stats = useMemo(() => computePerformanceStats(histRows), [histRows]);
 
   return (
@@ -88,10 +88,18 @@ export function PerformancePanel({ histRows }: { histRows: OrderHistoryEntry[] }
       </div>
 
       <div className="min-h-0 flex-1 overflow-auto">
-        {!stats ? (
-          <Empty text="No fills recorded yet — statistics appear once the account has traded" />
+        {waiting ? (
+          <PanelWaiting label="Loading your account" rows={5} className="px-2 py-2" />
+        ) : !stats ? (
+          <PanelEmpty
+            text="No fills recorded yet."
+            hint="Statistics appear once the account has traded."
+          />
         ) : stats.closedTrades === 0 ? (
-          <Empty text="No closed round-trips yet — open lots do not contribute PnL until a closing fill matches them" />
+          <PanelEmpty
+            text="No closed round-trips yet."
+            hint="Open lots do not count until a closing fill matches them."
+          />
         ) : (
           <table className="w-full min-w-[560px] text-left text-[12px]">
             <thead className="sticky top-0 bg-[var(--maws-panel)] text-(--app-muted)">

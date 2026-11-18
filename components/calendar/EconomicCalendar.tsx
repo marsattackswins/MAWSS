@@ -8,6 +8,7 @@ import {
 } from "@/lib/calendar";
 import { getEventGuide } from "@/lib/calendar-event-guide";
 import { useAppStore } from "@/lib/store";
+import { PanelButton, PanelEmpty, PanelFailed, PanelWaiting } from "@/components/ui/panel-states";
 import { ChevronDown, ChevronLeft, ChevronRight } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 
@@ -321,17 +322,27 @@ export function EconomicCalendar() {
       </div>
 
       {source === "mock" && status && (
-        <div className="shrink-0 border-b border-(--app-border) px-2 py-1 text-[11px] text-(--app-muted)">
-          {status}
+        <div className="flex shrink-0 items-center justify-between gap-2 border-b border-(--app-border) px-2 py-1 text-[11px] text-(--app-muted)">
+          <span className="min-w-0">{status}</span>
+          <PanelButton onClick={() => setReloadToken((n) => n + 1)}>Try again</PanelButton>
         </div>
       )}
 
       <div className="min-h-0 flex-1 overflow-y-auto overflow-x-hidden px-2 py-2">
-        {dayEvents.length === 0 && (
-          <div className="px-2 py-8 text-center text-[12px] text-(--app-muted)">
-            {loading ? "Loading events…" : "No events this day"}
-          </div>
-        )}
+        {dayEvents.length === 0 && loading ? (
+          <PanelWaiting label="Loading events" rows={4} rowHeight={72} />
+        ) : null}
+        {dayEvents.length === 0 && !loading ? (
+          status && source === "mock" ? (
+            <PanelFailed
+              text="This day's events could not be loaded."
+              detail={status}
+              onRetry={() => setReloadToken((n) => n + 1)}
+            />
+          ) : (
+            <PanelEmpty text="No events this day." hint="Use the arrows to look at another day." />
+          )
+        ) : null}
 
         <div className="flex flex-col gap-2">
           {dayEvents.map((event) => (

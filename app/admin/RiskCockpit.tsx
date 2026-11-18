@@ -1,6 +1,7 @@
 "use client";
 
 import { AlertCircle, CheckCircle, Info, XCircle } from "lucide-react";
+import { PanelEmpty } from "@/components/ui/panel-states";
 
 export type RiskStatus = "green" | "yellow" | "red" | "unavailable";
 
@@ -217,7 +218,7 @@ export function SymbolExposureTable({ risk }: { risk: RiskCockpitSnapshot }) {
   return (
     <Panel title="Symbol Exposure">
       {risk.exposure.bySymbol.length === 0 ? (
-        <EmptyState text="No open symbol exposure" />
+        <PanelEmpty text="No open symbol exposure" className="py-6 text-sm" />
       ) : (
         <div className="overflow-x-auto">
           <table className="w-full min-w-[520px] text-left text-sm">
@@ -250,7 +251,7 @@ export function PositionRiskTable({ risk }: { risk: RiskCockpitSnapshot }) {
   return (
     <Panel title="Position-Level Risk">
       {risk.positions.length === 0 ? (
-        <EmptyState text="No open positions" />
+        <PanelEmpty text="No open positions" className="py-6 text-sm" />
       ) : (
         <div className="overflow-x-auto">
           <table className="w-full min-w-[1120px] text-left text-sm">
@@ -317,10 +318,6 @@ function RiskMessage({ children, tone = "muted" }: { children: React.ReactNode; 
       <span className={tone === "red" ? "text-[#f23645]" : "text-[#787b86]"}>{children}</span>
     </div>
   );
-}
-
-function EmptyState({ text }: { text: string }) {
-  return <div className="py-6 text-sm text-[#787b86]">{text}</div>;
 }
 
 function money(value: number): string {

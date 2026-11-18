@@ -5,6 +5,7 @@ import { fetchNews, formatNewsAge, type NewsItem } from "@/lib/news";
 import { useActivePane, useAppStore } from "@/lib/store";
 import { ExternalLink, RefreshCw } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
+import { PanelEmpty, PanelFailed, PanelWaiting } from "@/components/ui/panel-states";
 
 type NewsTab = "asset" | "all";
 
@@ -164,7 +165,7 @@ export function NewsPanel() {
         })}
       </div>
 
-      {error ? (
+      {error && items.length > 0 ? (
         <div className="shrink-0 border-b border-(--app-border) px-2 py-2 text-[11px] text-(--app-muted)">
           {error}
           {error.includes("FINNHUB_API_KEY")
@@ -175,14 +176,21 @@ export function NewsPanel() {
 
       <div className="min-h-0 flex-1 overflow-y-auto overflow-x-hidden px-2 py-2">
         {loading && items.length === 0 ? (
-          <div className="px-2 py-8 text-center text-[12px] text-(--app-muted)">
-            Loading headlines…
-          </div>
+          <PanelWaiting label="Loading headlines" variant="cards" rows={4} rowHeight={62} />
         ) : null}
         {!loading && items.length === 0 ? (
-          <div className="px-2 py-8 text-center text-[12px] text-(--app-muted)">
-            No headlines for this feed right now
-          </div>
+          error ? (
+            <PanelFailed
+              text="Headlines could not be loaded."
+              detail={error.includes("FINNHUB_API_KEY") ? "Add FINNHUB_API_KEY to .env.local, then restart the dev server." : error}
+              onRetry={() => setReloadToken((n) => n + 1)}
+            />
+          ) : (
+            <PanelEmpty
+              text="No headlines for this feed right now."
+              hint="Try the other tab, or reload in a moment."
+            />
+          )
         ) : null}
         <div className="flex flex-col gap-2">
           {items.map((item) => (

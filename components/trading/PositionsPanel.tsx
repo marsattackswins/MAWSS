@@ -15,6 +15,7 @@ import {
 import { formatNum, formatUsd } from "@/lib/trading/format";
 import { PerformancePanel } from "@/components/trading/PerformancePanel";
 import { timezoneIana } from "@/lib/timezone";
+import { PanelEmpty, PanelWaiting } from "@/components/ui/panel-states";
 import { useQuotes } from "@/lib/use-quotes";
 import type { BalanceHistoryEntry, OrderHistoryEntry } from "@/types";
 
@@ -105,14 +106,6 @@ export function PnlCell({
         </span>
       ) : null}
     </span>
-  );
-}
-
-function Empty({ text }: { text: string }) {
-  return (
-    <div className="flex h-full min-h-[120px] items-center justify-center text-[13px] text-(--app-muted)">
-      {text}
-    </div>
   );
 }
 
@@ -373,6 +366,9 @@ export function PositionsPanel() {
 
   const mutationBlocked = livePhase === "switching";
 
+  /** No account snapshot yet — ghost rows, never an empty table. */
+  const waiting = live && !liveReady && liveAcc.fetchedAt == null;
+
   const posRows = computePosRows(positions, live, lastOf);
 
   const ordRows = orders.map((o) => ({
@@ -517,8 +513,13 @@ export function PositionsPanel() {
 
       <div className="min-h-0 flex-1 overflow-auto">
         {tab === "positions" ? (
-          posRows.length === 0 ? (
-            <Empty text="There are no open positions in your trading account yet" />
+          waiting ? (
+            <PanelWaiting label="Loading your account" rows={6} className="px-2 py-2" />
+          ) : posRows.length === 0 ? (
+            <PanelEmpty
+              text="No open positions right now."
+              hint="Open a trade and it will show up here."
+            />
           ) : (
             <table className="w-full min-w-[980px] text-left text-[12px]">
               <thead className="sticky top-0 bg-[var(--maws-panel)] text-(--app-muted)">
@@ -616,8 +617,13 @@ export function PositionsPanel() {
         ) : null}
 
         {tab === "orders" ? (
-          ordRows.length === 0 ? (
-            <Empty text="There are no working orders in your trading account yet" />
+          waiting ? (
+            <PanelWaiting label="Loading your account" rows={5} className="px-2 py-2" />
+          ) : ordRows.length === 0 ? (
+            <PanelEmpty
+              text="No working orders right now."
+              hint="Limit and stop orders stay here until they fill."
+            />
           ) : (
             <table className="w-full text-left text-[12px]">
               <thead className="sticky top-0 bg-[var(--maws-panel)] text-(--app-muted)">
@@ -661,8 +667,10 @@ export function PositionsPanel() {
         ) : null}
 
         {tab === "orderHistory" ? (
-          histRows.length === 0 ? (
-            <Empty text="There is no order history yet" />
+          waiting ? (
+            <PanelWaiting label="Loading your account" rows={6} className="px-2 py-2" />
+          ) : histRows.length === 0 ? (
+            <PanelEmpty text="No order history yet." hint="Fills from your live account appear here." />
           ) : (
             <div className="flex h-full min-h-0 flex-col">
               <div className="flex shrink-0 items-center gap-2 px-2 py-2">
@@ -776,8 +784,13 @@ export function PositionsPanel() {
         ) : null}
 
         {tab === "balanceHistory" ? (
-          balanceRows.length === 0 ? (
-            <Empty text="There is no balance history yet" />
+          waiting ? (
+            <PanelWaiting label="Loading your account" rows={6} className="px-2 py-2" />
+          ) : balanceRows.length === 0 ? (
+            <PanelEmpty
+              text="No balance history yet."
+              hint="Balance changes appear here after your first fill."
+            />
           ) : (
             <div className="flex h-full min-h-0 flex-col">
               <div className="flex shrink-0 justify-end px-2 py-1">
@@ -831,11 +844,18 @@ export function PositionsPanel() {
           )
         ) : null}
 
-        {tab === "performance" ? <PerformancePanel histRows={histRows} /> : null}
+        {tab === "performance" ? (
+          <PerformancePanel histRows={histRows} waiting={waiting} />
+        ) : null}
 
         {tab === "journal" ? (
-          journalRows.length === 0 ? (
-            <Empty text="Your trading journal is empty" />
+          waiting ? (
+            <PanelWaiting label="Loading your account" rows={5} className="px-2 py-2" />
+          ) : journalRows.length === 0 ? (
+            <PanelEmpty
+              text="Your trading journal is empty."
+              hint="Closed trades are written here automatically."
+            />
           ) : (
             <div className="flex h-full min-h-0 flex-col">
               <div className="flex shrink-0 justify-end px-2 py-1">
