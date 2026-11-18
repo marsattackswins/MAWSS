@@ -1,6 +1,7 @@
 "use client";
 
 import { ArrowRight, CircleAlert, Eye, EyeOff, LoaderCircle, LockKeyhole } from "lucide-react";
+import { DialogBackdrop, dialogFrame, useDialogDismiss } from "@/components/ui/dialog-frame";
 import { useState, type FormEvent, type KeyboardEvent } from "react";
 
 import { profileLabel } from "@/lib/live/bridge";
@@ -57,17 +58,18 @@ export function ProfileAuthDialog({
     setCapsLock(event.getModifierState("CapsLock"));
   };
 
+  // Same closing rule as every other pop-up: Escape, then focus back on the trigger.
+  useDialogDismiss(true, onCancel);
+
   return (
-    <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/60 px-4 backdrop-blur-[2px]">
-      {/* Backdrop click closes; the card stops the event. */}
-      <div className="absolute inset-0" aria-hidden="true" onMouseDown={onCancel} />
+    <DialogBackdrop onClose={onCancel} zIndex={100} className="px-4 backdrop-blur-[2px]">
       <form
         role="dialog"
         aria-modal="true"
         aria-labelledby="profile-auth-title"
         aria-describedby="profile-auth-description"
         onSubmit={onSubmit}
-        className="relative w-[440px] max-w-full rounded-[8px] border border-(--app-border) bg-(--app-elevated) shadow-[var(--app-shadow-dialog)]"
+        className={`relative w-[440px] max-w-full ${dialogFrame.panel}`}
         style={{ ["--auth-accent" as string]: "var(--app-accent)" }}
       >
         {/* Meta strip: which product this dialog belongs to and which environment. */}
@@ -205,6 +207,6 @@ export function ProfileAuthDialog({
           </button>
         </div>
       </form>
-    </div>
+    </DialogBackdrop>
   );
 }

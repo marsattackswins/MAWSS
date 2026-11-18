@@ -1,6 +1,7 @@
 "use client";
 
 import { CircleHelp, X } from "lucide-react";
+import { dialogFrame, useDialogDismiss } from "@/components/ui/dialog-frame";
 import type {
   ButtonHTMLAttributes,
   CSSProperties,
@@ -12,13 +13,12 @@ import type {
 /** Shared settings chrome — use for every settings dialog now and later. */
 export const settingsUi = {
   overlay: "fixed inset-0 z-[80] flex items-center justify-center bg-transparent",
-  panel:
-    "flex max-h-[min(640px,calc(100vh-48px))] w-full flex-col overflow-hidden rounded-[8px] bg-[var(--app-elevated)] shadow-[var(--app-shadow-menu)]",
-  header:
-    "flex shrink-0 items-center justify-between border-b border-[var(--app-border)] px-5 py-3",
-  title: "text-[16px] font-semibold text-[var(--app-text)]",
-  closeBtn:
-    "flex h-7 w-7 items-center justify-center rounded-[4px] text-[var(--app-muted)] hover:bg-[var(--app-hover)] hover:text-[var(--app-text)]",
+  // Every surface measurement comes from the one shared pop-up frame, so a
+  // settings dialog and the broker dialog cannot drift apart again.
+  panel: `${dialogFrame.panel} w-full`,
+  header: `${dialogFrame.header} items-center`,
+  title: dialogFrame.title,
+  closeBtn: dialogFrame.closeBtn,
   tabs: "flex shrink-0 gap-4 border-b border-[var(--app-border)] px-5",
   tab: (on: boolean) =>
     `h-9 border-b-2 text-[13px] capitalize ${
@@ -26,9 +26,8 @@ export const settingsUi = {
         ? "border-[var(--app-text)] text-[var(--app-text)]"
         : "border-transparent text-[var(--app-muted)] hover:text-[var(--app-text)]"
     }`,
-  body: "min-h-0 flex-1 overflow-y-auto px-5 py-4",
-  footer:
-    "flex shrink-0 items-center justify-between gap-3 border-t border-[var(--app-border)] px-5 py-3",
+  body: dialogFrame.body,
+  footer: dialogFrame.footer,
   sectionTitle:
     "mb-2 flex items-center gap-2 text-[11px] font-semibold tracking-[0.08em] text-[var(--app-muted)]",
   label: "text-[12px] text-[var(--app-muted)]",
@@ -57,8 +56,18 @@ export function SettingsOverlay({
   children: ReactNode;
   className?: string;
 }) {
+  // Chart palettes stay see-through (you adjust them while watching the chart),
+  // but they still own Escape and give focus back to their trigger.
+  useDialogDismiss(true, onClose);
   return (
-    <div className={`${settingsUi.overlay} ${className}`} onMouseDown={onClose}>
+    <div
+      role="dialog"
+      aria-modal="true"
+      className={`${settingsUi.overlay} ${className}`}
+      onMouseDown={(event) => {
+        if (event.target === event.currentTarget) onClose();
+      }}
+    >
       {children}
     </div>
   );

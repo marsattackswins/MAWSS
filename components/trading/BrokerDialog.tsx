@@ -6,7 +6,13 @@ import { liveApi, LiveApiError, LiveAuthError, setCsrf } from "@/lib/live/api";
 import { profileErrorMessage, profileLabel, profilePhaseLabel, switchLiveProfile } from "@/lib/live/bridge";
 import type { LiveProfileId, ProfileMetadataDto } from "@/lib/live/types";
 import { useAppStore } from "@/lib/store";
-import { Check, ChevronRight, CircleAlert, LoaderCircle, X } from "lucide-react";
+import {
+  DialogBackdrop,
+  DialogHeader,
+  DialogPanel,
+  useDialogDismiss,
+} from "@/components/ui/dialog-frame";
+import { Check, ChevronRight, CircleAlert, LoaderCircle } from "lucide-react";
 import { useEffect, useMemo, useRef, useState, type FormEvent } from "react";
 
 const FALLBACK_PROFILES: ProfileMetadataDto[] = [
@@ -38,6 +44,13 @@ const PROFILE_COPY: Record<LiveProfileId, { description: string; caution: string
     caution: "Real orders and positions may be affected.",
   },
 };
+
+/** Registers a nested layer with the dialog stack so Escape closes this layer
+ *  first — not the dialog behind it. Draws nothing of its own. */
+function EscapeLayer({ onClose }: { onClose: () => void }) {
+  useDialogDismiss(true, onClose);
+  return null;
+}
 
 function ProfileMark({ profileId }: { profileId: LiveProfileId }) {
   void profileId;
@@ -245,20 +258,22 @@ export function BrokerDialog() {
     void requestBinanceProfile(profile.profileId);
   };
 
+  // Escape closes this chooser, or the step drawn in front of it.
+  useDialogDismiss(open, closeDialog);
+
   if (!open) return null;
 
   return (
-    <div className="fixed inset-0 z-[80] flex items-center justify-center bg-black/70" onMouseDown={closeDialog}>
-      <div className="w-[720px] max-w-[calc(100vw-24px)] overflow-hidden rounded-[8px] border border-(--app-border) bg-[var(--app-elevated)] shadow-[var(--app-shadow-dialog)]" onMouseDown={(event) => event.stopPropagation()}>
-        <div className="flex items-start justify-between px-5 pt-4 pb-3">
-          <div>
-            <div className="text-[16px] font-semibold text-white">Choose trading profile</div>
-            <div className="mt-1 text-[12px] text-(--app-muted)">Current: {currentLabel} · {currentStatus}</div>
-          </div>
-          <button ref={closeRef} type="button" aria-label="Close profile chooser" className="flex h-8 w-8 items-center justify-center rounded-[4px] text-(--app-muted) hover:bg-(--app-hover) hover:text-(--app-text)" onClick={closeDialog}>
-            <X size={16} />
-          </button>
-        </div>
+    <DialogBackdrop onClose={closeDialog} zIndex={80}>
+      <DialogPanel labelledBy="broker-dialog-title" className="w-[720px] max-w-[calc(100vw-24px)]">
+        <DialogHeader
+          title="Choose trading profile"
+          subtitle={`Current: ${currentLabel} · ${currentStatus}`}
+          titleId="broker-dialog-title"
+          onClose={closeDialog}
+          closeRef={closeRef}
+          closeLabel="Close profile chooser"
+        />
 
         {switching ? (
           <div className="mx-5 mb-3 flex items-center gap-2 rounded-[4px] border border-(--app-accent)/40 bg-(--app-accent)/10 px-3 py-2 text-[12px] text-(--app-text)" role="status">
@@ -324,7 +339,7 @@ export function BrokerDialog() {
         <div className="border-t border-(--app-border) px-5 py-3 text-[11px] text-(--app-muted)">
           Server credentials and endpoints stay on the server. The browser receives only safe profile status.
         </div>
-      </div>
+      </DialogPanel>
 
       {authTarget ? (
         <ProfileAuthDialog
@@ -342,6 +357,11 @@ export function BrokerDialog() {
         />
       ) : null}
 
+      {/* A nested layer owns Escape while the Live warning is up, so the key
+          dismisses the warning instead of the chooser behind it. */}
+      {productionConfirmation ? (
+        <EscapeLayer onClose={() => { setProductionConfirmation(false); setProductionChecked(false); }} />
+      ) : null}
       {productionConfirmation ? (
         <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/60" onMouseDown={() => { setProductionConfirmation(false); setProductionChecked(false); }}>
           <div role="dialog" aria-modal="true" aria-labelledby="production-confirm-title" className="w-[430px] max-w-[calc(100vw-32px)] rounded-[8px] border border-(--app-warn)/50 bg-(--app-warn)/10 p-5 shadow-[var(--app-shadow-dialog)]" onMouseDown={(event) => event.stopPropagation()}>
@@ -360,6 +380,6 @@ export function BrokerDialog() {
           </div>
         </div>
       ) : null}
-    </div>
+    </DialogBackdrop>
   );
 }

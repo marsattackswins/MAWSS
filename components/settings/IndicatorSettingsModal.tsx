@@ -1,6 +1,7 @@
 "use client";
 
 import { VisibilitySettingsPanel } from "@/components/settings/VisibilitySettingsPanel";
+import { useDialogDismiss } from "@/components/ui/dialog-frame";
 import {
   SettingsBody,
   SettingsBtn,
@@ -1238,6 +1239,9 @@ export function IndicatorSettingsModal() {
       window.removeEventListener("mousedown", onDown, true);
     };
   }, [instanceId, setOpen]);
+
+  // Closes this panel only — the chart chrome behind it stays put.
+  useDialogDismiss(Boolean(instanceId), () => setOpen(null));
 
   if (!instanceId || !hostPaneId || !hostSymbol || !study || !type) return null;
 

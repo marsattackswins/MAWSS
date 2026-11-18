@@ -18,6 +18,7 @@ import { KeyboardShortcutsPanel } from "@/components/settings/KeyboardShortcutsP
 import { useAppStore } from "@/lib/store";
 import { Keyboard, X } from "lucide-react";
 import { useEffect, useRef, useState, type MouseEvent } from "react";
+import { dialogFrame, useDialogDismiss } from "@/components/ui/dialog-frame";
 
 export function SettingsModal() {
   const open = useAppStore((s) => s.settingsOpen);
@@ -48,6 +49,9 @@ export function SettingsModal() {
       window.removeEventListener("mousedown", onDown, true);
     };
   }, [open, setSettingsOpen]);
+
+  // One closing rule for every pop-up: Escape, and focus back on the trigger.
+  useDialogDismiss(open, () => setSettingsOpen(false));
 
   if (!open) return null;
 
@@ -81,7 +85,10 @@ export function SettingsModal() {
       ref={boxRef}
       data-settings-panel
       data-dropdown-open
-      className="fixed z-[70] flex w-[620px] max-h-[calc(100vh-168px)] overflow-hidden rounded-[8px] bg-[var(--app-elevated)] shadow-[var(--app-shadow-menu)]"
+      role="dialog"
+      aria-modal="true"
+      aria-label="Keyboard shortcuts"
+      className="fixed z-[70] flex w-[620px] max-h-[calc(100vh-168px)] flex-col overflow-hidden rounded-[8px] bg-[var(--app-elevated)] shadow-[var(--app-shadow-menu)]"
       style={
         dragged
           ? { left: pos.x, top: pos.y }
@@ -91,7 +98,7 @@ export function SettingsModal() {
     >
       <div className="flex min-w-0 flex-1 flex-col overflow-hidden">
         <div
-          className="flex h-12 shrink-0 cursor-move items-center gap-2 border-b border-(--app-border) px-5"
+          className={`${dialogFrame.header} h-12 cursor-move items-center`}
           onMouseDown={startDrag}
         >
           <Keyboard size={15} className="text-(--app-muted)" />

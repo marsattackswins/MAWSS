@@ -30,6 +30,7 @@ import {
   savePineScripts,
   type PineScript,
 } from "@/lib/vela-pine-scripts";
+import { DialogBackdrop, useDialogDismiss } from "@/components/ui/dialog-frame";
 import { useAppStore } from "@/lib/store";
 import { Code2, Diamond, Eye, EyeOff, Search, Trash2, X } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
@@ -89,6 +90,9 @@ export function IndicatorsDialog() {
     () => groupedVelaCatalog().flatMap((g) => g.entries).map((entry: CatalogEntry) => ({ entry, key: entry.type })),
     [],
   );
+
+  // Escape closes the library itself (its search box used to be the only exit).
+  useDialogDismiss(open, () => setOpen(false));
 
   if (!open) return null;
 
@@ -182,20 +186,18 @@ export function IndicatorsDialog() {
   const close = () => setOpen(false);
 
   return (
-    <div
-      data-indicators-dialog
-      className="fixed inset-0 z-[70] flex items-start justify-center bg-transparent"
-      onMouseDown={(e) => {
-        if (e.target === e.currentTarget) close();
-      }}
-    >
+    <DialogBackdrop clear align="start" zIndex={70} onClose={close}>
       <div
-        className="mt-[10vh] flex max-h-[76vh] w-[560px] flex-col overflow-hidden rounded-[8px] bg-(--app-menu) shadow-[0_16px_48px_rgba(0,0,0,0.6)]"
+        data-indicators-dialog
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="indicators-dialog-title"
+        className="mt-[10vh] flex max-h-[76vh] w-[560px] flex-col overflow-hidden rounded-[8px] bg-(--app-menu) shadow-[var(--app-shadow-dialog)]"
         onMouseDown={(e) => e.stopPropagation()}
       >
         {/* Header */}
         <div className="flex shrink-0 items-center justify-between border-b border-[var(--app-border)] py-3 pl-5 pr-3">
-          <span className="text-[13px] font-semibold text-[var(--app-text)]">Indicators, metrics and strategies</span>
+          <span id="indicators-dialog-title" className="text-[13px] font-semibold text-[var(--app-text)]">Indicators, metrics and strategies</span>
           <button
             type="button"
             aria-label="Close"
@@ -384,6 +386,6 @@ export function IndicatorsDialog() {
           )}
         </div>
       </div>
-    </div>
+    </DialogBackdrop>
   );
 }
