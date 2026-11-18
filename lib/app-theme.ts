@@ -109,9 +109,15 @@ export function applyAppTheme(settings: AppSettings) {
   // palette whose card tone reads as a different color than its dialog
   // surface, so its menus drop to the background tone; other themes keep the
   // elevated card color they already share with their dialogs.
-  const menuColor =
-    velaThemeNameFromAppSettings(s) === "gruvbox" ? s.backgroundColor : s.elevatedColor;
+  const themeName = velaThemeNameFromAppSettings(s);
+  const menuColor = themeName === "gruvbox" ? s.backgroundColor : s.elevatedColor;
   root.style.setProperty("--app-menu", menuColor);
+  // Attention tone: amber on the dark palettes, a darker one on white so event
+  // impact and live-mode warnings stay legible on light surfaces.
+  const warnColor =
+    themeName === "gruvbox" ? "#fabd2f" : themeName === "light" ? "#b26b00" : "#f0b90b";
+  root.style.setProperty("--app-warn", warnColor);
+  root.style.setProperty("--app-warn-ink", themeName === "light" ? "#ffffff" : "#1a1a1a");
 
   // Alias used by some shell widgets
   root.style.setProperty("--maws-bg", s.backgroundColor);

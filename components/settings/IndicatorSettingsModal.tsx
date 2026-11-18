@@ -1290,7 +1290,7 @@ export function IndicatorSettingsModal() {
       ref={boxRef}
       data-indicator-settings-panel
       data-dropdown-open
-      className="fixed z-[70] flex w-[420px] max-h-[calc(100vh-188px)] flex-col overflow-hidden rounded-[8px] bg-(--app-elevated) shadow-[0_8px_28px_rgba(0,0,0,0.65)]"
+      className="fixed z-[70] flex w-[420px] max-h-[calc(100vh-188px)] flex-col overflow-hidden rounded-[8px] bg-(--app-elevated) shadow-[var(--app-shadow-menu)]"
       style={
         dragged
           ? { left: pos.x, top: pos.y }

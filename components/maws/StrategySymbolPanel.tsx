@@ -27,7 +27,7 @@ function DockToggle({ compact, className = "" }: { compact: boolean; className?:
       title={compact ? "Show full details" : "Dock compact under the watchlist"}
       aria-label={compact ? "Show full details" : "Dock compact under the watchlist"}
       onClick={(e) => { e.stopPropagation(); setSymbolPanelDocked(!compact); }}
-      className={`flex h-[24px] w-[24px] shrink-0 items-center justify-center rounded-[5px] text-(--app-muted) ${className}`}
+      className={`flex h-[24px] w-[24px] shrink-0 items-center justify-center rounded-[4px] text-(--app-muted) ${className}`}
     >
       {compact ? <ChevronUp size={15} /> : <ChevronDown size={15} />}
     </button>
@@ -80,7 +80,7 @@ export function StrategySymbolPanel({ symbol }: { symbol: string }) {
         className="flex w-full cursor-pointer items-center gap-2 px-3 pt-2"
       >
         <AssetLogo symbol={symbol} size={24} />
-        <span className="truncate text-[15px] font-semibold text-(--app-text)">
+        <span className="truncate text-[13px] font-semibold text-(--app-text)">
           {formatTicker(symbol)}
         </span>
         <div className="flex-1" />

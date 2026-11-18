@@ -25,13 +25,13 @@ function StatCell({
   title?: string;
 }) {
   const color =
-    tone === "up" ? "text-[#089981]" : tone === "down" ? "text-[#f23645]" : "text-(--app-text)";
+    tone === "up" ? "text-[var(--app-up)]" : tone === "down" ? "text-[var(--app-down)]" : "text-(--app-text)";
   return (
     <span
       title={title}
       className="flex flex-col justify-center gap-[3px] whitespace-nowrap border-l border-(--app-border) px-4 py-[5px] first:border-l-0"
     >
-      <span className="text-[9px] font-semibold uppercase leading-none tracking-[0.08em] text-(--app-muted)">
+      <span className="text-[11px] font-semibold uppercase leading-none tracking-[0.08em] text-(--app-muted)">
         {label}
       </span>
       <span className={`text-[13px] font-semibold leading-none ${color}`}>{value}</span>
@@ -110,7 +110,7 @@ export function PerformancePanel({ histRows }: { histRows: OrderHistoryEntry[] }
                   <td className="px-2 py-1.5">{formatNum(entry.notional)}</td>
                   <td
                     className={`px-2 py-1.5 ${
-                      entry.realizedPnl >= 0 ? "text-[#089981]" : "text-[#f23645]"
+                      entry.realizedPnl >= 0 ? "text-[var(--app-up)]" : "text-[var(--app-down)]"
                     }`}
                   >
                     {signed(entry.realizedPnl)}

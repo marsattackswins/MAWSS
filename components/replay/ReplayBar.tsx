@@ -176,7 +176,7 @@ export function ReplayBar() {
           const cursorTime = replaySliderTime(Number(e.target.value), bounds, tfMs);
           if (cursorTime != null) seek(cursorTime);
         }}
-        className="mx-2 h-1 min-w-0 flex-1 accent-[#2962ff]"
+        className="mx-2 h-1 min-w-0 flex-1 accent-[var(--app-accent)]"
       />
       <span className="shrink-0 text-[var(--maws-muted)]">
         {stamp} · {replay.remaining ?? 0} left

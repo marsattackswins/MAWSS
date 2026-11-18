@@ -70,8 +70,8 @@ type Ink = {
 const DARK_INK: Ink = {
   light: false,
   track: "rgba(255,255,255,0.055)",
-  label: "#d1d4dc",
-  hour: "#787b86",
+  label: "var(--app-text)",
+  hour: "var(--app-muted)",
   now: "#ffffff",
 };
 

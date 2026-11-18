@@ -39,9 +39,9 @@ function BandRow({
               onChange({ ...band, min: Math.max(1, Number(e.target.value) || 1) })
             }
           />
-          <div className="h-[2px] w-16 rounded bg-[#363a45]">
+          <div className="h-[2px] w-16 rounded bg-[var(--app-border)]">
             <div
-              className="h-full rounded bg-[#787b86]"
+              className="h-full rounded bg-[var(--app-muted)]"
               style={{ width: `${Math.min(100, (band.min / Math.max(band.max, 1)) * 100)}%` }}
             />
           </div>

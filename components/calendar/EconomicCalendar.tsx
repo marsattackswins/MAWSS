@@ -50,7 +50,7 @@ function EventCard({
     event.impact === "high"
       ? "bg-(--app-down)"
       : event.impact === "medium"
-        ? "bg-[#ffa726]"
+        ? "bg-[var(--app-warn)]"
         : "bg-(--app-faint)";
   const impactLabel =
     event.impact === "high"
@@ -63,7 +63,7 @@ function EventCard({
     <button
       type="button"
       onClick={onToggle}
-      className={`group relative w-full overflow-hidden rounded-md border text-left transition-colors ${
+      className={`group relative w-full overflow-hidden rounded-[4px] border text-left transition-colors ${
         live
           ? "border-(--app-text) bg-[var(--maws-elevated)]"
           : open
@@ -84,7 +84,7 @@ function EventCard({
                 {time}
               </span>
               {live && (
-                <span className="shrink-0 text-[9px] font-semibold uppercase tracking-wide text-(--app-text)">
+                <span className="shrink-0 text-[11px] font-semibold uppercase tracking-wide text-(--app-text)">
                   Live
                 </span>
               )}
@@ -103,7 +103,7 @@ function EventCard({
           <div className="flex items-baseline justify-between gap-3 text-[13px] leading-[18px]">
             <div className="min-w-0 font-medium text-(--app-text)">{event.title}</div>
             {event.previous ? (
-              <span className="shrink-0 text-[11px] leading-[16px] tabular-nums text-[#ffa726]">
+              <span className="shrink-0 text-[11px] leading-[16px] tabular-nums text-[var(--app-warn)]">
                 Previous: {event.previous}
               </span>
             ) : event.actual ? (
@@ -127,29 +127,29 @@ function EventCard({
         {open && guide && (
           <div className="mt-2 space-y-2.5 border-t border-(--app-border) pt-2.5 text-[11px] leading-snug">
             <div>
-              <div className="mb-0.5 text-[9px] font-semibold uppercase tracking-wide text-(--app-meta)">
+              <div className="mb-0.5 text-[11px] font-semibold uppercase tracking-wide text-(--app-meta)">
                 Description
               </div>
               <p className="text-(--app-muted)">{guide.description}</p>
             </div>
             <div>
-              <div className="mb-0.5 text-[9px] font-semibold uppercase tracking-wide text-(--app-meta)">
+              <div className="mb-0.5 text-[11px] font-semibold uppercase tracking-wide text-(--app-meta)">
                 Usual effect
               </div>
               <p className="text-(--app-muted)">{guide.usualEffect}</p>
             </div>
             <div>
-              <div className="mb-0.5 text-[9px] font-semibold uppercase tracking-wide text-(--app-meta)">
+              <div className="mb-0.5 text-[11px] font-semibold uppercase tracking-wide text-(--app-meta)">
                 Why traders care
               </div>
               <p className="text-(--app-muted)">{guide.whyTradersCare}</p>
             </div>
             <div
-              className={`text-[10px] font-semibold uppercase tracking-wide ${
+              className={`text-[11px] font-semibold uppercase tracking-wide ${
                 event.impact === "high"
                   ? "text-(--app-down)"
                   : event.impact === "medium"
-                    ? "text-[#ffa726]"
+                    ? "text-[var(--app-warn)]"
                     : "text-(--app-meta)"
               }`}
             >
@@ -273,7 +273,7 @@ export function EconomicCalendar() {
         <div className="flex min-w-0 items-center gap-2">
           <span className="text-[13px] font-semibold text-(--app-text)">Calendar</span>
           <span
-            className="truncate text-[10px] uppercase tracking-wide text-(--app-meta)"
+            className="truncate text-[11px] uppercase tracking-wide text-(--app-meta)"
             title={status ?? undefined}
           >
             {loading
@@ -285,7 +285,7 @@ export function EconomicCalendar() {
           <button
             type="button"
             title="Reload calendar"
-            className="h-5 rounded px-1 text-[10px] text-(--app-meta) hover:bg-(--app-hover) hover:text-(--app-text)"
+            className="h-5 rounded px-1 text-[11px] text-(--app-meta) hover:bg-(--app-hover) hover:text-(--app-text)"
             onClick={() => setReloadToken((n) => n + 1)}
           >
             Reload
@@ -321,7 +321,7 @@ export function EconomicCalendar() {
       </div>
 
       {source === "mock" && status && (
-        <div className="shrink-0 border-b border-(--app-border) px-2 py-1 text-[10px] text-(--app-muted)">
+        <div className="shrink-0 border-b border-(--app-border) px-2 py-1 text-[11px] text-(--app-muted)">
           {status}
         </div>
       )}

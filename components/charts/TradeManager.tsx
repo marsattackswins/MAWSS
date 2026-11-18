@@ -276,8 +276,8 @@ function PositionPill({
 
   if (y == null) return null;
 
-  const exitColor = (leg: Leg) => (leg === "tp" ? "var(--tp, #26a69a)" : "var(--sl, #ef5350)");
-  const exitHex = (leg: Leg) => (leg === "tp" ? "#26a69a" : "#ef5350");
+  const exitColor = (leg: Leg) => (leg === "tp" ? "var(--tp, var(--app-up))" : "var(--sl, var(--app-down))");
+  const exitHex = (leg: Leg) => (leg === "tp" ? "var(--app-up)" : "var(--app-down)");
   const handleProps = (leg: Leg) => ({
     onPointerDown: beginExitDrag(leg),
     title:
@@ -301,7 +301,7 @@ function PositionPill({
             style={{ top: drag.y, borderColor: exitColor(drag.leg) }}
           />
           <span
-            className="pointer-events-none absolute rounded-[2px] px-1 py-0.5 text-[10px] font-semibold tabular-nums text-black"
+            className="pointer-events-none absolute rounded-[4px] px-1 py-0.5 text-[11px] font-semibold tabular-nums text-black"
             style={{
               top: drag.y,
               background: exitHex(drag.leg),
@@ -324,13 +324,13 @@ function PositionPill({
         }}
       >
         <div
-          className={`flex items-stretch overflow-hidden rounded-[3px] border bg-(--app-panel)/95 text-[10px] leading-none shadow-[0_1px_4px_rgba(0,0,0,0.45)] ${
-            long ? "border-[#26a69a]/60" : "border-[#ef5350]/60"
+          className={`flex items-stretch overflow-hidden rounded-[4px] border bg-(--app-panel)/95 text-[11px] leading-none shadow-[var(--app-shadow-menu)] ${
+            long ? "border-(--app-up)/60" : "border-(--app-down)/60"
           }`}
         >
           <span
             className={`flex items-center gap-1 px-1.5 py-1 font-semibold ${
-              long ? "bg-[#26a69a]/15 text-[#26a69a]" : "bg-[#ef5350]/15 text-[#ef5350]"
+              long ? "bg-(--app-up)/15 text-[var(--app-up)]" : "bg-(--app-down)/15 text-[var(--app-down)]"
             }`}
             title={`${long ? "Long" : "Short"} ${position.qty} ${position.symbol} @ ${formatPrice(
               position.symbol,
@@ -341,7 +341,7 @@ function PositionPill({
           </span>
           <span
             className={`flex items-center px-1.5 py-1 tabular-nums ${
-              pnl != null && pnl >= 0 ? "text-[#26a69a]" : "text-[#ef5350]"
+              pnl != null && pnl >= 0 ? "text-[var(--app-up)]" : "text-[var(--app-down)]"
             }`}
             title="Open P&L"
           >

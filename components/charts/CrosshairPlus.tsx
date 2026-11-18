@@ -220,7 +220,7 @@ export function CrosshairPlus({ pane, suppress }: { pane: ChartPaneState; suppre
       <button
         type="button"
         data-crosshair-plus
-        className="fixed z-[35] flex h-6 w-6 items-center justify-center rounded-[4px] border border-(--app-border) bg-(--app-elevated) text-(--app-text) shadow-[0_2px_8px_rgba(0,0,0,0.45)] hover:bg-(--app-hover)"
+        className="fixed z-[35] flex h-6 w-6 items-center justify-center rounded-[4px] border border-(--app-border) bg-(--app-elevated) text-(--app-text) shadow-[var(--app-shadow-menu)] hover:bg-(--app-hover)"
         style={{ left: plus.left, top: plus.top }}
         onMouseEnter={() => {
           overPlusRef.current = true;
@@ -239,7 +239,7 @@ export function CrosshairPlus({ pane, suppress }: { pane: ChartPaneState; suppre
         <div
           ref={wrapRef}
           data-crosshair-plus
-          className="fixed z-[80] w-[220px] rounded-[8px] border border-(--app-border) bg-(--app-menu) py-1 shadow-[0_8px_28px_rgba(0,0,0,0.65)]"
+          className="fixed z-[80] w-[220px] rounded-[8px] border border-(--app-border) bg-(--app-menu) py-1 shadow-[var(--app-shadow-menu)]"
           style={{ left: menuLeft, top: menuTop }}
           onMouseDown={(e) => e.stopPropagation()}
           onMouseEnter={() => {
@@ -267,7 +267,7 @@ export function CrosshairPlus({ pane, suppress }: { pane: ChartPaneState; suppre
               setOpen(false);
             }}
           >
-            <ChevronsUp size={14} className="text-[#089981]" />
+            <ChevronsUp size={14} className="text-[var(--app-up)]" />
             <span className="plus-row-label">Buy {price}</span>
           </button>
           <button
@@ -288,7 +288,7 @@ export function CrosshairPlus({ pane, suppress }: { pane: ChartPaneState; suppre
               setOpen(false);
             }}
           >
-            <ChevronsDown size={14} className="text-[#f23645]" />
+            <ChevronsDown size={14} className="text-[var(--app-down)]" />
             <span className="plus-row-label">Sell {price}</span>
           </button>
           <button

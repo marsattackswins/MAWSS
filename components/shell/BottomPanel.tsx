@@ -114,10 +114,10 @@ export function hasConfirmedBroker(
 type StatusTone = "blue" | "green" | "yellow" | "red";
 
 const STATUS_COLOR: Record<StatusTone, string> = {
-  blue: "#2962ff",
-  green: "#089981",
+  blue: "var(--app-accent)",
+  green: "var(--app-up)",
   yellow: "#f0b90b",
-  red: "#f23645",
+  red: "var(--app-down)",
 };
 
 function StatusDot({ tone, pulse = false }: { tone: StatusTone; pulse?: boolean }) {
@@ -229,10 +229,10 @@ function LiveStatusIndicator() {
         onClick={() => {
           void toggleKillSwitch();
         }}
-        className={`inline-flex h-[20px] shrink-0 items-center rounded-full border px-2 text-[10px] font-semibold uppercase tracking-wide transition-colors disabled:cursor-wait disabled:opacity-60 ${
+        className={`inline-flex h-[20px] shrink-0 items-center rounded-full border px-2 text-[11px] font-semibold uppercase tracking-wide transition-colors disabled:cursor-wait disabled:opacity-60 ${
           killSwitch
-            ? "border-[#f23645] bg-[#f23645] text-white hover:bg-[#d92f3d]"
-            : "border-[#f23645]/50 bg-transparent text-[#f23645] hover:bg-[#f23645]/10"
+            ? "border-[var(--app-down)] bg-[var(--app-down)] text-white hover:bg-[var(--app-down)]/80"
+            : "border-(--app-down)/50 bg-transparent text-[var(--app-down)] hover:bg-(--app-down)/10"
         }`}
         title={killSwitch ? "Click to resume new order submissions" : "Click to engage the emergency kill switch and block new order submissions"}
       >

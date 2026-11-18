@@ -124,7 +124,7 @@ function CellOverlays({ ws, pane }: { ws: VelaWorkspace; pane: ChartPaneState })
               <button
                 type="button"
                 title={maximized ? "Restore layout (Esc)" : "Maximize chart"}
-                className="flex h-6 w-6 items-center justify-center rounded-[3px] text-(--app-muted) hover:bg-(--app-hover) hover:text-(--app-text)"
+                className="flex h-6 w-6 items-center justify-center rounded-[4px] text-(--app-muted) hover:bg-(--app-hover) hover:text-(--app-text)"
                 onClick={(e) => {
                   e.stopPropagation();
                   setActivePane(pane.id);

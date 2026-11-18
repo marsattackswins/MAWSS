@@ -83,7 +83,7 @@ export function KeyboardShortcutsPanel({ active }: { active: boolean }) {
         Click a shortcut, then press the new key combination. Esc cancels recording.
       </p>
       {conflict && (
-        <p className="mb-3 rounded-[4px] bg-(--app-hover) px-3 py-2 text-[12px] text-[#f23645]">
+        <p className="mb-3 rounded-[4px] bg-(--app-hover) px-3 py-2 text-[12px] text-[var(--app-down)]">
           {conflict}
         </p>
       )}
@@ -96,7 +96,7 @@ export function KeyboardShortcutsPanel({ active }: { active: boolean }) {
               return (
                 <div
                   key={def.id}
-                  className="flex items-center justify-between gap-3 rounded-[6px] px-1 py-1.5 hover:bg-[#222]"
+                  className="flex items-center justify-between gap-3 rounded-[4px] px-1 py-1.5 hover:bg-[#222]"
                 >
                   <span className={settingsUi.text}>{def.label}</span>
                   <div className="flex shrink-0 items-center gap-1.5">
@@ -109,7 +109,7 @@ export function KeyboardShortcutsPanel({ active }: { active: boolean }) {
                       className={`min-w-[108px] rounded-[4px] border px-2.5 py-1.5 text-[12px] font-medium tabular-nums ${
                         isRec
                           ? "border-white bg-(--app-hover) text-white"
-                          : "border-[#363a45] bg-(--app-hover) text-(--app-text) hover:border-[#787b86]"
+                          : "border-[var(--app-border)] bg-(--app-hover) text-(--app-text) hover:border-[var(--app-muted)]"
                       }`}
                     >
                       {isRec ? "Press keys…" : formatShortcut(chord)}

@@ -130,7 +130,7 @@ export function AlertsPanel() {
         {perm.supported && !perm.granted && (
           <button
             type="button"
-            className="mt-1 text-[10px] text-(--app-accent) hover:underline"
+            className="mt-1 text-[11px] text-(--app-accent) hover:underline"
             onClick={toggleDesktop}
           >
             {alertDesktop
@@ -141,7 +141,7 @@ export function AlertsPanel() {
       </div>
       <div className="min-h-0 flex-1 overflow-auto">
         <div
-          className="sticky top-0 z-10 grid border-b px-2 py-1 text-[10px] uppercase"
+          className="sticky top-0 z-10 grid border-b px-2 py-1 text-[11px] uppercase"
           style={{
             gridTemplateColumns: template,
             minWidth: "max-content",

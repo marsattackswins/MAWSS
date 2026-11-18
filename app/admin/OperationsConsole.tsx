@@ -735,7 +735,7 @@ function EventsPanel({ metrics }: { metrics: MetricsSnapshot | null }) {
         events.slice().reverse().slice(0, 12).map((event, index) => (
           <div key={`${event.ts}-${event.type}-${index}`} className="flex flex-wrap items-center gap-3 border-b border-[#2a2e39] px-4 py-2.5 text-sm last:border-0">
             <span className="w-20 shrink-0 font-mono text-xs text-[#787b86]">{formatTime(event.ts)}</span>
-            <span className="rounded border border-[#2a2e39] bg-[#1e2329] px-2 py-0.5 text-[10px] uppercase tracking-wide text-[#9aa1ad]">{event.type}</span>
+            <span className="rounded border border-[#2a2e39] bg-[#1e2329] px-2 py-0.5 text-[11px] uppercase tracking-wide text-[#9aa1ad]">{event.type}</span>
             <span className="min-w-0 flex-1 text-[#d1d4dc]">{event.label}</span>
           </div>
         ))

@@ -337,7 +337,7 @@ function paintFavoriteButton(button: HTMLButtonElement, favorite: boolean): void
   button.title = label;
   button.setAttribute("aria-label", label);
   button.setAttribute("aria-pressed", String(favorite));
-  button.style.color = favorite ? "#50d2c1" : "var(--app-muted)";
+  button.style.color = favorite ? "var(--app-accent)" : "var(--app-muted)";
   button.innerHTML = favorite ? DIAMOND_FILLED_ICON : DIAMOND_ICON;
 }
 

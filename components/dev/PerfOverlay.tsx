@@ -203,7 +203,7 @@ export function PerfOverlay() {
 
   const row = (label: string, value: string) => (
     <div className="flex items-baseline justify-between gap-4">
-      <span className="text-[10px] uppercase tracking-wide opacity-60">{label}</span>
+      <span className="text-[11px] uppercase tracking-wide opacity-60">{label}</span>
       <span className="tabular-nums">{value}</span>
     </div>
   );
@@ -211,11 +211,11 @@ export function PerfOverlay() {
   return (
     <div
       data-perf-overlay
-      className="fixed bottom-3 right-3 z-[9999] w-64 rounded-md border border-white/15 bg-black/80 p-3 font-mono text-[11px] leading-5 text-white shadow-xl"
+      className="fixed bottom-3 right-3 z-[9999] w-64 rounded-[4px] border border-white/15 bg-black/80 p-3 font-mono text-[11px] leading-5 text-white shadow-xl"
     >
       <div className="mb-1 flex items-center justify-between">
         <span className="text-[11px] font-semibold">perf readout</span>
-        <span className="text-[10px] opacity-60">?perf=1</span>
+        <span className="text-[11px] opacity-60">?perf=1</span>
       </div>
       {row("browser", `${browser.name} ${browser.version}`)}
       {row("dpr", String(typeof window === "undefined" ? 0 : window.devicePixelRatio))}

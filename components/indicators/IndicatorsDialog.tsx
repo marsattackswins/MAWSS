@@ -195,7 +195,7 @@ export function IndicatorsDialog() {
       >
         {/* Header */}
         <div className="flex shrink-0 items-center justify-between border-b border-[var(--app-border)] py-3 pl-5 pr-3">
-          <span className="text-[15px] font-semibold text-[var(--app-text)]">Indicators, metrics and strategies</span>
+          <span className="text-[13px] font-semibold text-[var(--app-text)]">Indicators, metrics and strategies</span>
           <button
             type="button"
             aria-label="Close"
@@ -217,7 +217,7 @@ export function IndicatorsDialog() {
               if (e.key === "Escape") close();
             }}
             placeholder="Search"
-            className="h-10 w-full bg-transparent text-[13px] text-[var(--app-text)] outline-none placeholder:text-[#4c525e]"
+            className="h-10 w-full bg-transparent text-[13px] text-[var(--app-text)] outline-none placeholder:text-[var(--app-faint)]"
           />
           {q ? (
             <button type="button" onClick={() => setQ("")} className="text-[var(--app-muted)] hover:text-[var(--app-text)]" aria-label="Clear">
@@ -251,9 +251,9 @@ export function IndicatorsDialog() {
             <>
               {liveScripts.length > 0 ? (
                 <div className="px-5 pt-3">
-                  <div className="mb-1 text-[10px] font-semibold uppercase tracking-[0.08em] text-(--app-muted)">On chart</div>
+                  <div className="mb-1 text-[11px] font-semibold uppercase tracking-[0.08em] text-(--app-muted)">On chart</div>
                   {liveScripts.map((l) => (
-                    <div key={l.id} className="group flex items-center gap-2 rounded-[6px] px-2 py-1.5 hover:bg-[var(--app-hover)]">
+                    <div key={l.id} className="group flex items-center gap-2 rounded-[4px] px-2 py-1.5 hover:bg-[var(--app-hover)]">
                       <span className="min-w-0 flex-1 truncate text-[13px] text-[var(--app-text)]">{l.title}</span>
                       <button
                         type="button"
@@ -264,7 +264,7 @@ export function IndicatorsDialog() {
                             refreshLive();
                           })
                         }
-                        className="shrink-0 text-[#4c525e] opacity-0 transition-opacity hover:text-(--app-text) group-hover:opacity-100"
+                        className="shrink-0 text-[var(--app-faint)] opacity-0 transition-opacity hover:text-(--app-text) group-hover:opacity-100"
                       >
                         {l.visible ? <Eye size={13} /> : <EyeOff size={13} />}
                       </button>
@@ -277,7 +277,7 @@ export function IndicatorsDialog() {
                             refreshLive();
                           })
                         }
-                        className="shrink-0 text-[#4c525e] opacity-0 transition-opacity hover:text-(--app-text) group-hover:opacity-100"
+                        className="shrink-0 text-[var(--app-faint)] opacity-0 transition-opacity hover:text-(--app-text) group-hover:opacity-100"
                       >
                         <X size={13} />
                       </button>
@@ -285,7 +285,7 @@ export function IndicatorsDialog() {
                         type="button"
                         title={fav(l.id) ? "Unpin from favorites" : "Pin to favorites"}
                         onClick={() => toggleFavorite(l.id)}
-                        className={`shrink-0 ${fav(l.id) ? "text-[#50d2c1]" : "text-[#4c525e] hover:text-(--app-muted)"}`}
+                        className={`shrink-0 ${fav(l.id) ? "text-[var(--app-accent)]" : "text-[var(--app-faint)] hover:text-(--app-muted)"}`}
                       >
                         <Diamond size={13} fill={fav(l.id) ? "currentColor" : "none"} />
                       </button>
@@ -296,7 +296,7 @@ export function IndicatorsDialog() {
               <div className="px-5 pt-3">
                 {scriptRows.length ? (
                   scriptRows.map((s) => (
-                    <div key={s.id} className="group flex items-center gap-2 rounded-[6px] px-2 py-1.5 hover:bg-[var(--app-hover)]">
+                    <div key={s.id} className="group flex items-center gap-2 rounded-[4px] px-2 py-1.5 hover:bg-[var(--app-hover)]">
                       <button
                         type="button"
                         className="min-w-0 flex-1 truncate text-left text-[13px] text-[var(--app-text)] hover:underline"
@@ -308,14 +308,14 @@ export function IndicatorsDialog() {
                       >
                         {s.name}
                       </button>
-                      <span className="shrink-0 text-[10px] uppercase text-(--app-muted)">pine</span>
+                      <span className="shrink-0 text-[11px] uppercase text-(--app-muted)">pine</span>
                       <Code2 size={13} className="shrink-0 text-(--app-muted)" />
                       <button
                         type="button"
                         title="Delete script"
                         aria-label={`Delete ${s.name}`}
                         onClick={() => deleteScript(s.id)}
-                        className="shrink-0 text-[#4c525e] opacity-0 transition-opacity hover:text-[#f23645] group-hover:opacity-100"
+                        className="shrink-0 text-[var(--app-faint)] opacity-0 transition-opacity hover:text-[var(--app-down)] group-hover:opacity-100"
                       >
                         <Trash2 size={13} />
                       </button>
@@ -323,7 +323,7 @@ export function IndicatorsDialog() {
                         type="button"
                         title={fav(`pine:${s.id}`) ? "Unpin from favorites" : "Pin to favorites"}
                         onClick={() => toggleFavorite(`pine:${s.id}`)}
-                        className={`shrink-0 ${fav(`pine:${s.id}`) ? "text-[#50d2c1]" : "text-[#4c525e] hover:text-(--app-muted)"}`}
+                        className={`shrink-0 ${fav(`pine:${s.id}`) ? "text-[var(--app-accent)]" : "text-[var(--app-faint)] hover:text-(--app-muted)"}`}
                       >
                         <Diamond size={13} fill={fav(`pine:${s.id}`) ? "currentColor" : "none"} />
                       </button>
@@ -368,7 +368,7 @@ export function IndicatorsDialog() {
                           e.stopPropagation();
                           toggleFavorite(favKey);
                         }}
-                        className={`shrink-0 ${fav(favKey) ? "text-[#50d2c1]" : "text-[#4c525e] opacity-0 group-hover:opacity-100 hover:text-(--app-muted)"}`}
+                        className={`shrink-0 ${fav(favKey) ? "text-[var(--app-accent)]" : "text-[var(--app-faint)] opacity-0 group-hover:opacity-100 hover:text-(--app-muted)"}`}
                       >
                         <Diamond size={13} fill={fav(favKey) ? "currentColor" : "none"} />
                       </button>

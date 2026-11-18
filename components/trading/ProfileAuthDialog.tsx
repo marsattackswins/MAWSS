@@ -67,7 +67,7 @@ export function ProfileAuthDialog({
         aria-labelledby="profile-auth-title"
         aria-describedby="profile-auth-description"
         onSubmit={onSubmit}
-        className="relative w-[440px] max-w-full rounded-[12px] border border-(--app-border) bg-(--app-elevated) shadow-[0_24px_60px_-24px_rgba(0,0,0,0.55)]"
+        className="relative w-[440px] max-w-full rounded-[8px] border border-(--app-border) bg-(--app-elevated) shadow-[var(--app-shadow-dialog)]"
         style={{ ["--auth-accent" as string]: "var(--app-accent)" }}
       >
         {/* Meta strip: which product this dialog belongs to and which environment. */}
@@ -82,7 +82,7 @@ export function ProfileAuthDialog({
               className="size-1.5 rounded-full"
               style={{ background: live ? "var(--app-down)" : "var(--app-up)" }}
             />
-            <span className="text-[10px] font-semibold uppercase tracking-[0.10em] text-(--app-text)">
+            <span className="text-[11px] font-semibold uppercase tracking-[0.10em] text-(--app-text)">
               {live ? "Live" : "Testnet"}
             </span>
           </span>
@@ -91,7 +91,7 @@ export function ProfileAuthDialog({
         {/* Hero: exchange mark, which profile, and the one risk line that matters. */}
         <div className="flex items-start gap-3 px-5 pt-4">
           <span
-            className="flex h-10 w-10 shrink-0 items-center justify-center rounded-[9px] border"
+            className="flex h-10 w-10 shrink-0 items-center justify-center rounded-[8px] border"
             style={{
               color: "var(--app-accent)",
               borderColor: "color-mix(in srgb, var(--app-accent) 28%, transparent)",
@@ -101,7 +101,7 @@ export function ProfileAuthDialog({
             <BinanceMark />
           </span>
           <div className="min-w-0 pt-0.5">
-            <h2 id="profile-auth-title" className="text-[17px] font-semibold leading-6 text-(--app-text)">
+            <h2 id="profile-auth-title" className="text-[16px] font-semibold leading-6 text-(--app-text)">
               Connect to {label}
             </h2>
             <p id="profile-auth-description" className="mt-1 text-[13px] leading-5 text-(--app-muted)">
@@ -151,7 +151,7 @@ export function ProfileAuthDialog({
               onKeyDown={trackCaps}
               placeholder="Enter operator password"
               aria-invalid={error ? true : undefined}
-              className="profile-auth-field h-11 w-full rounded-[6px] border border-(--app-border) bg-(--app-bg) px-3 pr-10 text-[14px] text-(--app-text) outline-none transition-colors placeholder:text-(--app-muted) hover:border-(--app-muted)"
+              className="profile-auth-field h-11 w-full rounded-[4px] border border-(--app-border) bg-(--app-bg) px-3 pr-10 text-[13px] text-(--app-text) outline-none transition-colors placeholder:text-(--app-muted) hover:border-(--app-muted)"
               style={
                 error
                   ? { borderColor: "color-mix(in srgb, var(--app-down) 65%, transparent)" }
@@ -164,7 +164,7 @@ export function ProfileAuthDialog({
               aria-pressed={revealed}
               onMouseDown={(event) => event.preventDefault()}
               onClick={() => setRevealed((value) => !value)}
-              className="absolute right-1 top-1 flex h-8 w-8 items-center justify-center rounded-[5px] text-(--app-muted) transition-colors hover:bg-(--app-hover) hover:text-(--app-text)"
+              className="absolute right-1 top-1 flex h-8 w-8 items-center justify-center rounded-[4px] text-(--app-muted) transition-colors hover:bg-(--app-hover) hover:text-(--app-text)"
             >
               {revealed ? <EyeOff size={15} /> : <Eye size={15} />}
             </button>
@@ -173,7 +173,7 @@ export function ProfileAuthDialog({
           {error ? (
             <div
               role="alert"
-              className="mt-2 flex items-start gap-2 rounded-[6px] border px-2.5 py-2 text-[12px] leading-4"
+              className="mt-2 flex items-start gap-2 rounded-[4px] border px-2.5 py-2 text-[12px] leading-4"
               style={{
                 borderColor: "color-mix(in srgb, var(--app-down) 40%, transparent)",
                 background: "color-mix(in srgb, var(--app-down) 10%, transparent)",
@@ -190,14 +190,14 @@ export function ProfileAuthDialog({
           <button
             type="button"
             onClick={onCancel}
-            className="h-9 rounded-[6px] px-3 text-[13px] font-medium text-(--app-muted) transition-colors hover:bg-(--app-hover) hover:text-(--app-text)"
+            className="h-9 rounded-[4px] px-3 text-[13px] font-medium text-(--app-muted) transition-colors hover:bg-(--app-hover) hover:text-(--app-text)"
           >
             Cancel
           </button>
           <button
             type="submit"
             disabled={busy || password.length === 0}
-            className="accent-button group flex h-9 items-center gap-1.5 rounded-[6px] px-4 text-[13px] font-semibold transition-[filter] hover:brightness-110"
+            className="accent-button group flex h-9 items-center gap-1.5 rounded-[4px] px-4 text-[13px] font-semibold transition-[filter] hover:brightness-110"
           >
             {busy ? <LoaderCircle size={13} className="animate-spin" /> : null}
             {busy ? "Connecting…" : "Connect"}

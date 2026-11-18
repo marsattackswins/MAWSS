@@ -134,7 +134,7 @@ function toDraft(
           ? DEFAULT_RECT_BORDER_COLOR
           : d.tool === "circle"
             ? DEFAULT_CIRCLE_BORDER_COLOR
-            : "#2962ff"),
+            : "var(--app-accent)"),
     lineWidth: d.lineWidth ?? 2,
     lineStyle: d.lineStyle ?? "solid",
     extend: d.extend ?? "none",
@@ -272,10 +272,10 @@ function StatsMultiSelect({
         onClick={() => setOpen((v) => !v)}
       >
         <span className="truncate">{summary}</span>
-        <span className="shrink-0 text-[10px] text-(--app-muted)">▾</span>
+        <span className="shrink-0 text-[11px] text-(--app-muted)">▾</span>
       </button>
       {open ? (
-        <div className="absolute top-[calc(100%+4px)] right-0 z-20 max-h-[240px] w-[240px] overflow-y-auto rounded-[6px] border border-[#363a45] bg-(--app-menu) py-1 shadow-[0_8px_28px_rgba(0,0,0,0.65)]">
+        <div className="absolute top-[calc(100%+4px)] right-0 z-20 max-h-[240px] w-[240px] overflow-y-auto rounded-[4px] border border-[var(--app-border)] bg-(--app-menu) py-1 shadow-[var(--app-shadow-menu)]">
           {ALL_POSITION_STATS.map((key) => {
             const on = selected.has(key);
             return (
@@ -285,7 +285,7 @@ function StatsMultiSelect({
               >
                 <input
                   type="checkbox"
-                  className="accent-[#2962ff]"
+                  className="accent-[var(--app-accent)]"
                   checked={on}
                   onChange={() => {
                     if (on) onChange(value.filter((k) => k !== key));
@@ -809,7 +809,7 @@ export function DrawingSettingsModal() {
               <div className="flex items-center gap-2 py-1">
                 <input
                   type="checkbox"
-                  className="accent-[#2962ff]"
+                  className="accent-[var(--app-accent)]"
                   checked={draft.fibTrendVisible}
                   onChange={(e) => patch({ fibTrendVisible: e.target.checked })}
                 />
@@ -867,13 +867,13 @@ export function DrawingSettingsModal() {
                     <option value="dashed">Dashed</option>
                     <option value="dotted">Dotted</option>
                   </select>
-                  <svg width="36" height="12" className="shrink-0">
+                  <svg width="36" height="12" className="shrink-0 text-(--app-text)">
                     <line
                       x1="0"
                       y1="6"
                       x2="36"
                       y2="6"
-                      stroke="#d1d4dc"
+                      stroke="currentColor"
                       strokeWidth={draft.lineWidth}
                       strokeDasharray={dashFor(draft.lineStyle)}
                     />
@@ -901,7 +901,7 @@ export function DrawingSettingsModal() {
                   <div key={`${lvl.level}-${i}`} className="flex items-center gap-1.5">
                     <input
                       type="checkbox"
-                      className="accent-[#2962ff]"
+                      className="accent-[var(--app-accent)]"
                       checked={lvl.visible}
                       onChange={(e) => {
                         const fibLevels = draft.fibLevels.map((l, idx) =>
@@ -941,7 +941,7 @@ export function DrawingSettingsModal() {
               <div className="flex items-center gap-2 py-1">
                 <input
                   type="checkbox"
-                  className="accent-[#2962ff]"
+                  className="accent-[var(--app-accent)]"
                   checked={draft.fibUseOneColor}
                   onChange={(e) => patch({ fibUseOneColor: e.target.checked })}
                 />
@@ -956,7 +956,7 @@ export function DrawingSettingsModal() {
               <div className="flex items-center gap-2 py-1">
                 <input
                   type="checkbox"
-                  className="accent-[#2962ff]"
+                  className="accent-[var(--app-accent)]"
                   checked={draft.fibBackground}
                   onChange={(e) => patch({ fibBackground: e.target.checked })}
                 />
@@ -966,7 +966,7 @@ export function DrawingSettingsModal() {
                   min={0}
                   max={100}
                   value={draft.fibBackgroundOpacity}
-                  className="h-1.5 w-[140px] accent-[#2962ff]"
+                  className="h-1.5 w-[140px] accent-[var(--app-accent)]"
                   onChange={(e) =>
                     patch({ fibBackgroundOpacity: Number(e.target.value) || 0 })
                   }
@@ -988,7 +988,7 @@ export function DrawingSettingsModal() {
               <div className="flex items-center gap-2 py-1">
                 <input
                   type="checkbox"
-                  className="accent-[#2962ff]"
+                  className="accent-[var(--app-accent)]"
                   checked={draft.fibShowLevels}
                   onChange={(e) => patch({ fibShowLevels: e.target.checked })}
                 />
@@ -1041,7 +1041,7 @@ export function DrawingSettingsModal() {
               <div className="flex items-center gap-2 py-1">
                 <input
                   type="checkbox"
-                  className="accent-[#2962ff]"
+                  className="accent-[var(--app-accent)]"
                   checked={draft.fibShowText}
                   onChange={(e) => patch({ fibShowText: e.target.checked })}
                 />
@@ -1077,7 +1077,7 @@ export function DrawingSettingsModal() {
               </div>
               {draft.fibShowText && (
                 <textarea
-                  className="min-h-[64px] w-full resize-y rounded-[4px] border border-[#363a45] bg-[#0b0e14] px-3 py-2 text-[13px] text-(--app-text) outline-none focus:border-[#2962ff]"
+                  className="min-h-[64px] w-full resize-y rounded-[4px] border border-[var(--app-border)] bg-[var(--app-bg)] px-3 py-2 text-[13px] text-(--app-text) outline-none focus:border-[var(--app-accent)]"
                   placeholder="Add text"
                   value={draft.text}
                   onChange={(e) => patch({ text: e.target.value })}
@@ -1148,7 +1148,7 @@ export function DrawingSettingsModal() {
               <div className="flex items-center gap-2 py-1.5">
                 <input
                   type="checkbox"
-                  className="accent-[#2962ff]"
+                  className="accent-[var(--app-accent)]"
                   checked={draft.showMiddlePoint}
                   onChange={(e) => patch({ showMiddlePoint: e.target.checked })}
                 />
@@ -1185,7 +1185,7 @@ export function DrawingSettingsModal() {
               <div className="flex items-center gap-2 py-1.5">
                 <input
                   type="checkbox"
-                  className="accent-[#2962ff]"
+                  className="accent-[var(--app-accent)]"
                   checked={draft.fillVisible}
                   onChange={(e) => patch({ fillVisible: e.target.checked })}
                 />
@@ -1248,7 +1248,7 @@ export function DrawingSettingsModal() {
               <div className="flex items-center gap-2 py-1.5">
                 <input
                   type="checkbox"
-                  className="accent-[#2962ff]"
+                  className="accent-[var(--app-accent)]"
                   checked={draft.fillVisible}
                   onChange={(e) => patch({ fillVisible: e.target.checked })}
                 />
@@ -1318,7 +1318,7 @@ export function DrawingSettingsModal() {
               <label className="flex items-center gap-2 py-1 text-[13px] text-(--app-text)">
                 <input
                   type="checkbox"
-                  className="accent-[#2962ff]"
+                  className="accent-[var(--app-accent)]"
                   checked={draft.showMiddlePoint}
                   onChange={(e) => patch({ showMiddlePoint: e.target.checked })}
                 />
@@ -1327,7 +1327,7 @@ export function DrawingSettingsModal() {
               <label className="flex items-center gap-2 py-1 text-[13px] text-(--app-text)">
                 <input
                   type="checkbox"
-                  className="accent-[#2962ff]"
+                  className="accent-[var(--app-accent)]"
                   checked={draft.showPriceLabels}
                   onChange={(e) => patch({ showPriceLabels: e.target.checked })}
                 />
@@ -1357,7 +1357,7 @@ export function DrawingSettingsModal() {
                 </select>
                 <button
                   type="button"
-                  className={`flex h-7 w-7 items-center justify-center rounded border border-[#363a45] text-[13px] font-bold ${
+                  className={`flex h-7 w-7 items-center justify-center rounded border border-[var(--app-border)] text-[13px] font-bold ${
                     draft.textBold ? "bg-(--app-hover) text-white" : "text-(--app-text)"
                   }`}
                   onClick={() => patch({ textBold: !draft.textBold })}
@@ -1366,7 +1366,7 @@ export function DrawingSettingsModal() {
                 </button>
                 <button
                   type="button"
-                  className={`flex h-7 w-7 items-center justify-center rounded border border-[#363a45] text-[13px] italic ${
+                  className={`flex h-7 w-7 items-center justify-center rounded border border-[var(--app-border)] text-[13px] italic ${
                     draft.textItalic ? "bg-(--app-hover) text-white" : "text-(--app-text)"
                   }`}
                   onClick={() => patch({ textItalic: !draft.textItalic })}
@@ -1375,7 +1375,7 @@ export function DrawingSettingsModal() {
                 </button>
               </div>
               <textarea
-                className="min-h-[88px] w-full resize-y rounded-[4px] border border-[#2962ff] bg-[#0b0e14] px-3 py-2 text-[13px] text-(--app-text) outline-none"
+                className="min-h-[88px] w-full resize-y rounded-[4px] border border-[var(--app-accent)] bg-[var(--app-bg)] px-3 py-2 text-[13px] text-(--app-text) outline-none"
                 placeholder="Add text"
                 value={draft.text}
                 onChange={(e) => patch({ text: e.target.value })}

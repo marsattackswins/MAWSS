@@ -134,7 +134,7 @@ export function VelaTemplateMenu() {
                       aria-label={tpl.favorite ? `Remove ${tpl.name} from favorites` : `Add ${tpl.name} to favorites`}
                       aria-pressed={Boolean(tpl.favorite)}
                       className={`flex h-7 w-7 shrink-0 items-center justify-center rounded-[4px] hover:bg-(--app-hover) ${
-                        tpl.favorite ? "text-[#f0b90b]" : "text-(--app-muted) hover:text-(--app-text)"
+                        tpl.favorite ? "text-[var(--app-warn)]" : "text-(--app-muted) hover:text-(--app-text)"
                       }`}
                       onClick={() => {
                         if (!toggleTemplateFavorite(tpl.id)) {
@@ -155,7 +155,7 @@ export function VelaTemplateMenu() {
                     <button
                       type="button"
                       title="Delete template"
-                      className="flex h-7 w-7 shrink-0 items-center justify-center rounded-[4px] text-(--app-muted) hover:bg-(--app-hover) hover:text-[#f23645]"
+                      className="flex h-7 w-7 shrink-0 items-center justify-center rounded-[4px] text-(--app-muted) hover:bg-(--app-hover) hover:text-[var(--app-down)]"
                       onClick={() => removeTemplate(tpl.id)}
                     >
                       <Trash2 size={14} strokeWidth={1.6} />

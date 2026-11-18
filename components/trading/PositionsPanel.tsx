@@ -42,7 +42,7 @@ export function FreshnessBadge({ live }: { live: boolean }) {
     ? `Stale · last update ${ageS == null ? "—" : `${ageS}s`} ago`
     : `Live · updated ${ageS}s ago`;
   return (
-    <span className="whitespace-nowrap text-[11px] font-semibold" style={{ color: isStale ? "#f0b90b" : "#089981" }}>
+    <span className="whitespace-nowrap text-[11px] font-semibold" style={{ color: isStale ? "#f0b90b" : "var(--app-up)" }}>
       {label}
     </span>
   );
@@ -60,10 +60,10 @@ function Metric({
   tone?: "up" | "down" | "muted";
 }) {
   const color =
-    tone === "up" ? "text-[#089981]" : tone === "down" ? "text-[#f23645]" : "text-(--app-text)";
+    tone === "up" ? "text-[var(--app-up)]" : tone === "down" ? "text-[var(--app-down)]" : "text-(--app-text)";
   return (
     <span className="flex flex-col justify-center gap-[3px] whitespace-nowrap border-l border-[var(--maws-border)] px-4 py-[5px] first:border-l-0">
-      <span className="text-[9px] font-semibold uppercase leading-none tracking-[0.08em] text-(--app-muted)">{label}</span>
+      <span className="text-[11px] font-semibold uppercase leading-none tracking-[0.08em] text-(--app-muted)">{label}</span>
       <span className={`text-[13px] font-semibold leading-none ${color}`}>{value}</span>
     </span>
   );
@@ -99,7 +99,7 @@ export function PnlCell({
         <span
           role="status"
           aria-label={ageS != null ? `Unrealized PnL is a fill-time snapshot, mark age ${ageS} seconds` : "Unrealized PnL is a fill-time snapshot"}
-          className="ml-1 align-[2px] text-[9px] font-bold uppercase text-[#f0b90b]"
+          className="ml-1 align-[2px] text-[11px] font-bold uppercase text-[#f0b90b]"
         >
           stale
         </span>
@@ -136,11 +136,11 @@ function formatStamp(ms: number, timeZone = "Africa/Casablanca") {
 function StatusTone({ status }: { status: string }) {
   const color =
     status === "filled"
-      ? "text-[#089981]"
+      ? "text-[var(--app-up)]"
       : status === "cancelled"
-        ? "text-[#ff9800]"
+        ? "text-[var(--app-warn)]"
         : status === "rejected"
-          ? "text-[#f23645]"
+          ? "text-[var(--app-down)]"
           : "text-(--app-muted)";
   return <span className={`capitalize ${color}`}>{status}</span>;
 }
@@ -449,11 +449,11 @@ export function PositionsPanel() {
               : "Trade with your broker"}
             <ChevronDown size={14} className="text-(--app-muted)" />
             {freshness}
-            {live && !liveReady ? <span className="ml-1 text-[10px] font-normal text-[#f0b90b]">{profilePhaseLabel(livePhase)}</span> : null}
+            {live && !liveReady ? <span className="ml-1 text-[11px] font-normal text-[#f0b90b]">{profilePhaseLabel(livePhase)}</span> : null}
           </button>
           {brokerMenuOpen && (
             <div
-              className="absolute top-full left-0 z-50 mt-1 w-[210px] rounded-[8px] border border-(--app-border) bg-(--app-menu) py-1 shadow-[0_8px_28px_rgba(0,0,0,0.65)]"
+              className="absolute top-full left-0 z-50 mt-1 w-[210px] rounded-[8px] border border-(--app-border) bg-(--app-menu) py-1 shadow-[var(--app-shadow-menu)]"
               role="menu"
               onMouseDown={(e) => e.stopPropagation()}
             >
@@ -489,7 +489,7 @@ export function PositionsPanel() {
         <div className="ml-auto flex shrink-0 items-center gap-0.5">
           <button
             type="button"
-            className="flex h-6 w-6 items-center justify-center rounded-[3px] text-(--app-muted) hover:bg-(--app-hover) hover:text-(--app-text)"
+            className="flex h-6 w-6 items-center justify-center rounded-[4px] text-(--app-muted) hover:bg-(--app-hover) hover:text-(--app-text)"
             title="Collapse"
             onClick={() => setBottomOpen(false)}
           >
@@ -497,7 +497,7 @@ export function PositionsPanel() {
           </button>
           <button
             type="button"
-            className="flex h-6 w-6 items-center justify-center rounded-[3px] text-(--app-muted) hover:bg-(--app-hover) hover:text-(--app-text)"
+            className="flex h-6 w-6 items-center justify-center rounded-[4px] text-(--app-muted) hover:bg-(--app-hover) hover:text-(--app-text)"
             title="Expand to half screen"
             onClick={(event) => {
               const section = event.currentTarget.closest<HTMLElement>("section");
@@ -557,12 +557,12 @@ export function PositionsPanel() {
                       <td className="px-2 py-1.5">
                         {formatTicker(p.symbol)}
                         {p.protectionStatus === "UNPROTECTED" && (
-                          <span className="ml-1 text-[#f23645]" title="The recorded TP/SL protection is missing or could not be confirmed">
+                          <span className="ml-1 text-[var(--app-down)]" title="The recorded TP/SL protection is missing or could not be confirmed">
                             UNPROTECTED
                           </span>
                         )}
                       </td>
-                      <td className={`px-2 py-1.5 ${p.side === "long" ? "text-[#2962ff]" : "text-[#f23645]"}`}>
+                      <td className={`px-2 py-1.5 ${p.side === "long" ? "text-[var(--app-accent)]" : "text-[var(--app-down)]"}`}>
                         {p.side === "long" ? "Buy" : "Sell"}
                       </td>
                       <td className="px-2 py-1.5">{formatPrice(p.symbol, p.entry)}</td>
@@ -571,11 +571,11 @@ export function PositionsPanel() {
                       <td className="px-2 py-1.5">{formatNum(mgn)}</td>
                       <td className="px-2 py-1.5">{p.leverage}x</td>
                       <td className="px-2 py-1.5">{formatNum(notional)}</td>
-                      <td className={`px-2 py-1.5 ${pct >= 0 ? "text-[#089981]" : "text-[#f23645]"}`}>
+                      <td className={`px-2 py-1.5 ${pct >= 0 ? "text-[var(--app-up)]" : "text-[var(--app-down)]"}`}>
                         {pct >= 0 ? "+" : ""}
                         {formatNum(pct)}%
                       </td>
-                      <td className={`px-2 py-1.5 ${pnl >= 0 ? "text-[#089981]" : "text-[#f23645]"}`}>
+                      <td className={`px-2 py-1.5 ${pnl >= 0 ? "text-[var(--app-up)]" : "text-[var(--app-down)]"}`}>
                         <PnlCell pnl={pnl} markPriceStale={p.markPriceStale} markAgeMs={p.markAgeMs} />
                       </td>
                       <td className="px-2 py-1.5 text-(--app-muted)">—</td>
@@ -634,7 +634,7 @@ export function PositionsPanel() {
                 {ordRows.map((o) => (
                   <tr key={o.id} className="border-t border-(--app-border) text-(--app-text)">
                     <td className="px-2 py-1.5">{formatTicker(o.symbol)}</td>
-                    <td className={`px-2 py-1.5 ${o.side === "buy" ? "text-[#2962ff]" : "text-[#f23645]"}`}>
+                    <td className={`px-2 py-1.5 ${o.side === "buy" ? "text-[var(--app-accent)]" : "text-[var(--app-down)]"}`}>
                       {o.side === "buy" ? "Buy" : "Sell"}
                     </td>
                     <td className="px-2 py-1.5 capitalize">{o.type}</td>
@@ -723,7 +723,7 @@ export function PositionsPanel() {
                         </td>
                         <td
                           className={`px-2 py-1.5 ${
-                            o.side === "buy" ? "text-[#2962ff]" : "text-[#f23645]"
+                            o.side === "buy" ? "text-[var(--app-accent)]" : "text-[var(--app-down)]"
                           }`}
                         >
                           {o.side === "buy" ? "Buy" : "Sell"}
@@ -800,9 +800,9 @@ export function PositionsPanel() {
                       const isPnl = b.type === "realized_pnl";
                       const pnlColor =
                         b.amount > 0
-                          ? "text-[#089981]"
+                          ? "text-[var(--app-up)]"
                           : b.amount < 0
-                            ? "text-[#f23645]"
+                            ? "text-[var(--app-down)]"
                             : "text-(--app-text)";
                       return (
                         <tr key={b.id} className="border-t border-(--app-border) text-(--app-text)">

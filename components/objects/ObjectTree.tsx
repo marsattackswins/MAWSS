@@ -47,7 +47,7 @@ export function ObjectTree() {
             <div key={pane.id} className="px-1">
               <button
                 type="button"
-                className={`flex w-full items-center gap-1 rounded-[3px] px-1 py-1 text-left ${
+                className={`flex w-full items-center gap-1 rounded-[4px] px-1 py-1 text-left ${
                   active ? "bg-[var(--maws-elevated)]" : "hover:bg-[var(--maws-elevated)]"
                 }`}
                 onClick={() => {

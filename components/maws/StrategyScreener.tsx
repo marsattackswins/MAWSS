@@ -271,7 +271,7 @@ function ColumnHeader({
 }) {
   return (
     <div
-      className="flex h-[28px] shrink-0 items-center border-b px-3 text-[10px] font-medium uppercase tracking-[0.05em]"
+      className="flex h-[28px] shrink-0 items-center border-b px-3 text-[11px] font-medium uppercase tracking-[0.05em]"
       style={{ color: "var(--app-muted)", borderColor: "var(--app-border)" }}
     >
       <div className="relative flex min-w-0 flex-1 items-center h-full">

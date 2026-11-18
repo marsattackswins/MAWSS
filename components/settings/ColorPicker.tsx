@@ -13,11 +13,11 @@ import { createPortal } from "react-dom";
 
 /** Match settings panel chrome (`settingsUi`). */
 const popoverShell =
-  "overflow-hidden rounded-[8px] border border-(--app-border) bg-(--app-elevated) shadow-[0_8px_28px_rgba(0,0,0,0.65)]";
+  "overflow-hidden rounded-[8px] border border-(--app-border) bg-(--app-elevated) shadow-[var(--app-shadow-menu)]";
 const divider = "h-px bg-(--app-hover)";
 const labelClass = "text-[12px] text-(--app-muted)";
 const inputClass =
-  "h-7 min-w-0 rounded-[4px] border border-[#363a45] bg-(--app-hover) px-2 text-[12px] text-(--app-text) outline-none focus:border-[#787b86]";
+  "h-7 min-w-0 rounded-[4px] border border-[var(--app-border)] bg-(--app-hover) px-2 text-[12px] text-(--app-text) outline-none focus:border-[var(--app-muted)]";
 const primaryBtnClass =
   "h-7 shrink-0 rounded-[4px] bg-white px-2.5 text-[12px] font-semibold text-black hover:bg-[#e0e3eb]";
 
@@ -126,7 +126,7 @@ export function parseColorValue(
   value: string | undefined,
   opacityFallback = 100,
 ): { hex: string; opacity: number } {
-  if (!value) return { hex: "#787b86", opacity: opacityFallback };
+  if (!value) return { hex: "var(--app-muted)", opacity: opacityFallback };
   const trimmed = value.trim();
   const rgba =
     trimmed.match(
@@ -144,7 +144,7 @@ export function parseColorValue(
   }
   const hex = normalizeHex(trimmed);
   if (hex) return { hex, opacity: opacityFallback };
-  return { hex: "#787b86", opacity: opacityFallback };
+  return { hex: "var(--app-muted)", opacity: opacityFallback };
 }
 
 function loadCustomColors(): string[] {
@@ -175,10 +175,10 @@ function checkerStyle(color: string): CSSProperties {
   return {
     backgroundImage: `
       linear-gradient(${color}, ${color}),
-      linear-gradient(45deg, #2a2e39 25%, transparent 25%),
-      linear-gradient(-45deg, #2a2e39 25%, transparent 25%),
-      linear-gradient(45deg, transparent 75%, #2a2e39 75%),
-      linear-gradient(-45deg, transparent 75%, #2a2e39 75%)
+      linear-gradient(45deg, var(--app-hover) 25%, transparent 25%),
+      linear-gradient(-45deg, var(--app-hover) 25%, transparent 25%),
+      linear-gradient(45deg, transparent 75%, var(--app-hover) 75%),
+      linear-gradient(-45deg, transparent 75%, var(--app-hover) 75%)
     `,
     backgroundSize: "100% 100%, 8px 8px, 8px 8px, 8px 8px, 8px 8px",
     backgroundPosition: "0 0, 0 0, 0 4px, 4px -4px, -4px 0",
@@ -201,8 +201,8 @@ function SwatchButton({
       type="button"
       title={title ?? color}
       onClick={onClick}
-      className={`aspect-square w-full rounded-[2px] border ${
-        selected ? "border-white ring-1 ring-[#2a2e39]" : "border-[#1b1b1b] hover:border-[#787b86]"
+      className={`aspect-square w-full rounded-[4px] border ${
+        selected ? "border-white ring-1 ring-[var(--app-hover)]" : "border-[var(--app-border)] hover:border-[var(--app-muted)]"
       }`}
       style={{ backgroundColor: color }}
     />
@@ -278,7 +278,7 @@ function CustomColorEditor({
     <div className={`box-border w-[228px] p-2.5 ${popoverShell}`}>
       <div className="mb-2.5 flex items-center gap-1.5">
         <div
-          className="h-7 w-7 shrink-0 rounded-[4px] border border-[#363a45]"
+          className="h-7 w-7 shrink-0 rounded-[4px] border border-[var(--app-border)]"
           style={{ backgroundColor: current }}
         />
         <input
@@ -315,7 +315,7 @@ function CustomColorEditor({
           onPointerDown={(e) => bindDrag((ev) => pickSv(ev.clientX, ev.clientY), e)}
         >
           <div
-            className="pointer-events-none absolute h-3 w-3 -translate-x-1/2 -translate-y-1/2 rounded-full border-2 border-white shadow-[0_0_0_1px_rgba(0,0,0,0.45)]"
+            className="pointer-events-none absolute h-3 w-3 -translate-x-1/2 -translate-y-1/2 rounded-full border-2 border-white shadow-[var(--app-shadow-menu)]"
             style={{ left: `${hsva.s}%`, top: `${100 - hsva.v}%` }}
           />
         </div>
@@ -329,7 +329,7 @@ function CustomColorEditor({
           onPointerDown={(e) => bindDrag((ev) => pickHue(ev.clientY), e)}
         >
           <div
-            className="pointer-events-none absolute left-1/2 h-2.5 w-[18px] -translate-x-1/2 -translate-y-1/2 rounded-[2px] border-2 border-white bg-transparent shadow-[0_0_0_1px_rgba(0,0,0,0.45)]"
+            className="pointer-events-none absolute left-1/2 h-2.5 w-[18px] -translate-x-1/2 -translate-y-1/2 rounded-[4px] border-2 border-white bg-transparent shadow-[var(--app-shadow-menu)]"
             style={{ top: `${(hsva.h / 360) * 100}%` }}
           />
         </div>
@@ -472,8 +472,8 @@ export function SettingsColorSwatch({
           setCustomOpen(false);
         }}
         className={`h-7 w-7 shrink-0 rounded-[4px] border ${
-          open ? "border-white" : "border-[#363a45]"
-        } ${disabled ? "pointer-events-none opacity-40" : "hover:border-[#787b86]"}`}
+          open ? "border-white" : "border-[var(--app-border)]"
+        } ${disabled ? "pointer-events-none opacity-40" : "hover:border-[var(--app-muted)]"}`}
         style={checkerStyle(preview)}
       />
 
@@ -530,7 +530,7 @@ export function SettingsColorSwatch({
                         e.stopPropagation();
                         setCustomOpen(true);
                       }}
-                      className="flex aspect-square w-full items-center justify-center rounded-[2px] border border-[#363a45] bg-(--app-hover) text-[13px] leading-none text-(--app-text) hover:border-[#787b86] hover:bg-(--app-hover) hover:text-white"
+                      className="flex aspect-square w-full items-center justify-center rounded-[4px] border border-[var(--app-border)] bg-(--app-hover) text-[13px] leading-none text-(--app-text) hover:border-[var(--app-muted)] hover:bg-(--app-hover) hover:text-white"
                     >
                       +
                     </button>
@@ -546,10 +546,10 @@ export function SettingsColorSwatch({
                             style={{
                               backgroundImage: `
                                 linear-gradient(to right, transparent, ${hex}),
-                                linear-gradient(45deg, #2a2e39 25%, transparent 25%),
-                                linear-gradient(-45deg, #2a2e39 25%, transparent 25%),
-                                linear-gradient(45deg, transparent 75%, #2a2e39 75%),
-                                linear-gradient(-45deg, transparent 75%, #2a2e39 75%)
+                                linear-gradient(45deg, var(--app-hover) 25%, transparent 25%),
+                                linear-gradient(-45deg, var(--app-hover) 25%, transparent 25%),
+                                linear-gradient(45deg, transparent 75%, var(--app-hover) 75%),
+                                linear-gradient(-45deg, transparent 75%, var(--app-hover) 75%)
                               `,
                               backgroundSize: "100% 100%, 6px 6px, 6px 6px, 6px 6px, 6px 6px",
                               backgroundPosition: "0 0, 0 0, 0 3px, 3px -3px, -3px 0",

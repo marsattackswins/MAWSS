@@ -13,7 +13,7 @@ import type {
 export const settingsUi = {
   overlay: "fixed inset-0 z-[80] flex items-center justify-center bg-transparent",
   panel:
-    "flex max-h-[min(640px,calc(100vh-48px))] w-full flex-col overflow-hidden rounded-[8px] bg-[var(--app-elevated)] shadow-[0_8px_28px_rgba(0,0,0,0.65)]",
+    "flex max-h-[min(640px,calc(100vh-48px))] w-full flex-col overflow-hidden rounded-[8px] bg-[var(--app-elevated)] shadow-[var(--app-shadow-menu)]",
   header:
     "flex shrink-0 items-center justify-between border-b border-[var(--app-border)] px-5 py-3.5",
   title: "text-[16px] font-semibold text-[var(--app-text)]",
@@ -35,13 +35,13 @@ export const settingsUi = {
   text: "text-[13px] text-[var(--app-text)]",
   muted: "text-[12px] text-[var(--app-muted)]",
   input:
-    "h-8 rounded-[4px] border border-[#363a45] bg-[var(--app-bg)] px-2.5 text-[13px] text-[var(--app-text)] outline-none focus:border-[var(--app-muted)] disabled:opacity-45",
+    "h-8 rounded-[4px] border border-[var(--app-border)] bg-[var(--app-bg)] px-2.5 text-[13px] text-[var(--app-text)] outline-none focus:border-[var(--app-muted)] disabled:opacity-45",
   inputSm:
-    "h-8 w-[88px] rounded-[4px] border border-[#363a45] bg-[var(--app-bg)] px-2 text-[13px] text-[var(--app-text)] outline-none focus:border-[var(--app-muted)] disabled:opacity-45",
+    "h-8 w-[88px] rounded-[4px] border border-[var(--app-border)] bg-[var(--app-bg)] px-2 text-[13px] text-[var(--app-text)] outline-none focus:border-[var(--app-muted)] disabled:opacity-45",
   select:
-    "h-8 appearance-none rounded-[4px] border border-[#363a45] bg-[var(--app-bg)] px-2.5 pr-7 text-[13px] text-[var(--app-text)] outline-none focus:border-[var(--app-muted)] disabled:opacity-45",
+    "h-8 appearance-none rounded-[4px] border border-[var(--app-border)] bg-[var(--app-bg)] px-2.5 pr-7 text-[13px] text-[var(--app-text)] outline-none focus:border-[var(--app-muted)] disabled:opacity-45",
   navItem: (on: boolean) =>
-    `mx-2 flex w-[calc(100%-16px)] items-center gap-2 rounded-[6px] px-2 py-[7px] text-left text-[13px] ${
+    `mx-2 flex w-[calc(100%-16px)] items-center gap-2 rounded-[4px] px-2 py-[7px] text-left text-[13px] ${
       on
         ? "bg-[var(--app-hover)] text-[var(--app-text)]"
         : "text-[var(--app-text)] hover:bg-[var(--app-border)]"
@@ -186,8 +186,8 @@ export function SettingsBtn({
     variant === "primary"
       ? "bg-white text-black hover:bg-[#e0e3eb]"
       : variant === "ghost"
-        ? "border border-[#4c525e] text-[#d1d4dc] hover:border-[#787b86] hover:bg-[#222222]"
-        : "border border-[#4c525e] text-[#d1d4dc] hover:border-[#787b86] hover:bg-[#222222]";
+        ? "border border-[var(--app-faint)] text-[var(--app-text)] hover:border-[var(--app-muted)] hover:bg-[var(--app-hover)]"
+        : "border border-[var(--app-faint)] text-[var(--app-text)] hover:border-[var(--app-muted)] hover:bg-[var(--app-hover)]";
   return <button type="button" className={`${base} ${styles} ${className}`} {...rest} />;
 }
 
@@ -204,7 +204,7 @@ export function SettingsSection({
     <div className="mb-5">
       <div className={settingsUi.sectionTitle}>
         {title}
-        {hint ? <CircleHelp size={12} className="text-[#4c525e]" /> : null}
+        {hint ? <CircleHelp size={12} className="text-[var(--app-faint)]" /> : null}
       </div>
       <div className="space-y-2.5">{children}</div>
     </div>
@@ -225,7 +225,7 @@ export function SettingsFieldStack({
     <label className="block min-w-0">
       <span className={`mb-1.5 flex items-center gap-1 ${settingsUi.label}`}>
         {label}
-        {hint ? <CircleHelp size={12} className="text-[#4c525e]" /> : null}
+        {hint ? <CircleHelp size={12} className="text-[var(--app-faint)]" /> : null}
       </span>
       {children}
     </label>
@@ -295,7 +295,7 @@ export function SettingsSelectWrap({ children }: { children: ReactNode }) {
   return (
     <div className="relative">
       {children}
-      <span className="pointer-events-none absolute top-1/2 right-2 -translate-y-1/2 text-[10px] text-[#787b86]">
+      <span className="pointer-events-none absolute top-1/2 right-2 -translate-y-1/2 text-[11px] text-[var(--app-muted)]">
         ▾
       </span>
     </div>

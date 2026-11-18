@@ -14,10 +14,10 @@ export default async function Page() {
   } catch {
     // Configuration load failure: fail closed, do not redirect anywhere.
     return (
-      <div className="flex min-h-screen items-center justify-center bg-[#0b0e11]">
+      <div className="flex min-h-screen items-center justify-center bg-[var(--app-bg)]">
         <div className="max-w-md text-center">
-          <div className="mb-4 text-lg text-[#f23645]">Service Unavailable</div>
-          <div className="text-sm text-[#787b86]">
+          <div className="mb-4 text-lg text-[var(--app-down)]">Service Unavailable</div>
+          <div className="text-sm text-[var(--app-muted)]">
             The status page is temporarily unavailable. Please contact support if this persists.
           </div>
         </div>

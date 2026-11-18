@@ -395,7 +395,7 @@ function BuySellStrip({
             aria-expanded={dropdownOpen}
             data-testid="topbar-disconnected"
           >
-            <span className="size-1.5 shrink-0 rounded-full bg-[#6b7280]" />
+            <span className="size-1.5 shrink-0 rounded-full bg-[var(--app-muted)]" />
             Disconnected
             <ChevronDown size={11} className="text-(--app-muted)" />
           </button>
@@ -418,7 +418,7 @@ function BuySellStrip({
                   <span className="text-[12px] font-medium text-(--app-text)">Testnet</span>
                   <span className="truncate text-[11px] text-(--app-muted)">USDT-M Futures (Testnet)</span>
                 </div>
-                <span className="shrink-0 rounded bg-[#22c55e]/15 px-1.5 py-0.5 text-[10px] font-semibold uppercase text-[#22c55e]">
+                <span className="shrink-0 rounded bg-(--app-up)/15 px-1.5 py-0.5 text-[11px] font-semibold uppercase text-[var(--app-up)]">
                   Test
                 </span>
               </button>
@@ -433,7 +433,7 @@ function BuySellStrip({
                   <span className="text-[12px] font-medium text-(--app-text)">Live</span>
                   <span className="truncate text-[11px] text-(--app-muted)">USDT-M Futures (Live)</span>
                 </div>
-                <span className="shrink-0 rounded bg-[#f0b90b]/15 px-1.5 py-0.5 text-[10px] font-semibold uppercase text-[#f0b90b]">
+                <span className="shrink-0 rounded bg-[#f0b90b]/15 px-1.5 py-0.5 text-[11px] font-semibold uppercase text-[#f0b90b]">
                   Live
                 </span>
               </button>
@@ -449,7 +449,7 @@ function BuySellStrip({
         title={liveProfileId === "binance-production" ? "Connected to Binance Live" : "Connected to Binance Testnet"}
       >
         <span
-          className={`size-1.5 shrink-0 rounded-full ${liveProfileId === "binance-production" ? "bg-[#f0b90b]" : "bg-[#22c55e]"}`}
+          className={`size-1.5 shrink-0 rounded-full ${liveProfileId === "binance-production" ? "bg-[#f0b90b]" : "bg-[var(--app-up)]"}`}
         />
       </span>
       <button
@@ -464,14 +464,14 @@ function BuySellStrip({
           if (qty > 0) onSell(bid, qty);
         }}
       >
-        <span className="size-1.5 shrink-0 rounded-full bg-[#f23645]" />
-        <span className="shrink-0 text-[#f23645]">Sell</span>
+        <span className="size-1.5 shrink-0 rounded-full bg-[var(--app-down)]" />
+        <span className="shrink-0 text-[var(--app-down)]">Sell</span>
         <span className="min-w-0 truncate text-(--app-text)">
           {quote ? formatPrice(symbol, bid) : "—"}
         </span>
       </button>
       <div
-        className="trade-hover flex h-[32px] shrink-0 items-center gap-0 px-0 rounded-[10px]"
+        className="trade-hover flex h-[32px] shrink-0 items-center gap-0 px-0 rounded-[8px]"
         title={`Margin × leverage → order size (min 10)`}
       >
         <button
@@ -528,8 +528,8 @@ function BuySellStrip({
         <span className="min-w-0 truncate text-(--app-text)">
           {quote ? formatPrice(symbol, ask) : "—"}
         </span>
-        <span className="shrink-0 text-[#2ebd85]">Buy</span>
-        <span className="size-1.5 shrink-0 rounded-full bg-[#2ebd85]" />
+        <span className="shrink-0 text-[var(--app-up)]">Buy</span>
+        <span className="size-1.5 shrink-0 rounded-full bg-[var(--app-up)]" />
       </button>
         </>
       )}
@@ -561,10 +561,10 @@ function BuySellStrip({
             role="dialog"
             aria-modal="true"
             aria-labelledby="production-confirm-title"
-            className="w-[430px] max-w-[calc(100vw-32px)] rounded-[8px] border border-[#f0b90b]/50 bg-[#17130a] p-5 shadow-[0_16px_60px_rgba(0,0,0,0.7)]"
+            className="w-[430px] max-w-[calc(100vw-32px)] rounded-[8px] border border-(--app-warn)/50 bg-(--app-warn)/10 p-5 shadow-[var(--app-shadow-dialog)]"
             onMouseDown={(event) => event.stopPropagation()}
           >
-            <div id="production-confirm-title" className="text-[16px] font-semibold text-[#f0b90b]">
+            <div id="production-confirm-title" className="text-[16px] font-semibold text-[var(--app-warn)]">
               You are connecting to Binance Live.
             </div>
             <p className="mt-3 text-[13px] leading-5 text-(--app-text)">This uses the server’s production credentials.</p>
@@ -575,14 +575,14 @@ function BuySellStrip({
                 type="checkbox"
                 checked={productionChecked}
                 onChange={(event) => setProductionChecked(event.target.checked)}
-                className="mt-0.5 accent-[#f0b90b]"
+                className="mt-0.5 accent-[var(--app-warn)]"
               />
               <span>I understand and want to continue.</span>
             </label>
             <div className="mt-5 flex justify-end gap-2">
               <button
                 type="button"
-                className="rounded-[4px] px-3 py-2 text-[12px] text-(--app-muted) hover:bg-[#241f13] hover:text-(--app-text)"
+                className="rounded-[4px] px-3 py-2 text-[12px] text-(--app-muted) hover:bg-(--app-warn)/15 hover:text-(--app-text)"
                 onClick={() => {
                   setProductionConfirmation(false);
                   setProductionChecked(false);
@@ -593,7 +593,7 @@ function BuySellStrip({
               <button
                 type="button"
                 disabled={!productionChecked}
-                className="rounded-[4px] bg-[#f0b90b] px-3 py-2 text-[12px] font-semibold text-black disabled:cursor-not-allowed disabled:opacity-40"
+                className="rounded-[4px] bg-[var(--app-warn)] px-3 py-2 text-[12px] font-semibold text-[var(--app-warn-ink)] disabled:cursor-not-allowed disabled:opacity-40"
                 onClick={() => {
                   setProductionConfirmation(false);
                   void startSwitch("binance-production", true);
@@ -1004,7 +1004,7 @@ export function TopBar() {
                 closeAllMenus();
                 setTimeframe(id);
               }}
-              className={`h-[26px] rounded-[6px] px-[7px] text-[13px] ${
+              className={`h-[26px] rounded-[4px] px-[7px] text-[13px] ${
                 on ? "bg-(--app-hover) text-(--app-text)" : "text-(--app-muted) hover:text-(--app-text)"
               }`}
             >
@@ -1071,12 +1071,12 @@ export function TopBar() {
                           bodyVisible: true,
                           borderVisible: false,
                           wickVisible: true,
-                          bodyUpColor: "#089981",
-                          bodyDownColor: "#f23645",
-                          borderUpColor: "#089981",
-                          borderDownColor: "#f23645",
-                          wickUpColor: "#089981",
-                          wickDownColor: "#f23645",
+                          bodyUpColor: "var(--app-up)",
+                          bodyDownColor: "var(--app-down)",
+                          borderUpColor: "var(--app-up)",
+                          borderDownColor: "var(--app-down)",
+                          wickUpColor: "var(--app-up)",
+                          wickDownColor: "var(--app-down)",
                         });
                       } else if (s.id === "hollow") {
                         patchChartSettings({
@@ -1085,11 +1085,11 @@ export function TopBar() {
                           borderVisible: true,
                           wickVisible: true,
                           bodyUpColor: "#b2b5be",
-                          bodyDownColor: "#787b86",
+                          bodyDownColor: "var(--app-muted)",
                           borderUpColor: "#b2b5be",
-                          borderDownColor: "#787b86",
+                          borderDownColor: "var(--app-muted)",
                           wickUpColor: "#b2b5be",
-                          wickDownColor: "#787b86",
+                          wickDownColor: "var(--app-muted)",
                         });
                       } else {
                         patchChartSettings({ candleStyle: s.id });

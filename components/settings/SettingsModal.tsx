@@ -81,7 +81,7 @@ export function SettingsModal() {
       ref={boxRef}
       data-settings-panel
       data-dropdown-open
-      className="fixed z-[70] flex w-[620px] max-h-[calc(100vh-168px)] overflow-hidden rounded-[8px] bg-[var(--app-elevated)] shadow-[0_8px_28px_rgba(0,0,0,0.65)]"
+      className="fixed z-[70] flex w-[620px] max-h-[calc(100vh-168px)] overflow-hidden rounded-[8px] bg-[var(--app-elevated)] shadow-[var(--app-shadow-menu)]"
       style={
         dragged
           ? { left: pos.x, top: pos.y }
@@ -95,7 +95,7 @@ export function SettingsModal() {
           onMouseDown={startDrag}
         >
           <Keyboard size={15} className="text-(--app-muted)" />
-          <span className="flex-1 text-[14px] font-semibold text-(--app-text)">Keyboard Shortcuts</span>
+          <span className="flex-1 text-[13px] font-semibold text-(--app-text)">Keyboard Shortcuts</span>
           <button
             type="button"
             className="flex h-7 w-7 items-center justify-center rounded-[4px] text-(--app-muted) hover:bg-(--app-hover) hover:text-(--app-text)"

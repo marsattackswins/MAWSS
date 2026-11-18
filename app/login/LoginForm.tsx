@@ -49,10 +49,10 @@ export function LoginForm({ next = "/" }: { next?: string }) {
     >
       <form
         onSubmit={submit}
-        className="w-[340px] rounded-[10px] border p-6"
+        className="w-[340px] rounded-[8px] border p-6"
         style={{ borderColor: "var(--maws-border)", background: "var(--maws-elevated)" }}
       >
-        <div className="mb-1 text-[15px] font-semibold">MAWS operator sign-in</div>
+        <div className="mb-1 text-[13px] font-semibold">MAWS operator sign-in</div>
         <div className="mb-4 text-[12px] text-[var(--maws-muted)]">
           Trading endpoints require the operator credential. The chart itself stays usable without a login on this local dev server.
         </div>
@@ -65,7 +65,7 @@ export function LoginForm({ next = "/" }: { next?: string }) {
           autoComplete="current-password"
           value={password}
           onChange={(event) => setPassword(event.target.value)}
-          className="mb-3 h-9 w-full rounded-[6px] border px-3 text-[13px] outline-none"
+          className="mb-3 h-9 w-full rounded-[4px] border px-3 text-[13px] outline-none"
           style={{
             borderColor: "var(--maws-border)",
             background: "var(--maws-bg)",
@@ -73,15 +73,15 @@ export function LoginForm({ next = "/" }: { next?: string }) {
           }}
         />
         {error ? (
-          <div role="alert" className="mb-3 text-[12px] text-[#f23645]">
+          <div role="alert" className="mb-3 text-[12px] text-[var(--app-down)]">
             {error}
           </div>
         ) : null}
         <button
           type="submit"
           disabled={busy || password.length === 0}
-          className="h-9 w-full rounded-[6px] text-[13px] font-semibold disabled:opacity-60"
-          style={{ background: "#2962ff", color: "#fff" }}
+          className="h-9 w-full rounded-[4px] text-[13px] font-semibold disabled:opacity-60"
+          style={{ background: "var(--app-accent)", color: "#fff" }}
         >
           {busy ? "Signing in…" : "Sign in"}
         </button>

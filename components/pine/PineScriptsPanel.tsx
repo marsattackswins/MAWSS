@@ -96,7 +96,7 @@ function IconButton({
       onClick={onClick}
       disabled={disabled}
       {...(trigger ? { "data-pine-menu-trigger": true } : {})}
-      className={`flex h-6 w-6 shrink-0 items-center justify-center rounded-[3px] transition-colors disabled:opacity-35 ${
+      className={`flex h-6 w-6 shrink-0 items-center justify-center rounded-[4px] transition-colors disabled:opacity-35 ${
         active
           ? "bg-(--app-hover) text-(--app-text)"
           : "text-(--app-muted) hover:bg-(--app-hover) hover:text-(--app-text)"
@@ -140,7 +140,7 @@ function MenuRow({
       </span>
       <span className="min-w-0 flex-1 truncate">{label}</span>
       {hint && (
-        <span className="shrink-0 text-[10px]" style={{ color: MUTED }}>
+        <span className="shrink-0 text-[11px]" style={{ color: MUTED }}>
           {hint}
         </span>
       )}
@@ -151,7 +151,7 @@ function MenuRow({
 function MenuLabel({ children }: { children: React.ReactNode }) {
   return (
     <div
-      className="px-4 pb-2 pt-2 text-[10px] font-semibold uppercase tracking-[0.08em]"
+      className="px-4 pb-2 pt-2 text-[11px] font-semibold uppercase tracking-[0.08em]"
       style={{ color: MUTED }}
     >
       {children}
@@ -171,7 +171,7 @@ function MenuPanel({
   return (
     <div
       ref={menuRef}
-      className={`absolute z-30 w-80 rounded-md border py-1 ${className}`}
+      className={`absolute z-30 w-80 rounded-[4px] border py-1 ${className}`}
       style={{
         background: MENU_BG,
         borderColor: BORDER,
@@ -494,7 +494,7 @@ export function PineScriptsPanel() {
               if (e.key === "Escape") setRenaming(false);
             }}
             aria-label="Script name"
-            className="h-6 min-w-0 flex-1 rounded-[3px] border bg-transparent px-1 text-[12px] outline-none"
+            className="h-6 min-w-0 flex-1 rounded-[4px] border bg-transparent px-1 text-[12px] outline-none"
             style={{ borderColor: BORDER, color: TEXT }}
           />
         ) : (
@@ -674,7 +674,7 @@ export function PineScriptsPanel() {
         <MenuPanel menuRef={menuRef} className="bottom-8 right-1">
           <MenuLabel>Pine version</MenuLabel>
           <MenuRow label="Pine v5" checked onClick={() => setMenu(null)} />
-          <p className="px-4 pb-2 text-[10px]" style={{ color: MUTED }}>
+          <p className="px-4 pb-2 text-[11px]" style={{ color: MUTED }}>
             Pine v6 is not part of the installed runtime.
           </p>
         </MenuPanel>
@@ -722,7 +722,7 @@ export function PineScriptsPanel() {
           {logsOpen ? <ChevronDown size={12} /> : <ChevronUp size={12} />}
           <span>Logs</span>
           <span
-            className="rounded-[3px] px-1 text-[10px]"
+            className="rounded-[4px] px-1 text-[11px]"
             style={{ background: BORDER, color: TEXT }}
           >
             {logs.length}

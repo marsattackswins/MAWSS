@@ -109,11 +109,11 @@ function LiveNotices() {
         <div
           key={n.id}
           role="status"
-          className={`flex items-start gap-2 rounded-[6px] border px-3 py-2 text-[12px] shadow-[0_8px_28px_rgba(0,0,0,0.5)] ${
+          className={`flex items-start gap-2 rounded-[4px] border px-3 py-2 text-[12px] shadow-[var(--app-shadow-menu)] ${
             n.tone === "error"
-              ? "border-[#f23645] bg-[#1a0b0d] text-[#f23645]"
+              ? "border-[var(--app-down)] bg-(--app-down)/10 text-[var(--app-down)]"
               : n.tone === "success"
-                ? "border-[#089981] bg-[#071512] text-[#089981]"
+                ? "border-[var(--app-up)] bg-(--app-up)/10 text-[var(--app-up)]"
                 : "border-(--app-border) bg-(--app-elevated) text-(--app-text)"
           }`}
         >
@@ -238,7 +238,7 @@ export function AppShell() {
             id: Math.random().toString(36).slice(2, 10),
             tool: "hray",
             points: [{ time, price }],
-            color: "#758696",
+            color: "var(--app-muted)",
           });
           break;
         }
@@ -248,7 +248,7 @@ export function AppShell() {
             id: Math.random().toString(36).slice(2, 10),
             tool: "hray",
             points: [{ time: Math.floor(Date.now() / 1000), price: s.clipboardPrice }],
-            color: "#2962ff",
+            color: "var(--app-accent)",
           });
           break;
         }

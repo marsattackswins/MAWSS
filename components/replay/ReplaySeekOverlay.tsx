@@ -170,7 +170,7 @@ export function ReplaySeekOverlay({ pane, hostRef }: Props) {
               left: linePct,
               width: "2px",
               transform: "translateX(-1px)",
-              background: "#2962ff",
+              background: "var(--app-accent)",
               pointerEvents: "none",
             }}
           />
@@ -184,7 +184,7 @@ export function ReplaySeekOverlay({ pane, hostRef }: Props) {
                 bottom: "28px",
                 transform: "translateX(-50%)",
                 pointerEvents: "none",
-                background: "#2962ff",
+                background: "var(--app-accent)",
                 color: "#fff",
                 fontSize: "11px",
                 fontWeight: 600,
@@ -206,13 +206,13 @@ export function ReplaySeekOverlay({ pane, hostRef }: Props) {
           background: "rgba(19,23,34,0.92)",
           border: "1px solid rgba(255,255,255,0.12)",
           borderBottom: "none",
-          color: "#d1d4dc",
+          color: "var(--app-text)",
           pointerEvents: "none",
           whiteSpace: "nowrap",
         }}
       >
         Bar replay: click the bar to start from&nbsp;&nbsp;
-        <span style={{ color: "#787b86" }}>(Esc cancels)</span>
+        <span style={{ color: "var(--app-muted)" }}>(Esc cancels)</span>
       </div>
     </div>
   );

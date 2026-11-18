@@ -20,6 +20,13 @@
   /* Ink for accent-filled controls; applyAppTheme computes the real value. */
   --app-accent-ink: #ffffff;
   --app-menu: var(--app-elevated);
+  /* Attention tone: event impact, stale quotes, live-mode confirmations. */
+  --app-warn: #f0b90b;
+  /* Ink for warn-filled controls (amber needs dark ink, the light theme's does not). */
+  --app-warn-ink: #1a1a1a;
+  /* Shared elevation — one menu shadow, one dialog shadow. */
+  --app-shadow-menu: 0 8px 28px rgba(0, 0, 0, 0.55);
+  --app-shadow-dialog: 0 16px 60px rgba(0, 0, 0, 0.65);
   --maws-bg: var(--app-bg);
   --maws-panel: var(--app-panel);
   --maws-elevated: var(--app-elevated);
@@ -61,6 +68,8 @@ body {
   background: var(--app-bg);
   color: var(--app-text);
   font-family: "Trebuchet MS", Roboto, Ubuntu, sans-serif;
+  /* Fixed-width digits: a ticking price never shifts its neighbours sideways. */
+  font-variant-numeric: tabular-nums;
 }
 
 * {
@@ -69,6 +78,22 @@ body {
 
 button {
   cursor: pointer;
+}
+
+/* Keyboard focus is visible everywhere. These rules are unlayered on purpose:
+ * they beat any `outline-none` utility, so a control can no longer hide the cue. */
+:where(a, button, [role="button"], summary, input, select, textarea, [tabindex]):focus-visible {
+  outline: 2px solid var(--app-accent);
+  outline-offset: 1px;
+}
+
+/* One hover rhythm for every control, so no panel feels dead next to a live one. */
+:where(button, a, [role="button"], summary, label) {
+  transition:
+    background-color 120ms ease,
+    border-color 120ms ease,
+    color 120ms ease,
+    opacity 120ms ease;
 }
 
 /* Accent-filled controls: the label ink is computed per theme (a light accent
@@ -185,7 +210,7 @@ input[type="number"]::-webkit-inner-spin-button {
 }
 
 .menu-row input {
-  accent-color: #ffffff;
+  accent-color: var(--app-accent);
 }
 
 /* Section header inside a dropdown menu (e.g. the add-indicator catalog). */
@@ -227,7 +252,7 @@ input[type="number"]::-webkit-inner-spin-button {
 }
 
 .legend-status {
-  color: #089981;
+  color: var(--app-up);
   font-size: 20px;
   vertical-align: middle;
   line-height: 1;
@@ -552,9 +577,9 @@ input[type="number"]::-webkit-inner-spin-button {
   color: var(--app-text);
 }
 .scale-menu-sub-opt--on {
-  background: #2962ff;
-  border-color: #2962ff;
-  color: #ffffff;
+  background: var(--app-accent);
+  border-color: var(--app-accent);
+  color: var(--app-accent-ink);
 }
 
 .scale-menu-check-row {
@@ -606,7 +631,7 @@ input[type="number"]::-webkit-inner-spin-button {
   bottom: 4px;
   left: 3px;
   width: 1px;
-  background: #2a2a2a;
+  background: var(--app-border);
 }
 
 /* Hover/active thickens the existing divider instead of flashing the accent blue. */
@@ -631,8 +656,8 @@ input[type="number"]::-webkit-inner-spin-button {
 }
 
 .plus-hit:hover {
-  border-color: #ffffff;
-  color: #ffffff;
+  border-color: var(--app-accent);
+  color: var(--app-accent);
 }
 
 .plus-menu {
@@ -689,12 +714,25 @@ input[type="number"]::-webkit-inner-spin-button {
 }
 
 ::-webkit-scrollbar-thumb {
-  background: #2a2a2a;
+  background: var(--app-faint);
   border-radius: 4px;
 }
 
+::-webkit-scrollbar-thumb:hover {
+  background: var(--app-muted);
+}
+
 ::-webkit-scrollbar-track {
-  background: #000000;
+  background: var(--app-bg);
+}
+
+/* Firefox ignores the -webkit- rules above and would show its default grey bar:
+ * give it the same thin, theme-coloured scrollbar as Chromium. */
+@supports (-moz-appearance: none) {
+  * {
+    scrollbar-width: thin;
+    scrollbar-color: var(--app-faint) transparent;
+  }
 }
 
 /* ── Watchlist icon button — theme-reactive hover ─────────────────────────── */
@@ -744,7 +782,7 @@ input[type="number"]::-webkit-inner-spin-button {
 }
 .wl-row.is-dragging {
   background: var(--app-elevated);
-  outline: 1px solid #2962ff;
+  outline: 1px solid var(--app-accent);
   outline-offset: -1px;
   z-index: 10;
 }

@@ -23,13 +23,13 @@ function NewsRow({ item, now }: { item: NewsItem; now: number }) {
         if (!item.url) return;
         window.open(item.url, "_blank", "noopener,noreferrer");
       }}
-      className={`block w-full rounded-md border border-[var(--maws-border)] bg-[var(--maws-panel)] px-3 py-2.5 text-left transition-colors ${
+      className={`block w-full rounded-[4px] border border-[var(--maws-border)] bg-[var(--maws-panel)] px-3 py-2.5 text-left transition-colors ${
         open
           ? "cursor-pointer hover:border-(--app-border) hover:bg-[var(--maws-elevated)]"
           : "cursor-default opacity-80"
       }`}
     >
-      <div className="flex items-center justify-between gap-2 text-[10px] uppercase tracking-wide text-(--app-muted)">
+      <div className="flex items-center justify-between gap-2 text-[11px] uppercase tracking-wide text-(--app-muted)">
         <span className="flex min-w-0 items-center gap-1.5">
           <span className="truncate">
             {item.source}
@@ -128,14 +128,14 @@ export function NewsPanel() {
       <div className="flex h-8 shrink-0 items-center justify-between border-b border-(--app-border) px-2">
         <div className="flex min-w-0 items-center gap-2">
           <span className="text-[13px] font-semibold text-(--app-text)">News</span>
-          <span className="truncate text-[10px] uppercase tracking-wide text-(--app-meta)">
+          <span className="truncate text-[11px] uppercase tracking-wide text-(--app-meta)">
             Finnhub
             {tab === "asset" ? ` · ${formatTicker(pane.symbol)}` : ""}
           </span>
           <button
             type="button"
             title="Reload news"
-            className="flex h-5 items-center gap-1 rounded px-1 text-[10px] text-(--app-meta) hover:bg-(--app-hover) hover:text-(--app-text)"
+            className="flex h-5 items-center gap-1 rounded px-1 text-[11px] text-(--app-meta) hover:bg-(--app-hover) hover:text-(--app-text)"
             onClick={() => setReloadToken((n) => n + 1)}
           >
             <RefreshCw size={10} />
@@ -165,7 +165,7 @@ export function NewsPanel() {
       </div>
 
       {error ? (
-        <div className="shrink-0 border-b border-(--app-border) px-2 py-1.5 text-[10px] text-(--app-muted)">
+        <div className="shrink-0 border-b border-(--app-border) px-2 py-1.5 text-[11px] text-(--app-muted)">
           {error}
           {error.includes("FINNHUB_API_KEY")
             ? " — add it to .env.local and restart the dev server."
