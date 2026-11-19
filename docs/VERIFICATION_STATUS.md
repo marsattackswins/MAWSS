@@ -55,6 +55,11 @@ and preserves the risk/reward distances), not in CI.
 
 | Check | Result | Notes |
 | --- | --- | --- |
+| `listenKeyExpired` event handling | Not verified | The new rotate/reconnect/resnapshot path is exercised only against the fake WS (`tests/live-tests/stream-liveness.test.ts`). No real expiry event has been observed. |
+| WebSocket ping interval assumption | Not verified | Liveness assumes Binance pings every 3 minutes and declares the socket dead after 12 minutes of silence (`SERVER_PING_INTERVAL_MS`, `PING_TIMEOUT_MS` in `lib/server/binance/stream.ts`). This cadence has not been measured against a live stream. |
+| -2022 behavior in production | Not verified | Production now refuses any reduce-only fallback (re-read, record, alert, send nothing). The production branch has only been exercised with fakes; the demo venue's -2022 defect has not been reproduced against the real exchange. |
+| Commission asset handling | Not verified | Non-USD commission (e.g. BNB) is counted at face value (1 unit = 1 USD) for the daily-loss limit with an audit + alert. No real non-USDT commission has been observed, and the face-value basis overstates the cost by design. |
+| Engine safety batch (fixes A–F) | Tested against fakes only | Freeze reasons, the reduce-only fallback, stream expiry/liveness, fresh-risk reads, daily-loss fees and the emergency lane are covered exclusively by fake HTTP/WS transports. No signed request or private socket was used. |
 | Signed demo calls | Not verified | No HMAC-signed request has been sent to demo hosts. |
 | `totalMaintMargin` presence | Not verified | Presence in the account payload is assumed from documentation, not observed. |
 | Algo place / cancel / list | Not verified | Neither demo nor live. |
