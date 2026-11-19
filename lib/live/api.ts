@@ -9,6 +9,7 @@ import type {
   ProfileRuntimeStatusDto,
   SessionInfo,
 } from "./types";
+import type { FreezeClearResultDto, FreezeListDto } from "./types";
 
 let csrfToken: string | null = null;
 
@@ -137,6 +138,13 @@ export const liveApi = {
   },
   setGates(input: { executionEnabled?: boolean; killSwitch?: boolean }): Promise<{ decision: unknown }> {
     return call("/api/live/gates", { method: "POST", body: input });
+  },
+  freezes(): Promise<FreezeListDto> {
+    return call("/api/live/freezes");
+  },
+  /** Operator unfreeze. Confirmation is explicit, never implied by a click. */
+  clearFreeze(code?: string): Promise<FreezeClearResultDto> {
+    return call("/api/live/freezes", { method: "POST", body: code ? { code, confirm: true } : { confirm: true } });
   },
   reconcile(): Promise<{ result: string; diffs: string[] }> {
     return call("/api/live/reconcile", { method: "POST", body: {} });

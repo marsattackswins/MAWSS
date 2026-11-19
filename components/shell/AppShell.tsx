@@ -7,6 +7,7 @@ import { SettingsModal } from "@/components/settings/SettingsModal";
 import { IndicatorSettingsModal } from "@/components/settings/IndicatorSettingsModal";
 import { DrawingSettingsModal } from "@/components/settings/DrawingSettingsModal";
 import { BrokerDialog } from "@/components/trading/BrokerDialog";
+import { FreezeBanner } from "@/components/trading/FreezeBanner";
 import { BuySellContextMenu } from "@/components/trading/BuySellContextMenu";
 import { ReplayBar } from "@/components/replay/ReplayBar";
 import { BottomPanel } from "@/components/shell/BottomPanel";
@@ -352,6 +353,7 @@ export function AppShell() {
       className="flex h-screen w-screen flex-col overflow-hidden bg-[var(--app-bg)] text-[var(--app-text)]"
     >
       <TopBar />
+      <FreezeBanner />
       <IndicatorsDialog />
       <div className="flex min-h-0 flex-1">
         <div className="relative z-0 flex min-h-0 min-w-0 flex-1 flex-col">

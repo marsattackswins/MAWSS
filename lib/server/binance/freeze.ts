@@ -274,6 +274,98 @@ export function activeFreezesNeedAttention(profile: PersistenceProfile = activeP
     .map((row) => row.code);
 }
 
+function isoAt(at: number): string {
+  return new Date(at).toISOString();
+}
+
+/**
+ * Why an active freeze is still set, in operator language. Null means the
+ * supplied evidence already satisfies its clear rule.
+ */
+export function freezeBlockingReason(row: FreezeRow, ctx: FreezeClearContext): string | null {
+  const rule = FREEZE_DEFINITIONS.find((definition) => definition.code === row.code)?.clearRule;
+  switch (rule) {
+    case "intents":
+      return ctx.hasUncertainIntents ? "waits for an uncertain order outcome to settle" : null;
+    case "clean_recon":
+      return cleanReconSince(row, ctx) ? null : `needs a clean reconciliation after ${isoAt(row.setAt)}`;
+    case "stream_recovered":
+      if (!cleanReconSince(row, ctx)) return `needs a clean reconciliation after ${isoAt(row.setAt)}`;
+      return ctx.streamRecovered ? null : "needs the user-data stream live again";
+    case "ip_ban":
+      if (!ipBanExpired(row, ctx.now)) {
+        const expiresAt = row.detail?.banExpiresAt;
+        return typeof expiresAt === "number" ? `ban window ends ${isoAt(expiresAt)}` : "needs the ban window to end";
+      }
+      if (ctx.restProbeOk !== true) return "needs a successful REST probe once the ban window ends";
+      return cleanReconSince(row, ctx) ? null : `needs a clean reconciliation after ${isoAt(row.setAt)}`;
+    case "operator":
+      return ctx.operatorAction === true ? null : "needs an explicit operator unfreeze";
+    case "legacy":
+      if (!cleanReconSince(row, ctx)) return `needs a clean reconciliation after ${isoAt(row.setAt)}`;
+      return ctx.operatorAction === true ? null : "needs a clean reconciliation and an operator unfreeze";
+    default:
+      return "has no clear rule";
+  }
+}
+
+export interface FreezeStatus {
+  code: FreezeCode;
+  reason: string;
+  since: number;
+  clearRule: FreezeClearRule | null;
+  /** True when only an operator action can clear it (never automatic). */
+  clearsWithOperator: boolean;
+  /** Null when the clear condition is already met under `ctx`. */
+  blockingReason: string | null;
+}
+
+/**
+ * Operator-facing view of every active freeze, with what still blocks each
+ * one. `ctx.operatorAction` should be false for a read: it answers "what would
+ * still need to happen besides me clicking the button".
+ */
+export function freezeStatuses(
+  ctx: FreezeClearContext,
+  profile: PersistenceProfile = activePersistenceProfile(),
+): FreezeStatus[] {
+  return activeFreezes(profile).map((row) => {
+    const definition = FREEZE_DEFINITIONS.find((candidate) => candidate.code === row.code);
+    const rule = definition?.clearRule ?? null;
+    return {
+      code: row.code,
+      reason: row.reason,
+      since: row.setAt,
+      clearRule: rule,
+      clearsWithOperator: rule === "operator" || rule === "legacy",
+      blockingReason: freezeBlockingReason(row, ctx),
+    };
+  });
+}
+
+/**
+ * Explicit operator unfreeze: clears every freeze whose own condition is met,
+ * or only `code` when given. OPERATOR / KEY_REJECTED need nothing but the
+ * action; LEGACY additionally needs a clean reconciliation since it was set.
+ * Never returns a cleared code whose rule was not satisfied.
+ */
+export function clearOperatorFreezes(
+  ctx: FreezeClearContext,
+  profile: PersistenceProfile = activePersistenceProfile(),
+  code?: FreezeCode,
+): FreezeEvaluationResult {
+  assertPersistenceProfile(profile);
+  const active = activeFreezes(profile);
+  const cleared: FreezeCode[] = [];
+  for (const row of active) {
+    if (code && row.code !== code) continue;
+    if (!isFreezeClearable(row, { ...ctx, operatorAction: true })) continue;
+    if (clearFreeze(row.code, "operator", ctx.now, profile)) cleared.push(row.code);
+  }
+  const remaining = activeFreezes(profile).map((row) => row.code);
+  return { cleared, remaining };
+}
+
 /** Test/reset seam: clear every row (does not touch runtime flags). */
 export function resetFreezeReasonsForTests(profile: PersistenceProfile = activePersistenceProfile()): void {
   assertPersistenceProfile(profile);

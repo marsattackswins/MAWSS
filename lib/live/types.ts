@@ -167,6 +167,28 @@ export interface MetaDto {
   health: HealthDto;
 }
 
+/** One active submission freeze, with the evidence it still needs. */
+export interface FreezeDto {
+  code: string;
+  reason: string;
+  since: number;
+  clearRule: string | null;
+  clearsWithOperator: boolean;
+  blockingReason: string | null;
+}
+
+export interface FreezeListDto {
+  frozen: boolean;
+  freezes: FreezeDto[];
+}
+
+export interface FreezeClearResultDto {
+  ok: boolean;
+  cleared: string[];
+  frozen: boolean;
+  freezes: FreezeDto[];
+}
+
 export interface OrderActionResult {
   ok: boolean;
   clientOrderId: string;
