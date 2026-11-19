@@ -8,6 +8,7 @@ import { liveState } from "../binance/state";
 import { getRuntime, RUNTIME_KEYS } from "../runtime/flags";
 
 import { getDb } from "../db/connection";
+import { databaseStats, type DbStats } from "../db/stats";
 
 import { healthSignals, type HealthSignals } from "./state";
 import { circuitRegistry } from "../resilience/circuit-registry";
@@ -29,6 +30,8 @@ export interface HealthStatus {
   frozenReasons: string[];
   protectionHealthy: boolean;
   unprotectedPositions: string[];
+  /** Size and row counts; `sizeWarning` is set above MAWS_DB_SIZE_WARN_BYTES. */
+  database: DbStats;
   healthy: boolean;
 }
 
@@ -139,6 +142,7 @@ export function buildHealthStatus(cfg: EnvConfig): HealthStatus {
     frozenReasons,
     protectionHealthy,
     unprotectedPositions,
+    database: databaseStats(now),
     healthy: signals.managerRunning && signals.brokerStatus === "ready" && clockHealthy && streamHealthy && reconHealthy && positionModeHealthy && circuitBreakersHealthy && protectionHealthy && !submissionsFrozen,
   };
 }

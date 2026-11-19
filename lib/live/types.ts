@@ -145,6 +145,12 @@ export interface HealthDto {
   circuitBreakerStates?: Record<string, string>;
   submissionsFrozen: boolean;
   frozenReasons: string[];
+  database?: {
+    totalBytes: number;
+    sizeWarning: boolean;
+    warningBytes: number;
+    rowCounts: Record<string, number>;
+  };
   healthy: boolean;
   signals: {
     brokerStatus: string;

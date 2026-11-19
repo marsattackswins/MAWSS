@@ -63,6 +63,7 @@ import { StreamLeaseUnavailableError, UserDataStream } from "./stream";
 import { MARK_STALE_AFTER_MS, MarkPriceStream } from "./mark-price-stream";
 import type { AccountUpdateEvent, AlgoUpdateEvent, BinanceAlgoOrder, BinanceOrder, OrderTradeUpdateEvent, UserStreamEvent } from "./types";
 import { getDb } from "../db/connection";
+import { runRetentionPass } from "../db/retention";
 import {
   activeFreezes,
   describeActiveFreezes,
@@ -88,6 +89,10 @@ const MARK_PRICE_REFRESH_MS_FALLBACK = 15_000;
 const CLOCK_REFRESH_MS = 2.5 * 60 * 1000;
 const ACCOUNT_UPDATE_SNAPSHOT_DEBOUNCE_MS = 50;
 const ACCOUNT_UPDATE_SNAPSHOT_RETRY_MS = 2_000;
+
+/** First retention pass after attach (let startup settle), then daily. */
+const RETENTION_INITIAL_DELAY_MS = 5 * 60 * 1000;
+const RETENTION_INTERVAL_MS = 24 * 60 * 60 * 1000;
 
 /**
  * Positions the fallback REST mark poll must refresh.
@@ -149,6 +154,8 @@ export class BinanceLiveManager {
    * stream outages, symbol-set changes, and missed events.
    */
   private markPriceTimer: ReturnType<typeof setTimeout> | null = null;
+  /** Daily, batched log retention. Runs outside the risk mutation queue. */
+  private retentionTimer: ReturnType<typeof setTimeout> | null = null;
   private _markPriceStream: MarkPriceStream | null = null;
   /** Public mark-price stream (no credentials); drives per-second PnL updates. */
   get markPriceStream(): MarkPriceStream {
@@ -241,6 +248,10 @@ export class BinanceLiveManager {
     if (this.markPriceTimer) {
       clearTimeout(this.markPriceTimer);
       this.markPriceTimer = null;
+    }
+    if (this.retentionTimer) {
+      clearTimeout(this.retentionTimer);
+      this.retentionTimer = null;
     }
     if (this.accountUpdateSnapshotTimer) {
       clearTimeout(this.accountUpdateSnapshotTimer);
@@ -431,6 +442,7 @@ export class BinanceLiveManager {
         this.cfg.markPriceIntervalMs ?? MARK_PRICE_REFRESH_MS_FALLBACK,
       );
       this.status = "ready";
+      this.scheduleRetention(RETENTION_INITIAL_DELAY_MS);
       this.startClockRefresh(generation);
       updateTradingGauges();
       trackSystemStart(this.cfg.env);
@@ -580,6 +592,25 @@ export class BinanceLiveManager {
    * so the loop survives internal generation churn while stopping cleanly
    * when the manager goes idle and on every shutdown.
    */
+  /**
+   * Schedules the daily retention pass. It runs synchronously in bounded
+   * batches (never inside withRiskMutationSync), and a crash is logged and
+   * retried on the next day rather than failing the manager.
+   */
+  private scheduleRetention(delay: number): void {
+    if (this.retentionTimer) clearTimeout(this.retentionTimer);
+    this.retentionTimer = setTimeout(() => {
+      this.retentionTimer = null;
+      if (this.status === "idle") return;
+      try {
+        runRetentionPass();
+      } catch (err) {
+        log.warn("retention pass failed", { error: String(err) });
+      }
+      if (this.isGenerationCurrent(this.lifecycleGeneration)) this.scheduleRetention(RETENTION_INTERVAL_MS);
+    }, delay);
+  }
+
   private markPriceLoop(): void {
     if (this.status === "idle") return;
     const generation = this.lifecycleGeneration;

@@ -135,6 +135,12 @@ export interface EnvConfig {
   riskDataMaxAgeMs: number;
   /** Maximum age for automatically restoring an interrupted protection replacement. */
   protectionPendingMaxAgeMs: number;
+  /** Days of processed order_events kept before the daily retention pass. */
+  retentionOrderEventsDays: number;
+  /** Days of audit_log kept before the daily retention pass. */
+  retentionAuditLogDays: number;
+  /** Health warns above this total database size (default 2 GiB). */
+  dbSizeWarnBytes: number;
   alertWebhookUrl: string | null;
   /** Production risk variables absent from the source environment. */
   missingProductionRiskLimitVariables?: string[];
@@ -439,6 +445,9 @@ export function loadEnvConfig(source: NodeJS.ProcessEnv = process.env): EnvConfi
     gateSnapshotMaxAgeMs: num(source.MAWS_GATE_SNAPSHOT_MAX_AGE_MS, 180_000),
     riskDataMaxAgeMs: num(source.MAWS_RISK_DATA_MAX_AGE_MS, 60_000),
     protectionPendingMaxAgeMs: num(source.MAWS_PROTECTION_PENDING_MAX_AGE_MS, 2 * 60_000),
+    retentionOrderEventsDays: num(source.MAWS_RETENTION_ORDER_EVENTS_DAYS, 14),
+    retentionAuditLogDays: num(source.MAWS_RETENTION_AUDIT_LOG_DAYS, 180),
+    dbSizeWarnBytes: num(source.MAWS_DB_SIZE_WARN_BYTES, 2 * 1024 ** 3),
     alertWebhookUrl: source.MAWS_ALERT_WEBHOOK_URL?.trim() || null,
     missingProductionRiskLimitVariables,
     risk: {

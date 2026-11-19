@@ -168,6 +168,9 @@ export function loadTestnetConfig(): EnvConfig {
     gateSnapshotMaxAgeMs: 5 * 60_000,
     riskDataMaxAgeMs: 5 * 60_000,
     protectionPendingMaxAgeMs: 2 * 60_000,
+    retentionOrderEventsDays: 14,
+    retentionAuditLogDays: 180,
+    dbSizeWarnBytes: 2 * 1024 ** 3,
     alertWebhookUrl: null,
     risk: {
       maxOrderNotionalUsd: 500, // testnet limits

@@ -46,6 +46,9 @@ jest.mock("@/lib/server/env/config", () => ({
     gateSnapshotMaxAgeMs: 300000,
     riskDataMaxAgeMs: 60000,
     protectionPendingMaxAgeMs: 120000,
+    retentionOrderEventsDays: 14,
+    retentionAuditLogDays: 180,
+    dbSizeWarnBytes: 2 * 1024 ** 3,
     alertWebhookUrl: "https://example.com/webhook",
     risk: {
       maxOrderNotionalUsd: 50,

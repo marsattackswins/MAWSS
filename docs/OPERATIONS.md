@@ -1312,3 +1312,20 @@ Configure `MAWS_ALERT_WEBHOOK_URL` to receive alerts.
 
 #### Log Aggregation
 Use log aggregation tools (ELK, Splunk, etc.) for centralized monitoring.
+
+## Database size and retention
+
+- A daily, batched job deletes processed `order_events` older than 14 days
+  (`MAWS_RETENTION_ORDER_EVENTS_DAYS`) and `audit_log` rows older than 180 days
+  (`MAWS_RETENTION_AUDIT_LOG_DAYS`). It runs in short batches with a time budget
+  and never inside the risk mutation queue. Unprocessed events, intents, fills,
+  income and protection rows are never deleted.
+- Health (`/api/live/events`, `/api/status/trading-health`) includes a
+  `database` block: file size, WAL size, row counts, and `sizeWarning` when the
+  total exceeds `MAWS_DB_SIZE_WARN_BYTES` (default 2147483648, i.e. 2 GiB).
+- Deleting rows does not shrink the file and no `VACUUM` is ever run
+  automatically. To reclaim space, stop the app and run:
+
+  ```
+  sqlite3 .maws/maws.db 'VACUUM;'
+  ```
