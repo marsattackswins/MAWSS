@@ -333,9 +333,10 @@ export class BinanceLiveManager {
         takeSnapshot: () => this.snapshot(generation),
         processEvent: (ev) => this.processEvent(ev, generation),
         reconcile: () => this.reconcileRun("stream-buffer-overflow", generation),
-        freeze: (reason) => {
-          if (this.isGenerationCurrent(generation)) this.freeze(reason);
+        freeze: (reason, code) => {
+          if (this.isGenerationCurrent(generation)) this.freeze(reason, code);
         },
+        alert: (key, data) => alert(key, data),
         leaseWaitTimeoutMs: Math.max(5_000, this.cfg.leaseTtlMs + 5_000),
         onStatus: (s) => {
           if (!this.isGenerationCurrent(generation)) return;

@@ -201,7 +201,7 @@ export class FakeHttp {
 
 export class FakeWs implements WsLike {
   static instances: FakeWs[] = [];
-  handlers: Partial<Record<"open" | "message" | "close" | "error", Array<(data?: unknown) => void>>> = {};
+  handlers: Partial<Record<"open" | "message" | "close" | "error" | "ping" | "pong", Array<(data?: unknown) => void>>> = {};
   closed = false;
   sent: string[] = [];
 
@@ -227,12 +227,16 @@ export class FakeWs implements WsLike {
     this.emit("close");
   }
 
-  on(event: "open" | "message" | "close" | "error", cb: (data?: unknown) => void): void {
+  on(event: "open" | "message" | "close" | "error" | "ping" | "pong", cb: (data?: unknown) => void): void {
     (this.handlers[event] ??= []).push(cb);
   }
 
-  emit(event: "open" | "message" | "close" | "error", data?: unknown): void {
+  emit(event: "open" | "message" | "close" | "error" | "ping" | "pong", data?: unknown): void {
     for (const cb of this.handlers[event] ?? []) cb(data);
+  }
+
+  emitPing(): void {
+    this.emit("ping");
   }
 
   emitOpen(): void {

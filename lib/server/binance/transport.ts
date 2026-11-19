@@ -24,7 +24,8 @@ export interface HttpTransport {
 export interface WsLike {
   send(data: string): void;
   close(): void;
-  on(event: "open" | "message" | "close" | "error", cb: (data?: unknown) => void): void;
+  /** `ping`/`pong` are protocol frames from the server, not JSON messages. */
+  on(event: "open" | "message" | "close" | "error" | "ping" | "pong", cb: (data?: unknown) => void): void;
 }
 
 export interface WsTransport {
