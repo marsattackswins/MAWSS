@@ -13,6 +13,7 @@ import { getRuntime, RUNTIME_KEYS, setRuntime } from "@/lib/server/runtime/flags
 import {
   activeFreezes,
   clearFreeze,
+  describeActiveFreezes,
   evaluateFreezes,
   isFreezeClearable,
   registerFreeze,
@@ -182,6 +183,29 @@ describe("typed freeze reasons", () => {
     expect(evaluateFreezes(ctx({ lastCleanReconAt: Date.now(), operatorAction: false }), profile).cleared).toEqual([]);
     expect(evaluateFreezes(ctx({ lastCleanReconAt: Date.now(), operatorAction: true }), profile).cleared).toEqual(["LEGACY"]);
     expect(cfg.env).toBe("testnet");
+  });
+
+  test("the legacy runtime flag pair always mirrors the active typed rows", () => {
+    const { profile } = setup();
+    const expectMirror = () => {
+      const rows = activeFreezes(profile);
+      const frozen = getRuntime(RUNTIME_KEYS.frozen, "", profile);
+      const reason = getRuntime(RUNTIME_KEYS.frozenReason, "", profile);
+      // The gate reads "true" as frozen and anything else as not frozen; the
+      // flag must never disagree with the typed rows.
+      expect(frozen === "true").toBe(rows.length > 0);
+      expect(reason).toBe(rows.length > 0 ? describeActiveFreezes(profile) : "");
+    };
+
+    expectMirror();
+    registerFreeze("STREAM_DOWN", "stream down", { profile });
+    expectMirror();
+    registerFreeze("RECON_DRIFT", "drift", { profile });
+    expectMirror();
+    clearFreeze("STREAM_DOWN", "test", Date.now(), profile);
+    expectMirror();
+    clearFreeze("RECON_DRIFT", "test", Date.now(), profile);
+    expectMirror();
   });
 
   test("clear decision is per-code, not global", () => {

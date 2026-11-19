@@ -196,8 +196,8 @@ export class BinanceLiveManager {
       persistenceProfile: this.persistenceProfile,
       rest: this.rest,
       snapshot: () => this.snapshot(generation),
-      freeze: (reason) => {
-        if (this.isGenerationCurrent(generation)) this.freeze(reason);
+      freeze: (reason, code) => {
+        if (this.isGenerationCurrent(generation)) this.freeze(reason, code);
       },
       unfreeze: () => {
         if (this.isGenerationCurrent(generation)) this.unfreezeIfClear();
@@ -1009,9 +1009,10 @@ export class BinanceLiveManager {
   /**
    * Marks submissions frozen for one typed reason. Freezes stack: a second
    * code never overwrites an active one, and clearing one leaves the others.
-   * `code` defaults to UNCERTAIN_INTENT only for legacy call sites.
+   * `code` is required: a call site that forgets it cannot silently fall back
+   * to the weakest clear rule.
    */
-  freeze(reason: string, code: FreezeCode = "UNCERTAIN_INTENT", detail?: Record<string, unknown>): void {
+  freeze(reason: string, code: FreezeCode, detail?: Record<string, unknown>): void {
     const inserted = registerFreeze(code, reason, { detail, profile: this.persistenceProfile });
     if (!inserted) return;
     trackFreezeTriggered(reason);

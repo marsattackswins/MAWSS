@@ -278,7 +278,7 @@ export interface OrderServiceDeps {
     price: string;
     current: RiskSnapshot;
   }): Promise<RiskSnapshot | null> | RiskSnapshot | null;
-  freeze(reason: string, code?: FreezeCode, detail?: Record<string, unknown>): void;
+  freeze(reason: string, code: FreezeCode, detail?: Record<string, unknown>): void;
   /** Override the emergency lane wait budget (tests). */
   emergencyMaxWaitMs?: number;
   /**
@@ -1286,7 +1286,8 @@ export class OrderService {
     } catch (err) {
       if (err instanceof BinanceApiError && err.httpStatus === 418) {
         const message = "Binance returned HTTP 418 and may have IP-banned this client; all Binance requests are paused until the ban expires";
-        this.deps.freeze(message);
+        const banExpiresAt = Date.now() + Math.max(err.retryAfterMs ?? 0, DEFAULT_IP_BAN_MS);
+        this.deps.freeze(message, "IP_BAN", { banExpiresAt });
         this.updateIntent(clientOrderId, {
           status: "SUBMITTED",
           lastState: JSON.stringify({ code: err.code, httpStatus: err.httpStatus, retryAfterMs: err.retryAfterMs, cancelBlocked: true }),
@@ -1347,7 +1348,7 @@ export class OrderService {
           return { ok: true, clientOrderId, status: "RESOLVED" };
         } catch {
           this.updateIntent(clientOrderId, { status: "CANCEL_UNKNOWN" });
-          this.deps.freeze("cancel outcome unknown; resolving via reconciliation");
+          this.deps.freeze("cancel outcome unknown; resolving via reconciliation", "CANCEL_UNKNOWN");
           return { ok: false, clientOrderId, error: "Cancel outcome unknown; frozen until reconciliation" };
         }
       }

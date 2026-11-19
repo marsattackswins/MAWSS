@@ -49,7 +49,7 @@ export interface ReconDeps {
   rest: BinanceRestClient;
   /** Pulls account/positions/openOrders truth from the exchange into state. */
   snapshot(): Promise<void>;
-  freeze(reason: string, code?: FreezeCode): void;
+  freeze(reason: string, code: FreezeCode): void;
   /** Lifts a recon/uncertainty freeze only if the caller confirms it is safe. */
   unfreeze(): void;
   /** Rejects callbacks from a manager generation that is no longer current. */
@@ -210,8 +210,6 @@ export class Reconciler {
       if (!this.isCurrent()) return this.cancelled();
       if (result === "drift") {
         this.deps.freeze(`reconciliation drift: ${diffs.join("; ").slice(0, 300)}`, "RECON_DRIFT");
-      } else {
-        this.deps.unfreeze();
       }
     } catch (err) {
       if (!this.isCurrent()) return this.cancelled();
@@ -229,6 +227,11 @@ export class Reconciler {
       )
       .run(this.persistenceProfile.id, startedAt, finishedAt, trigger, result, redactJson({ diffs }));
     setLastRecon({ lastRunAt: finishedAt, lastResult: result, driftCount: result === "drift" ? 1 : 0 });
+    // Unfreeze only after this pass is recorded: a freeze that clears on a
+    // clean recon needs that recon to exist in reconciliation_runs, otherwise
+    // the healing pass could never clear it and a second clean pass was
+    // required.
+    if (result === "ok") this.deps.unfreeze();
     return { result, diffs, startedAt, finishedAt };
   }
 

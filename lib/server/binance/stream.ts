@@ -35,7 +35,7 @@ export interface StreamDeps {
   processEvent(ev: UserStreamEvent): unknown;
   /** Optional escalation after a buffer overflow has proven data loss. */
   reconcile?(): Promise<unknown>;
-  freeze(reason: string, code?: FreezeCode): void;
+  freeze(reason: string, code: FreezeCode): void;
   /** Operator-facing alert for stream recovery failures. */
   alert?(key: string, data: Record<string, unknown>): void;
   onStatus(status: StreamStatus): void;
