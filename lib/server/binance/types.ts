@@ -229,6 +229,10 @@ export interface OrderTradeUpdateEvent {
     z: string;
     L: string;
     rp: string;
+    /** Commission charged for this execution (positive magnitude). */
+    n?: string;
+    /** Asset the commission was charged in (e.g. USDT, BNB). */
+    N?: string;
     T: number;
   };
 }

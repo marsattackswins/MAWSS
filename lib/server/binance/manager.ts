@@ -20,7 +20,7 @@ import { RateLimiter } from "./ratelimit";
 import { BinanceRestClient, BinanceApiError } from "./rest";
 import { TransportTimeoutError } from "./transport";
 import { CircuitBreakerOpenError } from "../resilience/circuit-breaker";
-import { realizedSinceUtcMidnight, type RiskSnapshot } from "./risk";
+import { dailyPnlSinceUtcMidnight, type RiskSnapshot } from "./risk";
 import { Reconciler, checkPositionProtection, type ReconResult } from "./recon";
 import { incomeLedgerIncludes, syncIncomeHistory, type IncomeSyncResult } from "./income";
 import { markIncomeSyncFailed, markIncomeSyncSucceeded } from "./metrics-freshness";
@@ -1098,6 +1098,7 @@ export class BinanceLiveManager {
   getRiskSnapshot(): RiskSnapshot {
     const state = liveState();
     const now = Date.now();
+    const daily = dailyPnlSinceUtcMidnight(now, this.persistenceProfile);
     const accountFresh =
       state.account !== null &&
       Number.isFinite(state.account.fetchedAt) &&
@@ -1190,7 +1191,10 @@ export class BinanceLiveManager {
       grossExposureUsd: grossExposureUsd(),
       openOrderCount: state.openOrders.size,
       openPositionCount: openPositionCount(),
-      realizedTodayUsd: realizedSinceUtcMidnight(Date.now(), this.persistenceProfile),
+      realizedTodayUsd: daily.netUsd,
+      dailyRealizedPnlUsd: daily.realizedPnlUsd,
+      dailyCommissionUsd: daily.commissionUsd,
+      dailyFundingUsd: daily.fundingUsd,
       unrealizedPnlUsd,
       unrealizedPnlFresh,
       marginRatio,

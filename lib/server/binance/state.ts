@@ -89,6 +89,10 @@ export interface LiveFill {
   qty: string;
   price: string;
   realizedPnl: string;
+  /** Commission charged for this fill, as reported (positive magnitude). */
+  fee?: string;
+  /** Asset the commission was charged in. */
+  feeAsset?: string;
   source: "stream" | "rest";
 }
 
@@ -496,10 +500,10 @@ export function persistFill(fill: LiveFill, profile: PersistenceProfile = active
   const result = getDb()
     .prepare(
       `INSERT OR IGNORE INTO fills_log
-       (profile_id, ts, trade_id, exchange_order_id, client_order_id, symbol, side, qty, price, realized_pnl, source)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+       (profile_id, ts, trade_id, exchange_order_id, client_order_id, symbol, side, qty, price, fee, fee_asset, realized_pnl, source)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     )
-    .run(profile.id, fill.ts, fill.tradeId, fill.exchangeOrderId, fill.clientOrderId || null, fill.symbol, fill.side, fill.qty, fill.price, fill.realizedPnl, fill.source);
+    .run(profile.id, fill.ts, fill.tradeId, fill.exchangeOrderId, fill.clientOrderId || null, fill.symbol, fill.side, fill.qty, fill.price, fill.fee ?? null, fill.feeAsset ?? null, fill.realizedPnl, fill.source);
   return result.changes > 0;
 }
 
@@ -646,6 +650,8 @@ function extractFill(o: OrderTradeUpdateEvent["o"], skipTradeIds: ReadonlySet<st
     qty: o.l,
     price: o.L,
     realizedPnl: o.rp,
+    fee: o.n,
+    feeAsset: o.N,
     source: "stream",
   };
   return skipTradeIds.has(fill.tradeId) ? [] : [fill];

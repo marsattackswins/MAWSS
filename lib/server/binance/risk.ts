@@ -1,6 +1,9 @@
 import "server-only";
 
 import { getDb } from "../db/connection";
+import { log } from "../log/logger";
+import { audit } from "../audit/log";
+import { alert } from "../alerts/dispatch";
 import {
   activePersistenceProfile,
   assertPersistenceProfile,
@@ -24,7 +27,17 @@ export interface RiskSnapshot {
   openPositionCount: number;
   /** Used when evaluating a projected order whose post-order count differs from the base count. */
   openPositionCountAfterOrder?: number;
+  /**
+   * Net UTC-day result used by the daily-loss check: realized PnL minus
+   * commissions plus funding. (Kept under the old name for the DTO contract.)
+   */
   realizedTodayUsd: number;
+  /** Commission component of `realizedTodayUsd` (positive cost). */
+  dailyCommissionUsd?: number;
+  /** Funding component of `realizedTodayUsd` (signed as reported). */
+  dailyFundingUsd?: number;
+  /** Realized trading PnL alone (no fees), for display/debug. */
+  dailyRealizedPnlUsd?: number;
   /** Sum of mark-derived unrealized P&L, or null when unavailable/stale. */
   unrealizedPnlUsd?: number | null;
   /** False when account/position marks are missing, stale, or not mark-derived. */
@@ -52,7 +65,111 @@ export interface RiskOrderDraft {
   isClose?: boolean;
 }
 
-/** Realized P&L booked today (UTC) from the durable fills log. */
+/** Assets treated as USD at 1:1 for the daily-loss limit. */
+const USD_PEGGED_ASSETS = new Set(["USDT", "USDC", "BUSD", "FDUSD"]);
+
+/** Assets already warned about being counted at face value (per process). */
+const warnedCommissionAssets = new Set<string>();
+
+export interface DailyPnl {
+  /** Realized trading PnL only (fills_log.realized_pnl). */
+  realizedPnlUsd: number;
+  /** Commission cost as a positive USD magnitude. */
+  commissionUsd: number;
+  /** Funding fees for the day, signed as reported (paid = negative). */
+  fundingUsd: number;
+  /** realizedPnl - commission + funding: what the daily-loss check uses. */
+  netUsd: number;
+  /** Commission assets that are not USD-pegged (counted at face value). */
+  nonUsdCommissionAssets: string[];
+}
+
+function utcMidnight(now: number): number {
+  const d = new Date(now);
+  return Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate());
+}
+
+function toNumber(raw: unknown): number {
+  const n = Number(raw);
+  return Number.isFinite(n) ? n : 0;
+}
+
+/**
+ * UTC-day result including fees.
+ *
+ * Realized PnL and commission come from fills_log; funding comes ONLY from
+ * account_income FUNDING_FEE rows. Ledger REALIZED_PNL/COMMISSION rows are
+ * deliberately not summed here — they repeat the fills data, so including
+ * them would double-count.
+ *
+ * Commission conversion: USDT/USDC/BUSD/FDUSD at 1:1. Any other asset (BNB
+ * being the common case) is counted at face value (1 unit = 1 USD), which can
+ * only overstate the cost and therefore fails closed against the loss limit;
+ * it is never silently dropped. A one-time warning + audit records each such
+ * asset.
+ */
+export function dailyPnlSinceUtcMidnight(
+  now = Date.now(),
+  profile: PersistenceProfile = activePersistenceProfile(),
+): DailyPnl {
+  assertPersistenceProfile(profile);
+  const db = getDb();
+  const start = utcMidnight(now);
+  const fills = db
+    .prepare(
+      `SELECT COALESCE(SUM(CAST(realized_pnl AS REAL)), 0) AS realized,
+              COALESCE(SUM(CAST(fee AS REAL)), 0) AS fee
+         FROM fills_log
+        WHERE profile_id = ? AND ts >= ?`,
+    )
+    .get(profile.id, start) as { realized: number; fee: number };
+  const feeRows = db
+    .prepare(
+      `SELECT fee_asset, fee FROM fills_log
+        WHERE profile_id = ? AND ts >= ? AND fee IS NOT NULL AND CAST(fee AS REAL) > 0`,
+    )
+    .all(profile.id, start) as Array<{ fee_asset: string | null; fee: string }>;
+
+  let commissionUsd = 0;
+  const nonUsd = new Set<string>();
+  for (const row of feeRows) {
+    const fee = toNumber(row.fee);
+    if (fee <= 0) continue;
+    const asset = (row.fee_asset ?? "").trim().toUpperCase();
+    if (asset === "" || USD_PEGGED_ASSETS.has(asset)) {
+      // An unknown asset is treated as USD rather than dropped: counting it
+      // can only increase the measured loss.
+      commissionUsd += fee;
+      continue;
+    }
+    nonUsd.add(asset);
+    commissionUsd += fee; // conservative face value, see doc comment
+    if (!warnedCommissionAssets.has(asset)) {
+      warnedCommissionAssets.add(asset);
+      log.warn("commission charged in a non-USD asset; counted at face value for the daily-loss limit", { asset });
+      audit("system", "risk.commission_asset_non_usd", { asset, basis: "face_value_1usd_per_unit" }, undefined, profile);
+      alert("commission_asset_non_usd", { asset, severity: "medium" });
+    }
+  }
+
+  const funding = db
+    .prepare(
+      `SELECT COALESCE(SUM(CAST(amount AS REAL)), 0) AS funding
+         FROM account_income
+        WHERE profile_id = ? AND ts >= ? AND income_type = 'FUNDING_FEE'`,
+    )
+    .get(profile.id, start) as { funding: number };
+
+  return {
+    realizedPnlUsd: toNumber(fills.realized),
+    commissionUsd,
+    fundingUsd: toNumber(funding.funding),
+    netUsd: toNumber(fills.realized) - commissionUsd + toNumber(funding.funding),
+    nonUsdCommissionAssets: [...nonUsd],
+  };
+}
+
+/** Realized P&L alone, booked today (UTC) from the durable fills log. */
 export function realizedSinceUtcMidnight(
   now = Date.now(),
   profile: PersistenceProfile = activePersistenceProfile(),
