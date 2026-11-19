@@ -3,6 +3,7 @@
 import { useEffect, useRef, useState } from "react";
 import { AlertsPanel } from "@/components/alerts/AlertsPanel";
 import { NewsCalendarPanel } from "@/components/calendar/NewsCalendarPanel";
+import { JournalPreviewPanel } from "@/components/journal/JournalPreviewPanel";
 import { ObjectTree } from "@/components/objects/ObjectTree";
 import { PineScriptsPanel } from "@/components/pine/PineScriptsPanel";
 import { StrategyScreener } from "@/components/maws/StrategyScreener";
@@ -79,8 +80,8 @@ export function RightSidebar() {
       className="relative flex shrink-0 flex-col border-l"
       style={{
         width,
-        background: "var(--maws-panel)",
-        borderColor: "var(--maws-border)",
+        background: "var(--app-panel)",
+        borderColor: "var(--app-border)",
       }}
     >
       <div className="flex min-h-0 flex-1 flex-col">
@@ -124,6 +125,11 @@ export function RightSidebar() {
         {effectiveDock === "scripts" && (
           <div className="min-h-0 flex-1">
             <PineScriptsPanel />
+          </div>
+        )}
+        {effectiveDock === "journal" && (
+          <div className="min-h-0 flex-1">
+            <JournalPreviewPanel />
           </div>
         )}
       </div>

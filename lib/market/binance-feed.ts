@@ -120,6 +120,35 @@ function emptyQuote(symbol: string): Quote {
   };
 }
 
+/**
+ * UTC-day stats from the forming 1D bar (Binance daily candles open 00:00 UTC).
+ * The bar's open IS the day's open; high/low extend with every observed last
+ * price so they stay fresh even when no chart subscribes to 1D. `anchored`
+ * means prev's day fields belong to the same UTC day — a new day resets them
+ * instead of inheriting yesterday's extremes. A missing/stale tip clears the
+ * fields (consumers fall back to 24h stats) until the rollover refetch lands.
+ */
+export function dayStatsFromTip(
+  tip: Candle | undefined,
+  last: number,
+  prev: { dayOpen?: number; dayHigh?: number; dayLow?: number },
+  nowMs: number,
+  anchored: boolean,
+): { dayOpen?: number; dayHigh?: number; dayLow?: number } {
+  const dayStart = Math.floor(nowMs / 86_400_000) * 86_400;
+  if (!tip || tip.time !== dayStart || !(tip.open > 0)) {
+    return { dayOpen: undefined, dayHigh: undefined, dayLow: undefined };
+  }
+  const lastPx = Number.isFinite(last) && last > 0 ? last : 0;
+  const prevHigh = anchored && prev.dayHigh != null ? prev.dayHigh : 0;
+  const prevLow = anchored && prev.dayLow != null ? prev.dayLow : Infinity;
+  return {
+    dayOpen: tip.open,
+    dayHigh: Math.max(tip.high, lastPx, prevHigh),
+    dayLow: Math.min(tip.low, lastPx > 0 ? lastPx : Infinity, prevLow),
+  };
+}
+
 function appSymbolFromBinance(binanceSym: string): string | null {
   const app = fromBinanceSymbol(binanceSym);
   // Accept any USDT contract even before universe finishes loading.
@@ -236,6 +265,8 @@ class BinanceFuturesFeed {
   private klineHealth = new Map<string, KlineSeriesHealth>();
   /** Latest accepted miniTicker provider event time (E) per symbol. */
   private lastTickerEventAt = new Map<string, number>();
+  /** UTC day-start (seconds) the stored dayHigh/dayLow belong to, per symbol. */
+  private dayAnchor = new Map<string, number>();
 
   /** Combined kline socket (all subscribed symbol/tf streams on one connection). */
   private klineRefs = new Map<string, number>();
@@ -329,6 +360,18 @@ class BinanceFuturesFeed {
     }
     this.quotes.delete(symbol);
     this.lastTickerEventAt.delete(symbol);
+    this.dayAnchor.delete(symbol);
+  }
+
+  /** Day stats for the quote about to be written; keeps the day anchor in step. */
+  private dayStats(symbol: string, last: number, prev: Quote) {
+    const nowMs = Date.now();
+    const dayStart = Math.floor(nowMs / 86_400_000) * 86_400;
+    const tip = this.series.get(this.key(symbol, "1D"))?.at(-1);
+    const stats = dayStatsFromTip(tip, last, prev, nowMs, this.dayAnchor.get(symbol) === dayStart);
+    if (stats.dayOpen != null) this.dayAnchor.set(symbol, dayStart);
+    else this.dayAnchor.delete(symbol);
+    return stats;
   }
 
   getCandles(symbol: string, tf: Timeframe): Candle[] {
@@ -818,6 +861,7 @@ class BinanceFuturesFeed {
     this.quotes.set(symbol, {
       ...prev,
       ...partial,
+      ...this.dayStats(symbol, last, prev),
       symbol,
       last,
       open,
@@ -872,6 +916,15 @@ class BinanceFuturesFeed {
   private async refreshHotTickers() {
     const symbols = [...this.hotSymbols];
     if (symbols.length === 0) return;
+
+    // Day rollover: the cached 1D tip is yesterday's once UTC midnight passes.
+    // Force a refetch then; a missing tip uses the normal (backoff-aware) path.
+    const dayStart = Math.floor(Date.now() / 86_400_000) * 86_400;
+    for (const sym of symbols) {
+      const tip = this.series.get(this.key(sym, "1D"))?.at(-1);
+      if (tip && tip.time < dayStart) void this.ensureHistory(sym, "1D", true);
+      else if (!tip) void this.ensureHistory(sym, "1D");
+    }
 
     let any = false;
     const fetchOne = async (symbol: string) => {
@@ -1093,12 +1146,15 @@ class BinanceFuturesFeed {
     const change = open > 0 ? lastPx - open : 0;
     this.quotes.set(symbol, {
       ...prev,
+      ...this.dayStats(symbol, lastPx, prev),
       symbol,
       last: lastPx,
       open,
       high: Math.max(prev.high || lastPx, last.high),
       low: prev.low > 0 ? Math.min(prev.low, last.low) : last.low,
-      volume: last.volume,
+      // Keep the miniTicker rolling-24h volume; the chart bar's volume is a
+      // different measure and would flip semantics for the chart symbol.
+      volume: prev.volume,
       change,
       changePct: open > 0 ? (change / open) * 100 : prev.changePct,
       rsi,
@@ -1142,6 +1198,7 @@ class BinanceFuturesFeed {
             : prev.last;
       const next: Quote = {
         ...prev,
+        ...this.dayStats(appSymbol, prev.last, prev),
         open,
         high: nextHigh,
         low: nextLow,
@@ -1153,7 +1210,10 @@ class BinanceFuturesFeed {
         Math.abs(prev.open - open) < 1e-12 &&
         Math.abs(prev.changePct - next.changePct) < 1e-6 &&
         prev.high === next.high &&
-        prev.low === next.low;
+        prev.low === next.low &&
+        prev.dayOpen === next.dayOpen &&
+        prev.dayHigh === next.dayHigh &&
+        prev.dayLow === next.dayLow;
       if (same) return;
       this.quotes.set(appSymbol, next);
       this.advanceTickerWatermark(appSymbol, t.E);

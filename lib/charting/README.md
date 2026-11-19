@@ -289,6 +289,13 @@ Local changes on top of upstream v0.8.1:
   synthetic 20,000-bar microbenchmark showed about 40–55% lower median aggregation time across
   alternating-color and trend-like inputs. Covered by `test/native-candle-lod.test.ts`.
 
+- **True Black is OLED true black.** `BLACK_THEME` (a MAWS-added palette, not
+  upstream) paints every surface `#000000` — `bgPanel`, `bgCard` and `bgBar`
+  were raised greys (`#111111` / `#1a1a1a` / `#171b26`) and made the shell's
+  panels and bars read grey beside the black chart. Hairline `#222222` borders
+  do the separation; only transient chip/hover tones stay lifted. MAWS migrates
+  persisted raised tones via `migrateOledBlackSurfaces` in `lib/app-theme.ts`.
+  `core/theme.ts`.
 - **Gruvbox theme name.** `ThemeName` gains `'gruvbox'` and `resolveTheme`
   maps it to a new `GRUVBOX_THEME` palette (hardcoded gruvbox dark: bg0
   `#282828`, fg1 text, neutral green `#98971a` / red `#cc241d` candles — the

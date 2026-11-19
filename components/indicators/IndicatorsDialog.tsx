@@ -219,7 +219,7 @@ export function IndicatorsDialog() {
               if (e.key === "Escape") close();
             }}
             placeholder="Search"
-            className="h-10 w-full bg-transparent text-[13px] text-[var(--app-text)] outline-none placeholder:text-[var(--app-faint)]"
+            className="indicators-search-input h-10 w-full bg-transparent text-[13px] text-[var(--app-text)] outline-none placeholder:text-[var(--app-faint)] focus:outline-none focus-visible:outline-none"
           />
           {q ? (
             <button type="button" onClick={() => setQ("")} className="text-[var(--app-muted)] hover:text-[var(--app-text)]" aria-label="Clear">

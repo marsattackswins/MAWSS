@@ -757,7 +757,7 @@ export function createChartSlice(set: RootSet, get: RootGet): ChartSlice {
 /** Study types that moved to Vela-native indicators — dropped on hydrate. */
 const LEGACY_STUDY_TYPES = new Set<string>(["volume", "pmo", "ob"]);
 
-const VELA_THEME_NAMES = ["dark", "classic", "light", "gruvbox"] as const;
+const VELA_THEME_NAMES = ["black", "dark", "classic", "light", "gruvbox"] as const;
 
 function sameColor(a: unknown, b: unknown): boolean {
   return String(a ?? "").toLowerCase() === String(b ?? "").toLowerCase();

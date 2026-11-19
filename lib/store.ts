@@ -98,6 +98,8 @@ export const workspacePartialize = (state: Store) => ({
   alerts: state.alerts,
   watchlistHeight: state.watchlistHeight,
   strategyCardsHeight: state.strategyCardsHeight,
+  rowDensity: state.rowDensity,
+  reduceMotion: state.reduceMotion,
   autoScaleByPane: state.autoScaleByPane,
   paneStretchFactors: state.paneStretchFactors,
   columnWidths: state.columnWidths,

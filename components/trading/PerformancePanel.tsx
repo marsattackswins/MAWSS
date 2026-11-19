@@ -3,7 +3,7 @@
 import { useMemo } from "react";
 import { formatTicker } from "@/lib/maws/universe";
 import { computePerformanceStats } from "@/lib/trading/performance";
-import { formatNum } from "@/lib/trading/format";
+import { formatNum, formatSignedNum } from "@/lib/trading/format";
 import { PanelEmpty, PanelWaiting } from "@/components/ui/panel-states";
 import type { OrderHistoryEntry } from "@/types";
 
@@ -42,7 +42,7 @@ function StatCell({
 
 const pctText = (rate: number | null) => (rate == null ? "—" : `${Math.round(rate * 100)}%`);
 
-const signed = (v: number) => (v >= 0 ? "+" : "") + formatNum(v);
+const signed = (v: number) => formatSignedNum(v);
 
 export function PerformancePanel({
   histRows,

@@ -165,6 +165,7 @@ describe("ui-slice (real root store)", () => {
         "strategy",
         "objects",
         "calendar",
+        "journal",
       ]);
       s.setRightDockOrder(RIGHT_DOCK_IDS);
     });
@@ -178,6 +179,7 @@ describe("ui-slice (real root store)", () => {
         "calendar",
         "objects",
         "alerts",
+        "journal",
       ]);
     });
 
@@ -190,6 +192,7 @@ describe("ui-slice (real root store)", () => {
         "calendar",
         "objects",
         "scripts",
+        "journal",
       ]);
     });
   });
@@ -271,7 +274,7 @@ describe("right-rail live reorder helpers", () => {
 
   it("sameDockOrder distinguishes equal arrangements from a real change", () => {
     expect(sameDockOrder(base, [...base])).toBe(true);
-    expect(sameDockOrder(base, normalizeDockOrder(base))).toBe(true);
+    expect(sameDockOrder(RIGHT_DOCK_IDS, normalizeDockOrder(RIGHT_DOCK_IDS))).toBe(true);
     expect(sameDockOrder(base, ["calendar", "strategy", "objects", "scripts", "alerts"])).toBe(
       false,
     );

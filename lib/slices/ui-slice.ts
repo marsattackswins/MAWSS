@@ -4,6 +4,7 @@ import {
   migrateLegacyAppSettings,
   migrateLiftedBorder,
   migrateMutedPanelColor,
+  migrateOledBlackSurfaces,
   normalizeAppSettings,
   type AppSettings,
 } from "@/lib/app-theme";
@@ -25,6 +26,9 @@ export type BottomTab =
   | "performance"
   | "journal";
 
+/** List row height preference for the watchlist, positions and orders. */
+export type RowDensity = "comfortable" | "compact";
+
 /** The three fold-out blocks of the symbol card, addressed by the dock. */
 export type SymbolPanelBlock = "news" | "sessions" | "technicals";
 
@@ -35,6 +39,7 @@ export const RIGHT_DOCK_IDS: DockId[] = [
   "objects",
   "scripts",
   "alerts",
+  "journal",
 ];
 
 /**
@@ -130,6 +135,10 @@ export type UiSliceState = {
   appSettings: AppSettings;
   columnWidths: Record<string, number[]>;
   strategyCardsHeight: number;
+  /** Comfortable (default) or Compact rows in the watchlist, positions and orders. */
+  rowDensity: RowDensity;
+  /** "Less movement": turns off every transition/animation in the shell. */
+  reduceMotion: boolean;
 };
 
 export type UiSliceActions = {
@@ -166,6 +175,8 @@ export type UiSliceActions = {
   patchAppSettings: (patch: Partial<AppSettings>) => void;
   setAppSettings: (value: AppSettings) => void;
   setStrategyCardsHeight: (height: number) => void;
+  setRowDensity: (density: RowDensity) => void;
+  setReduceMotion: (enabled: boolean) => void;
 };
 
 export type UiSlice = UiSliceState & UiSliceActions;
@@ -174,6 +185,12 @@ type RootSet = (
   partial: Partial<Store> | ((state: Store) => Partial<Store>),
 ) => void;
 type RootGet = () => Store;
+
+/** Mirror the "less movement" switch onto <html> so plain CSS can honour it. */
+export function applyReduceMotion(enabled: boolean): void {
+  if (typeof document === "undefined") return;
+  document.documentElement.setAttribute("data-reduce-motion", enabled ? "true" : "false");
+}
 
 export function createUiSlice(set: RootSet, get: RootGet): UiSlice {
   return {
@@ -202,6 +219,8 @@ export function createUiSlice(set: RootSet, get: RootGet): UiSlice {
     appSettings: { ...DEFAULT_APP_SETTINGS },
     columnWidths: {},
     strategyCardsHeight: 320,
+    rowDensity: "comfortable",
+    reduceMotion: false,
 
     setShortcut: (id, chord) =>
       set({ shortcuts: { ...get().shortcuts, [id]: chord } }),
@@ -332,6 +351,12 @@ export function createUiSlice(set: RootSet, get: RootGet): UiSlice {
       set({ appSettings: next });
     },
     setStrategyCardsHeight: (height) => set({ strategyCardsHeight: height }),
+    setRowDensity: (density) =>
+      set({ rowDensity: density === "compact" ? "compact" : "comfortable" }),
+    setReduceMotion: (enabled) => {
+      applyReduceMotion(enabled);
+      set({ reduceMotion: enabled });
+    },
   };
 }
 
@@ -341,10 +366,17 @@ export function createUiSlice(set: RootSet, get: RootGet): UiSlice {
  */
 export function normalizeUiRehydrate(state: Store): void {
   state.appSettings = migrateLiftedBorder(
-    migrateMutedPanelColor(migrateLegacyAppSettings(normalizeAppSettings(state.appSettings))),
+    migrateOledBlackSurfaces(
+      migrateMutedPanelColor(migrateLegacyAppSettings(normalizeAppSettings(state.appSettings))),
+    ),
   );
   applyAppTheme(state.appSettings);
   state.shortcuts = mergeShortcuts(state.shortcuts);
+  // Density and motion are user preferences, but a stale or hand-edited document
+  // may carry anything: heal to known values before the shell paints.
+  state.rowDensity = state.rowDensity === "compact" ? "compact" : "comfortable";
+  state.reduceMotion = state.reduceMotion === true;
+  applyReduceMotion(state.reduceMotion);
   if (
     (state.rightDock as string) === "watchlist" ||
     (state.rightDock as string) === "screener"

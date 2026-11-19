@@ -86,11 +86,11 @@ export function VelaTemplateMenu() {
         role="button"
         data-template-trigger
         onClick={() => setOpen(!open)}
-        className={`toolbar-btn gap-1 px-2 text-[12px] ${open ? "is-active" : ""} text-(--app-text)`}
+        className={`toolbar-btn gap-1 px-2 text-[12px] ${open ? "is-active" : ""}`}
       >
         <TemplateGlyph />
         <span className="max-w-[140px] truncate">{activeName ?? defaultTemplate?.name ?? "Template"}</span>
-        <ChevronDown size={11} className="text-(--app-muted)" />
+        <ChevronDown size={11} className="text-inherit" />
       </button>
       {open && (
         <div className="menu right-0 left-auto w-[320px]" data-dropdown-open>

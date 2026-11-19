@@ -12,7 +12,7 @@ import {
   dispatchClosePosition,
   dispatchRemoveProtection,
 } from "@/lib/trading/dispatch";
-import { formatNum, formatUsd } from "@/lib/trading/format";
+import { formatNum, formatSignedNum, formatSignedUsd } from "@/lib/trading/format";
 import { PerformancePanel } from "@/components/trading/PerformancePanel";
 import { timezoneIana } from "@/lib/timezone";
 import { PanelEmpty, PanelWaiting } from "@/components/ui/panel-states";
@@ -72,7 +72,7 @@ function Metric({
 
 /** P&L values always carry an explicit sign: +0.00 / -1.23. Zero counts as positive. */
 function formatSigned(value: number): string {
-  return `${value >= 0 ? "+" : ""}${formatNum(value)}`;
+  return formatSignedNum(value);
 }
 
 /**
@@ -95,7 +95,7 @@ export function PnlCell({
     <span
       title={markPriceStale && ageS != null ? `PnL from fill snapshot; mark age ${ageS}s` : undefined}
     >
-      {pnl > 0 ? `+${formatUsd(pnl)}` : formatUsd(pnl)}
+      {formatSignedUsd(pnl)}
       {markPriceStale ? (
         <span
           role="status"
@@ -109,7 +109,37 @@ export function PnlCell({
   );
 }
 
-function formatStamp(ms: number, timeZone = "Africa/Casablanca") {
+/**
+ * Risk bar: how much of the entry→stop distance price has already given up.
+ * Display only — it reads the stop the exchange book reports, never recomputes
+ * one. Positions without a stop have no bar.
+ */
+function RiskBar({ entry, last, sl }: { entry: number; last: number; sl: number | null }) {
+  if (sl == null) return null;
+  const span = Math.abs(entry - sl);
+  if (!(span > 0)) return null;
+  const progress = Math.max(0, Math.min(1, Math.abs(last - entry) / span));
+  const critical = progress >= 0.8;
+  const pct = Math.round(progress * 100);
+  return (
+    <span
+      role="img"
+      aria-label={`Risk: ${pct}% of the way from entry to stop loss`}
+      title={`${pct}% of the way from entry to stop loss`}
+      className="mt-1 block h-[3px] w-[64px] overflow-hidden rounded-full bg-(--app-faint)/40"
+    >
+      <span
+        className="block h-full rounded-full"
+        style={{
+          width: `${Math.max(2, pct)}%`,
+          background: critical ? "var(--app-down)" : "var(--app-accent)",
+        }}
+      />
+    </span>
+  );
+}
+
+function formatStamp(ms: number, timeZone = "UTC") {
   const d = new Date(ms);
   const parts = new Intl.DateTimeFormat("en-CA", {
     timeZone,
@@ -335,6 +365,7 @@ export function computePosRows(
 
 export function PositionsPanel() {
   const tab = useAppStore((s) => s.bottomTab);
+  const rowDensity = useAppStore((s) => s.rowDensity);
   const timezone = useAppStore((s) => s.chartSettings.timezone);
   const stampTz = timezoneIana(timezone);
   const setBrokerDialogOpen = useAppStore((s) => s.setBrokerDialogOpen);
@@ -521,7 +552,7 @@ export function PositionsPanel() {
               hint="Open a trade and it will show up here."
             />
           ) : (
-            <table className="w-full min-w-[980px] text-left text-[12px]">
+            <table className="w-full min-w-[980px] text-left text-[12px]" data-density={rowDensity}>
               <thead className="sticky top-0 bg-[var(--maws-panel)] text-(--app-muted)">
                 <tr>
                   <th className="px-2 py-2 font-normal">Symbol</th>
@@ -557,6 +588,7 @@ export function PositionsPanel() {
                     <tr key={p.id} className="border-t border-(--app-border) text-(--app-text)">
                       <td className="px-2 py-2">
                         {formatTicker(p.symbol)}
+                        <RiskBar entry={p.entry} last={p.last} sl={p.sl} />
                         {p.protectionStatus === "UNPROTECTED" && (
                           <span className="ml-1 text-[var(--app-down)]" title="The recorded TP/SL protection is missing or could not be confirmed">
                             UNPROTECTED
@@ -573,8 +605,8 @@ export function PositionsPanel() {
                       <td className="px-2 py-2">{p.leverage}x</td>
                       <td className="px-2 py-2">{formatNum(notional)}</td>
                       <td className={`px-2 py-2 ${pct >= 0 ? "text-[var(--app-up)]" : "text-[var(--app-down)]"}`}>
-                        {pct >= 0 ? "+" : ""}
-                        {formatNum(pct)}%
+
+                        {formatSignedNum(pct)}%
                       </td>
                       <td className={`px-2 py-2 ${pnl >= 0 ? "text-[var(--app-up)]" : "text-[var(--app-down)]"}`}>
                         <PnlCell pnl={pnl} markPriceStale={p.markPriceStale} markAgeMs={p.markAgeMs} />
@@ -625,7 +657,7 @@ export function PositionsPanel() {
               hint="Limit and stop orders stay here until they fill."
             />
           ) : (
-            <table className="w-full text-left text-[12px]">
+            <table className="w-full text-left text-[12px]" data-density={rowDensity}>
               <thead className="sticky top-0 bg-[var(--maws-panel)] text-(--app-muted)">
                 <tr>
                   <th className="px-2 py-2 font-normal">Symbol</th>
@@ -825,7 +857,7 @@ export function PositionsPanel() {
                           <td className="px-2 py-2">{formatNum(before)}</td>
                           <td className={`px-2 py-2 whitespace-nowrap ${isPnl ? pnlColor : "text-(--app-muted)"}`}>
                             {isPnl
-                              ? `${b.amount < 0 ? "-" : ""}${formatNum(Math.abs(b.amount))} USD`
+                              ? `${formatSignedNum(b.amount)} USD`
                               : b.type === "deposit" || b.type === "withdrawal"
                                 ? `${b.amount < 0 ? "-" : ""}${formatNum(Math.abs(b.amount))} USD`
                                 : "—"}

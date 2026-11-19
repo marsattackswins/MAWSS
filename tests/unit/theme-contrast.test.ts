@@ -1,6 +1,7 @@
 import { appSettingsFromTheme } from "@/lib/app-theme";
 import type { ThemeName } from "@/lib/charting";
 import {
+  BLACK_THEME,
   CLASSIC_THEME,
   DARK_THEME,
   GRUVBOX_THEME,
@@ -21,6 +22,7 @@ import { CONTRAST, contrastRatio, formatRatio, resolveAppTokens } from "@/lib/th
 /** The real palettes, read from the charting source: jest stubs `@/lib/charting`
  *  for component tests, so the palette table is imported directly. */
 const PALETTES: Array<[ThemeName, typeof DARK_THEME]> = [
+  ["black", BLACK_THEME],
   ["dark", DARK_THEME],
   ["classic", CLASSIC_THEME],
   ["gruvbox", GRUVBOX_THEME],
@@ -101,6 +103,21 @@ describe("theme contrast", () => {
         border: theme.border ?? theme.borderColor,
       });
     }
+  });
+
+  it("keeps true black OLED: every shell surface at #000000", () => {
+    const settings = appSettingsFromTheme(BLACK_THEME, "black");
+    expect({
+      background: settings.backgroundColor,
+      panel: settings.panelColor,
+      elevated: settings.elevatedColor,
+      bar: settings.barColor,
+    }).toEqual({
+      background: "#000000",
+      panel: "#000000",
+      elevated: "#000000",
+      bar: "#000000",
+    });
   });
 
   it("keeps every token above its readable floor", () => {

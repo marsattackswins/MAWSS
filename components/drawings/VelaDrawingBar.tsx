@@ -743,14 +743,42 @@ function orientHorizontal(root: HTMLElement, host: HTMLElement): () => void {
 .vela-dtb-host .vela-dtb-btn[aria-label="Stay in drawing mode"]{display:none !important;}
 /* Tool-cell ink. */
 .vela-dtb-host .vela-dtb{color:var(--app-muted) !important;}
-.vela-dtb-host .vela-dtb-btn:hover,.vela-dtb-host .vela-dtb-icon:hover,.vela-dtb-host .vela-dtb-arrow:hover{color:var(--app-text) !important;}
+.vela-dtb-host .vela-dtb-btn:hover,.vela-dtb-host .vela-dtb-icon:hover,.vela-dtb-host .vela-dtb-arrow:hover{color:#fff !important;}
 .vela-dtb-host .vela-dtb-btn[data-active='1'],.vela-dtb-host .vela-dtb-cell[data-active='1'] .vela-dtb-icon{color:#fff !important;}
-/* MAWS extra buttons. Toggled-on (or panel open) = the ARMED-TOOL treatment:
-   pure white glyph on the very same --vela-active tint the selected tool cell
-   wears (the token is written on the bar root, so it resolves in-button). */
-.vela-dtb-host .toolbar-btn[data-on='1']{background:var(--vela-active);color:#fff;}
+.vela-dtb-host .vela-dtb-btn:hover .vela-dtb-hit,
+.vela-dtb-host .vela-dtb-icon:hover .vela-dtb-hit,
+.vela-dtb-host .vela-dtb-arrow:hover .vela-dtb-hit,
+.vela-dtb-host .vela-dtb-btn[data-active='1'] .vela-dtb-hit,
+.vela-dtb-host .vela-dtb-cell[data-active='1'] .vela-dtb-icon .vela-dtb-hit{background:transparent !important;}
+/* MAWS extra buttons. */
+.vela-dtb-host .toolbar-btn[data-on='1']{background:transparent !important;color:#fff !important;}
 /* One-shot buttons flash pure white while pressed. */
-.vela-dtb-host .toolbar-btn:active{color:#fff;}
+.vela-dtb-host .toolbar-btn:active{color:#fff !important;}
+
+/* White / Light theme: keep drawing tool hover/active overlay working with dark ink */
+html[data-theme="light"] .vela-dtb-host .vela-dtb-btn:hover,
+html[data-theme="light"] .vela-dtb-host .vela-dtb-icon:hover,
+html[data-theme="light"] .vela-dtb-host .vela-dtb-arrow:hover{color:var(--app-text) !important;}
+html[data-theme="light"] .vela-dtb-host .vela-dtb-btn:hover .vela-dtb-hit,
+html[data-theme="light"] .vela-dtb-host .vela-dtb-icon:hover .vela-dtb-hit,
+html[data-theme="light"] .vela-dtb-host .vela-dtb-arrow:hover .vela-dtb-hit{background:var(--app-hover) !important;}
+html[data-theme="light"] .vela-dtb-host .vela-dtb-btn[data-active='1'],
+html[data-theme="light"] .vela-dtb-host .vela-dtb-cell[data-active='1'] .vela-dtb-icon{color:var(--app-text) !important;}
+html[data-theme="light"] .vela-dtb-host .vela-dtb-btn[data-active='1'] .vela-dtb-hit,
+html[data-theme="light"] .vela-dtb-host .vela-dtb-cell[data-active='1'] .vela-dtb-icon .vela-dtb-hit{background:var(--app-hover) !important;}
+html[data-theme="light"] .vela-dtb-host .toolbar-btn[data-on='1']{background:var(--app-hover) !important;color:var(--app-text) !important;}
+/* Vela Classic theme: same overlay effect as White */
+html[data-theme="classic"] .vela-dtb-host .vela-dtb-btn:hover,
+html[data-theme="classic"] .vela-dtb-host .vela-dtb-icon:hover,
+html[data-theme="classic"] .vela-dtb-host .vela-dtb-arrow:hover{color:var(--app-text) !important;}
+html[data-theme="classic"] .vela-dtb-host .vela-dtb-btn:hover .vela-dtb-hit,
+html[data-theme="classic"] .vela-dtb-host .vela-dtb-icon:hover .vela-dtb-hit,
+html[data-theme="classic"] .vela-dtb-host .vela-dtb-arrow:hover .vela-dtb-hit{background:var(--app-hover) !important;}
+html[data-theme="classic"] .vela-dtb-host .vela-dtb-btn[data-active='1'],
+html[data-theme="classic"] .vela-dtb-host .vela-dtb-cell[data-active='1'] .vela-dtb-icon{color:var(--app-text) !important;}
+html[data-theme="classic"] .vela-dtb-host .vela-dtb-btn[data-active='1'] .vela-dtb-hit,
+html[data-theme="classic"] .vela-dtb-host .vela-dtb-cell[data-active='1'] .vela-dtb-icon .vela-dtb-hit{background:var(--app-hover) !important;}
+html[data-theme="classic"] .vela-dtb-host .toolbar-btn[data-on='1']{background:var(--app-hover) !important;color:var(--app-text) !important;}
 .vela-dtb-host .toolbar-btn{
   height:28px !important;
   min-width:28px !important;

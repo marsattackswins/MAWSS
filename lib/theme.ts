@@ -8,7 +8,7 @@
 
 export const TV = {
   bg: "#000000",
-  panel: "#111111",
+  panel: "#000000",
   border: "#222222",
   hover: "#1a1a1a",
   active: "#2a2a2a",

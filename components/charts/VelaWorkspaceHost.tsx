@@ -316,7 +316,7 @@ export function VelaWorkspaceHost() {
       }
       registerChart(id, {
         vela: cell.chart,
-        renderer: cell.chart.renderer as never,
+        renderer: cell.chart.renderer,
         el: cell.host,
         getTemplatePrefs: () => cell.templatePrefs(),
         applyTemplatePrefs: (prefs) => cell.applyTemplatePrefs(prefs),

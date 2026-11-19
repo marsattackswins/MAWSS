@@ -627,9 +627,17 @@ describe("normalizeChartRehydrate (legacy compat)", () => {
     normalizeChartRehydrate(st);
     expect(st.chartSettings.grid).toBe(false);
     expect(st.chartSettings.candleStyle).toBe(DEFAULT_CHART_SETTINGS.candleStyle);
-    expect(st.chartSettings.timezone).toBe("Africa/Casablanca");
+    expect(st.chartSettings.timezone).toBe("UTC");
     // The prior 14px scale label default is migrated to the current 12px.
     expect(st.chartSettings.scaleFontSize).toBe(12);
+  });
+
+  it("folds the retired UTC+0 default onto the single UTC entry", () => {
+    const st = fakeState({
+      chartSettings: { timezone: "Africa/Casablanca" },
+    });
+    normalizeChartRehydrate(st);
+    expect(st.chartSettings.timezone).toBe("UTC");
   });
 
   it("keeps valid timezones and non-14 scale font sizes", () => {

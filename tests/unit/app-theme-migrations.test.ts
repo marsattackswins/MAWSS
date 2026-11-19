@@ -1,4 +1,10 @@
-import { DEFAULT_APP_SETTINGS, LIFTED_BORDERS, migrateLiftedBorder } from "@/lib/app-theme";
+import {
+  DEFAULT_APP_SETTINGS,
+  LIFTED_BORDERS,
+  migrateLiftedBorder,
+  migrateOledBlackSurfaces,
+  RAISED_BLACK_SURFACES,
+} from "@/lib/app-theme";
 import {
   CLASSIC_THEME,
   DARK_THEME,
@@ -44,5 +50,66 @@ describe("migrateLiftedBorder", () => {
       expect(migrateLiftedBorder(settings)).toBe(settings);
       expect(migrateLiftedBorder(settings).borderColor).toBe(lifted);
     }
+  });
+});
+
+/**
+ * The black theme went OLED true black: its panels/cards/bars were raised
+ * greys, and sessions that persisted them keep painting grey surfaces beside
+ * the black chart until exactly those tones drop to #000 on load.
+ */
+describe("migrateOledBlackSurfaces", () => {
+  it("drops the old raised panel, card and bar tones to true black", () => {
+    const settings = {
+      ...DEFAULT_APP_SETTINGS,
+      panelColor: "#111111",
+      elevatedColor: "#1a1a1a",
+      barColor: "#171b26",
+    };
+    const migrated = migrateOledBlackSurfaces(settings);
+    expect(migrated.panelColor).toBe("#000000");
+    expect(migrated.elevatedColor).toBe("#000000");
+    expect(migrated.barColor).toBe("#000000");
+    // Hover is feedback, not a surface — it keeps its lifted tone.
+    expect(migrated.hoverColor).toBe(settings.hoverColor);
+  });
+
+  it("recognises only the exact tones the old palette wrote", () => {
+    expect(Object.keys(RAISED_BLACK_SURFACES).sort()).toEqual(
+      ["#111111", "#171b26", "#1a1a1a"].sort(),
+    );
+    const settings = {
+      ...DEFAULT_APP_SETTINGS,
+      panelColor: "#0d0d0d",
+      elevatedColor: "#202020",
+      barColor: "#101014",
+    };
+    expect(migrateOledBlackSurfaces(settings)).toBe(settings);
+  });
+
+  it("leaves other themes' surfaces alone", () => {
+    const settings = {
+      ...DEFAULT_APP_SETTINGS,
+      backgroundColor: "#202126",
+      panelColor: "#111111",
+      elevatedColor: "#1a1a1a",
+      barColor: "#171b26",
+    };
+    expect(migrateOledBlackSurfaces(settings)).toBe(settings);
+  });
+
+  it("leaves advanced-colour themes alone", () => {
+    const settings = { ...DEFAULT_APP_SETTINGS, advancedColors: true };
+    expect(migrateOledBlackSurfaces(settings)).toBe(settings);
+  });
+
+  it("is a no-op on an already-OLED palette", () => {
+    const settings = {
+      ...DEFAULT_APP_SETTINGS,
+      panelColor: "#000000",
+      elevatedColor: "#000000",
+      barColor: "#000000",
+    };
+    expect(migrateOledBlackSurfaces(settings)).toBe(settings);
   });
 });

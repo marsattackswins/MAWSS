@@ -4,6 +4,7 @@ import { useEffect, useRef, useState } from "react";
 import { MawsLogo } from "@/components/brand/MawsLogo";
 import { getChart } from "@/lib/chart-registry";
 import { MAWS_FULL_NAME } from "@/lib/maws/brand";
+import { velaThemeNameFromAppSettings } from "@/lib/app-theme";
 import { useAppStore } from "@/lib/store";
 import { BookOpen, Keyboard, Settings } from "lucide-react";
 
@@ -15,6 +16,7 @@ export function MawsProductMenu() {
   const activePaneId = useAppStore((s) => s.activePaneId);
   const setJournalOverlayOpen = useAppStore((s) => s.setJournalOverlayOpen);
   const setSettingsOpen = useAppStore((s) => s.setSettingsOpen);
+  const isWhiteTheme = useAppStore((s) => ["light", "classic"].includes(velaThemeNameFromAppSettings(s.appSettings)));
 
   useEffect(() => {
     if (!menuOpen) return;
@@ -39,7 +41,11 @@ export function MawsProductMenu() {
         onKeyDown={(e) => {
           if (e.key === "Escape") setMenuOpen(false);
         }}
-        className="flex h-[28px] w-[28px] items-center justify-center rounded-[4px] text-(--app-muted) hover:bg-(--app-hover) hover:text-(--app-text)"
+        className={`flex h-[28px] w-[28px] items-center justify-center rounded-[4px] transition-colors ${
+          isWhiteTheme
+            ? "text-(--app-muted) hover:bg-(--app-hover) hover:text-(--app-text)"
+            : "text-(--app-muted) hover:text-white"
+        }`}
       >
         <MawsLogo size={18} mono title={MAWS_FULL_NAME} />
       </button>

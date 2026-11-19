@@ -110,6 +110,7 @@ export function applyAppTheme(settings: AppSettings) {
   // surface, so its menus drop to the background tone; other themes keep the
   // elevated card color they already share with their dialogs.
   const themeName = velaThemeNameFromAppSettings(s);
+  root.dataset.theme = themeName;
   const menuColor = themeName === "gruvbox" ? s.backgroundColor : s.elevatedColor;
   root.style.setProperty("--app-menu", menuColor);
   // Attention tone: amber on the dark palettes, a darker one on white so event
@@ -162,6 +163,8 @@ export function appSettingsFromTheme(t: VelaTheme, themeName: ThemeName): AppSet
   const faint = t.textMuted ?? (themeName === "light" ? "#94a3b8" : "#4c525e");
   const draft: AppSettings = {
     backgroundColor: t.background,
+    // Every palette shares one surface tone across page and panels; true black
+    // is OLED #000 everywhere, with hairline borders doing the separation.
     panelColor: t.background,
     elevatedColor: t.bgCard ?? t.background,
     borderColor: t.border ?? t.borderColor,
@@ -204,6 +207,7 @@ export function velaThemeNameFromAppSettings(settings: AppSettings): ThemeName {
   const light = themeBg(LIGHT_THEME);
   const classic = themeBg(resolveTheme("classic"));
   const gruvbox = themeBg(resolveTheme("gruvbox"));
+  if (bg === "#000000") return "black";
   if (light && bg === light) return "light";
   if (classic && bg === classic) return "classic";
   if (gruvbox && bg === gruvbox) return "gruvbox";
@@ -221,7 +225,7 @@ export function migrateLegacyAppSettings(settings: AppSettings): AppSettings {
     if (typeof sv !== "string" || typeof lv !== "string") return true; // skip non-color keys
     return sv.toLowerCase() === lv.toLowerCase();
   });
-  return isLegacy ? appSettingsFromVelaTheme("dark") : settings;
+  return isLegacy ? appSettingsFromVelaTheme("black") : settings;
 }
 
 /** One-time repair for sessions that picked a theme while the border-contrast
@@ -263,6 +267,40 @@ export function migrateMutedPanelColor(settings: AppSettings): AppSettings {
   const panel = typeof settings.panelColor === "string" ? settings.panelColor.trim().toLowerCase() : "";
   const replacement = fromPanel[panel];
   return replacement ? { ...settings, panelColor: replacement } : settings;
+}
+
+/** The raised surface tones the black theme used before it went OLED true
+ *  black. Literal on purpose: a migration must recognise values that no longer
+ *  exist anywhere in the palettes, so it cannot derive them. */
+export const RAISED_BLACK_SURFACES: Readonly<Record<string, string>> = {
+  "#111111": "#000000", // old bgPanel
+  "#1a1a1a": "#000000", // old bgCard
+  "#171b26": "#000000", // old bgBar
+};
+
+/** One-time repair for sessions that persisted the black theme while its
+ *  panels/cards/bars were raised greys: the theme is now OLED true black, so
+ *  those exact tones drop to #000. Only fires on the black page background and
+ *  only for themes without explicit custom colours. */
+export function migrateOledBlackSurfaces(settings: AppSettings): AppSettings {
+  if (settings.advancedColors) return settings;
+  // Defensive reads: a stubbed/custom theme may omit surface tokens.
+  const bg =
+    typeof settings.backgroundColor === "string" ? settings.backgroundColor.trim().toLowerCase() : "";
+  if (bg !== "#000000") return settings;
+  const drop = (value: string): string =>
+    typeof value === "string" ? (RAISED_BLACK_SURFACES[value.trim().toLowerCase()] ?? value) : value;
+  const panelColor = drop(settings.panelColor);
+  const elevatedColor = drop(settings.elevatedColor);
+  const barColor = drop(settings.barColor);
+  if (
+    panelColor === settings.panelColor &&
+    elevatedColor === settings.elevatedColor &&
+    barColor === settings.barColor
+  ) {
+    return settings;
+  }
+  return { ...settings, panelColor, elevatedColor, barColor };
 }
 
 /** A Vela theme pick from the chart-settings dialog: reskin the WHOLE app

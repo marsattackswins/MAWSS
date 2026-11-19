@@ -2,10 +2,10 @@
 
 :root {
   --app-bg: #000000;
-  --app-panel: #111111;
-  --app-elevated: #1a1a1a;
+  --app-panel: #000000;
+  --app-elevated: #000000;
   --app-border: #222222;
-  --app-bar: #171b26;
+  --app-bar: #000000;
   --app-hover: #1a1a1a;
   --app-text: #d1d4dc;
   --app-muted: #787b86;
@@ -94,6 +94,14 @@ button {
   outline-offset: 1px;
 }
 
+/* Modal and dialog embedded search inputs: clean border-free search without box outline */
+.indicators-search-input:focus,
+.indicators-search-input:focus-visible {
+  outline: none !important;
+  outline-offset: 0 !important;
+  box-shadow: none !important;
+}
+
 /* One hover rhythm for every control, so no panel feels dead next to a live one. */
 :where(button, a, [role="button"], summary, label) {
   transition:
@@ -169,15 +177,79 @@ input[type="number"]::-webkit-inner-spin-button {
   justify-content: center;
   border-radius: 6px;
   color: var(--app-muted);
+  background: transparent;
+  transition: color var(--vela-dur-fast, 90ms) ease, background var(--vela-dur-fast, 90ms) ease;
 }
 
 .toolbar-btn:hover {
+  background: transparent;
+  color: #fff;
+}
+
+.toolbar-btn:hover svg {
+  color: #fff;
+}
+
+.toolbar-btn.is-active {
+  background: transparent;
+  color: #fff;
+}
+
+.toolbar-btn.is-active svg {
+  color: #fff;
+}
+
+.toolbar-btn:active {
+  background: transparent;
+  color: #fff;
+}
+
+/* White / Light theme: keep the overlay effect working */
+html[data-theme="light"] .toolbar-btn:hover {
   background: var(--app-hover);
   color: var(--app-text);
 }
 
-.toolbar-btn.is-active {
+html[data-theme="light"] .toolbar-btn:hover svg {
+  color: var(--app-text);
+}
+
+html[data-theme="light"] .toolbar-btn.is-active {
   background: var(--app-elevated);
+  color: var(--app-text);
+}
+
+html[data-theme="light"] .toolbar-btn.is-active svg {
+  color: var(--app-text);
+}
+
+html[data-theme="light"] .toolbar-btn:active {
+  background: var(--app-hover);
+  color: var(--app-text);
+}
+
+/* Vela Classic theme: same overlay effect as White — the mid-tone background
+   makes pure-white text disappear, so the hover/active overlay is needed here too. */
+html[data-theme="classic"] .toolbar-btn:hover {
+  background: var(--app-hover);
+  color: var(--app-text);
+}
+
+html[data-theme="classic"] .toolbar-btn:hover svg {
+  color: var(--app-text);
+}
+
+html[data-theme="classic"] .toolbar-btn.is-active {
+  background: var(--app-elevated);
+  color: var(--app-text);
+}
+
+html[data-theme="classic"] .toolbar-btn.is-active svg {
+  color: var(--app-text);
+}
+
+html[data-theme="classic"] .toolbar-btn:active {
+  background: var(--app-hover);
   color: var(--app-text);
 }
 
@@ -794,6 +866,26 @@ input[type="number"]::-webkit-inner-spin-button {
   z-index: 10;
 }
 
+/* ── Watchlist range tooltip — the move bar, explained ────────────────────── */
+.wl-range-tip {
+  position: fixed;
+  z-index: 60;
+  width: 248px;
+  padding: var(--app-gap) var(--app-gap-roomy);
+  border: 1px solid var(--app-border);
+  border-radius: 8px;
+  background: var(--app-menu);
+  box-shadow: var(--app-shadow-menu);
+  pointer-events: none;
+  animation: wl-tip-in 0.12s ease-out;
+}
+@keyframes wl-tip-in {
+  from {
+    opacity: 0;
+    transform: translateY(2px);
+  }
+}
+
 /* ── Topbar trade strip: Sell / qty / Buy each in their own rounded block ── */
 .trade-block {
   border-radius: 4px;
@@ -873,4 +965,30 @@ select:-webkit-autofill {
 .profile-auth-field:focus {
   border-color: var(--auth-accent, var(--app-accent));
   box-shadow: 0 0 0 1px color-mix(in srgb, var(--auth-accent, var(--app-accent)) 45%, transparent);
+}
+
+/* ── Row density ────────────────────────────────────────────────────────────
+ * One preference for the watchlist, positions and orders. Unlayered on purpose:
+ * it has to beat the per-cell `py-2` and `h-[36px]` utilities, so a dense list
+ * is one attribute on the container instead of a rewrite of every row. */
+[data-density="compact"] thead th,
+[data-density="compact"] tbody td {
+  padding-top: 2px;
+  padding-bottom: 2px;
+}
+
+[data-density="compact"] [data-row-body] {
+  height: 28px;
+}
+
+/* ── Less movement ──────────────────────────────────────────────────────────
+ * The user switch (not just the OS preference) must stop every transition and
+ * animation in the shell, Vela chrome included. */
+html[data-reduce-motion="true"] *,
+html[data-reduce-motion="true"] *::before,
+html[data-reduce-motion="true"] *::after {
+  animation-duration: 0.001ms !important;
+  animation-iteration-count: 1 !important;
+  transition-duration: 0.001ms !important;
+  scroll-behavior: auto !important;
 }

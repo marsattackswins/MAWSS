@@ -106,7 +106,7 @@ export interface VelaTheme {
     downBorderColor?: string;
 }
 
-export type ThemeName = 'dark' | 'light' | 'classic' | 'standard' | 'vela' | 'gruvbox';
+export type ThemeName = 'black' | 'dark' | 'light' | 'classic' | 'standard' | 'vela' | 'gruvbox';
 
 /** A renderer **class** — Vela instantiates it with the resolved display options.
  *  Built-in default: `NativeRenderer`.

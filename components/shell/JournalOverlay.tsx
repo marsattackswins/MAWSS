@@ -7,25 +7,84 @@ import { velaThemeNameFromAppSettings } from "@/lib/app-theme";
 import { useCallback, useEffect, useRef, useState } from "react";
 
 // ── Journal ↔ chart theme bridge ───────────────────────────────────────────
-// The chart offers two Vela palettes (Vela Muted and Vela Classic). The
-// journal maps a binary `journal-theme-v1` (light|dark) onto a `.dark` class
-// and, for the two Vela palettes, picks a full skin via a `data-journal-theme`
-// attribute on <html> — the vendored stylesheets define every journal token
-// (color surfaces, focus ring, brand accent, P&L colors, chart series) per
+// The chart offers four dark Vela palettes (Muted, Classic, Gruvbox, True
+// Black). The journal maps a binary `journal-theme-v1` (light|dark) onto a `.dark` class
+// and, for each dark Vela palette, picks a full skin via a `data-journal-theme`
+// attribute on <html> — the vendored stylesheet defines the muted, classic and
+// gruvbox skins, and the host injects a true-black one. Every journal token
+// (color surfaces, focus ring, brand accent, P&L colors, chart series) is per
 // palette, and canvas painters re-resolve tokens when that attribute flips.
 // Vela Light (not a dark skin) removes the attribute so the journal falls
 // back to its own light palette.
 
-type ChartThemeName = "dark" | "classic" | "gruvbox" | "light";
+type ChartThemeName = "black" | "dark" | "classic" | "gruvbox" | "light";
+
+/** The true-black skin. The vendored journal ships muted/classic/gruvbox skins
+ *  in its own stylesheet, so the host injects this one into the same-origin
+ *  frame instead of asking for a rebuild of the sidecar. Tokens mirror
+ *  BLACK_THEME and the shell's app palette: OLED #000 on every surface. */
+const BLACK_SKIN_ID = "maws-journal-black-skin";
+const BLACK_SKIN_CSS = `
+:root[data-journal-theme="black"] {
+  color-scheme: dark;
+  --background: #000000;
+  --foreground: #d1d4dc;
+  --card: #000000;
+  --card-foreground: #d1d4dc;
+  --popover: #000000;
+  --popover-foreground: #d1d4dc;
+  --primary: #d1d4dc;
+  --primary-foreground: #000000;
+  --secondary: #1a1a1a;
+  --secondary-foreground: #d1d4dc;
+  --muted: #000000;
+  --muted-foreground: #787b86;
+  --accent: #1a1a1a;
+  --accent-foreground: #d1d4dc;
+  --destructive: #f23645;
+  --destructive-foreground: #ffffff;
+  --border: #222222;
+  --input: #222222;
+  --ring: #2962ff;
+  --brand: #2962ff;
+  --viz-surface: #000000;
+  --ink-muted: #787b86;
+  --gridline: #141414;
+  --baseline: #222222;
+  --profit: #089981;
+  --profit-fill: #089981;
+  --loss: #f23645;
+  --neutral-mid: #1a1a1a;
+  --series-1: #2962ff;
+  --series-2: #ff9800;
+  --series-3: #26a69a;
+  --series-4: #ef5350;
+  --series-5: #ab47bc;
+  --series-6: #66bb6a;
+  --series-7: #ffee58;
+  --series-8: #26c6da;
+}
+`;
+
+/** Idempotent: the frame keeps this style across in-app navigation, and a full
+ *  reload re-injects it on the next theme sync. */
+function ensureBlackSkin(win: Window) {
+  const doc = win.document;
+  if (doc.getElementById(BLACK_SKIN_ID)) return;
+  const style = doc.createElement("style");
+  style.id = BLACK_SKIN_ID;
+  style.textContent = BLACK_SKIN_CSS;
+  doc.head.appendChild(style);
+}
 
 /** The chart theme's name → journal skin key. The chart's muted palette is
  *  named `dark` in ThemeName space, but its journal skin is keyed `muted`.
- *  Classic and gruvbox map to their own full skins; light has no skin and
- *  returns undefined so the journal uses its own palette. */
+ *  Classic, gruvbox and black map to their own full skins; light has no skin
+ *  and returns undefined so the journal uses its own palette. */
 function journalSkinFor(name: ChartThemeName): string | undefined {
   if (name === "light") return undefined;
   if (name === "dark") return "muted";
-  return name; // "classic" | "gruvbox"
+  return name; // "black" | "classic" | "gruvbox"
 }
 
 /**
@@ -38,7 +97,10 @@ function applyJournalTheme(win: Window, name: ChartThemeName) {
   root.classList.toggle("dark", name !== "light");
   const skin = journalSkinFor(name);
   if (skin === undefined) delete root.dataset.journalTheme;
-  else root.dataset.journalTheme = skin;
+  else {
+    root.dataset.journalTheme = skin;
+    if (skin === "black") ensureBlackSkin(win);
+  }
 }
 
 /**
@@ -82,9 +144,9 @@ export function JournalOverlay() {
   // Vela Classic / Vela Gruvbox → journal dark with that palette's tones).
   const chartTheme = useAppStore((s): ChartThemeName => {
     const name = velaThemeNameFromAppSettings(s.appSettings);
-    // velaThemeNameFromAppSettings returns light | classic | gruvbox | dark,
-    // all of which are valid ChartThemeName values.
-    return name === "light" || name === "classic" || name === "gruvbox" ? name : "dark";
+    // velaThemeNameFromAppSettings returns black | light | classic | gruvbox
+    // | dark, all of which are valid ChartThemeName values.
+    return name === "light" || name === "classic" || name === "gruvbox" || name === "black" ? name : "dark";
   });
   const themeRef = useRef(chartTheme);
   themeRef.current = chartTheme;

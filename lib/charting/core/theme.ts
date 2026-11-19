@@ -1,5 +1,26 @@
 import type { VelaTheme, ThemeName } from './options';
 
+// ── 0. True Black Palette (OLED: every surface #000, hairline borders separate) ──
+export const BLACK_THEME: VelaTheme = {
+    name: 'black',
+    background: '#000000',
+    textColor: '#d1d4dc',
+    gridColor: '#141414',
+    borderColor: '#222222',
+    upColor: '#089981',
+    downColor: '#f23645',
+    fontFamily: 'sans-serif',
+    bgPanel: '#000000',
+    bgCard: '#000000',
+    bgBar: '#000000',
+    bgChip: '#1a1a1a',
+    bgHover: '#1a1a1a',
+    border: '#222222',
+    textPrimary: '#d1d4dc',
+    textSecondary: '#787b86',
+    textMuted: '#4c525e',
+};
+
 // ── 1. Reference Vela Dark Palette (Muted, Matte, Desaturated Sage/Rose) ──
 export const DARK_THEME: VelaTheme = {
     name: 'dark',
@@ -92,6 +113,7 @@ export const LIGHT_THEME: VelaTheme = {
 };
 
 export function resolveTheme(theme?: ThemeName | VelaTheme): VelaTheme {
+    if (theme === 'black') return BLACK_THEME;
     if (!theme || theme === 'dark' || theme === 'vela') return DARK_THEME;
     if (theme === 'classic' || theme === 'standard') return CLASSIC_THEME;
     if (theme === 'gruvbox') return GRUVBOX_THEME;
@@ -118,6 +140,18 @@ export interface ThemeIndicatorColors {
 }
 
 export const THEME_INDICATOR_COLORS: Record<string, ThemeIndicatorColors> = {
+    black: {
+        vwap: '#2962ff',
+        ema: '#2962ff',
+        bbBasis: '#2962ff',
+        bbUpper: '#f23645',
+        bbLower: '#089981',
+        rsi: '#ab47bc',
+        stochK: '#2962ff',
+        stochD: '#ff6d00',
+        atr: '#ffa726',
+        adx: '#2962ff',
+    },
     dark: {
         vwap: '#7aa2f7',
         ema: '#89ddff',

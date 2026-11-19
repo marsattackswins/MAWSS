@@ -1,6 +1,7 @@
 "use client";
 
 import { PositionsPanel, TradingMetrics } from "@/components/trading/PositionsPanel";
+import { FeedStatusIndicator } from "@/components/shell/FeedStatusIndicator";
 import { liveApi } from "@/lib/live/api";
 import { profileLabel, profilePhaseLabel } from "@/lib/live/bridge";
 import { useLiveStore } from "@/lib/live/store";
@@ -323,6 +324,7 @@ export function BottomPanel() {
         className="absolute bottom-0 left-0 right-0 box-border flex h-[32px] min-h-[32px] items-center gap-1 border-t px-2"
         style={{ borderColor: open ? "var(--maws-border)" : "transparent" }}
       >
+        <FeedStatusIndicator testId="bottom-feed-status" className="ml-2" />
         {connected === "binance" ? <LiveStatusIndicator /> : null}
         <div className="flex min-w-0 flex-1 items-center justify-center gap-1">
           {PANEL_TABS.map((item) => {

@@ -1,6 +1,6 @@
 import type { ChartSettings } from "@/types";
 
-/** IANA timezone id (e.g. Africa/Casablanca). */
+/** IANA timezone id (e.g. Europe/Paris). */
 export type AppTimezone = string;
 
 export type TimezoneOption = {
@@ -12,9 +12,14 @@ export type TimezoneOption = {
 
 const LEGACY_TIMEZONE_MAP: Record<string, string> = {
   UTC: "UTC",
-  "UTC+1": "Africa/Casablanca",
+  "UTC+1": "Europe/Paris",
   "UTC+8": "Asia/Hong_Kong",
 };
+
+/** The old app default sat at UTC+0, duplicating the catalog's single UTC
+ *  entry in every zone picker. Fold it (persisted workspaces included) onto
+ *  UTC so one universal option remains, and it is the default. */
+const RETIRED_DEFAULT_TIMEZONE = "Africa/Casablanca";
 
 function opt(region: string, city: string, iana: string): TimezoneOption {
   return { id: iana, city, region, iana };
@@ -53,7 +58,6 @@ export const TIMEZONE_OPTIONS: TimezoneOption[] = [
   opt("Europe / Africa", "London", "Europe/London"),
   opt("Europe / Africa", "Dublin", "Europe/Dublin"),
   opt("Europe / Africa", "Lisbon", "Europe/Lisbon"),
-  opt("Europe / Africa", "Casablanca", "Africa/Casablanca"),
   opt("Europe / Africa", "Lagos", "Africa/Lagos"),
   opt("Europe / Africa", "Paris", "Europe/Paris"),
   opt("Europe / Africa", "Madrid", "Europe/Madrid"),
@@ -102,12 +106,13 @@ export const TIMEZONE_OPTIONS: TimezoneOption[] = [
 ];
 
 export function normalizeTimezone(id: string | undefined | null): AppTimezone {
-  if (!id) return "Africa/Casablanca";
+  if (!id) return "UTC";
+  if (id === RETIRED_DEFAULT_TIMEZONE) return "UTC";
   if (LEGACY_TIMEZONE_MAP[id]) return LEGACY_TIMEZONE_MAP[id];
   if (TIMEZONE_OPTIONS.some((o) => o.id === id)) return id;
   // Accept unknown but valid-looking IANA ids.
   if (id.includes("/") || id === "UTC") return id;
-  return "Africa/Casablanca";
+  return "UTC";
 }
 
 export function timezoneOption(id: AppTimezone): TimezoneOption {

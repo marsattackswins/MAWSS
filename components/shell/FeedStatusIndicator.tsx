@@ -46,7 +46,14 @@ function readFeedHealth(symbol: string, timeframe: Timeframe): FeedHealth {
   return { label: "Connecting", color: COLORS.connecting };
 }
 
-export function FeedStatusIndicator() {
+export function FeedStatusIndicator({
+  testId = "feed-status",
+  className = "",
+}: {
+  /** Distinct id where a second dot (the bottom bar) lives on the same page. */
+  testId?: string;
+  className?: string;
+} = {}) {
   const pane = useActivePane();
   const [health, setHealth] = useState<FeedHealth>(() =>
     readFeedHealth(pane.symbol, pane.timeframe),
@@ -66,7 +73,8 @@ export function FeedStatusIndicator() {
       role="status"
       aria-label={`Market feed status: ${health.label}`}
       title={`Market feed status: ${health.label}`}
-      data-testid="feed-status"
+      data-testid={testId}
+      className={className}
       style={{
         display: "inline-block",
         width: 7,

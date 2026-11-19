@@ -1,16 +1,17 @@
-import type { Vela, NativeRenderer, ExternalIndicatorEntry } from "@/lib/charting";
+import type { Vela, RendererControl, ExternalIndicatorEntry } from "@/lib/charting";
 import type { WorkspaceReplay } from "@/lib/charting/workspace";
 
 /**
  * Per-chart-pane Vela handle registry (Vela migration).
  *
- * `renderer` is the chart's own NativeRenderer instance — kept so overlay
- * owners (order blocks, session breaks, trade zones) can push layer payloads
- * via `renderer.setNativeData(id, data)`.
+ * `renderer` is the chart's RendererControl proxy (`Vela.renderer`) — kept so
+ * overlay owners (order blocks, session breaks, trade zones) can push layer
+ * payloads via `renderer.setNativeData(id, data)` and the shell can open the
+ * native settings dialog via `renderer.openSettings()`.
  */
 export type ChartHandle = {
   vela: Vela;
-  renderer: NativeRenderer;
+  renderer: RendererControl;
   /** The DOM element the chart mounted on. */
   el: HTMLElement;
   /** Live host-owned display preferences captured by chart templates. */

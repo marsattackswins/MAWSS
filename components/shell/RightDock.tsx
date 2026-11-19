@@ -1,6 +1,7 @@
 "use client";
 
-import { useMemo, useRef, useState } from "react";
+import { useMemo, useRef, useState, type ComponentType } from "react";
+import { JournalIcon } from "@/components/brand/JournalIcon";
 import { useAppStore } from "@/lib/store";
 import {
   moveDockId,
@@ -11,7 +12,7 @@ import {
 import type { DockId } from "@/types";
 import { Bell, CalendarDays, Code2, Layers, List } from "lucide-react";
 
-type DockItem = { id: DockId; label: string; icon: typeof List };
+type DockItem = { id: DockId; label: string; icon: ComponentType<{ size?: number; className?: string }> };
 
 const ITEMS: DockItem[] = [
   { id: "strategy", label: "Watchlist", icon: List },
@@ -19,6 +20,7 @@ const ITEMS: DockItem[] = [
   { id: "objects", label: "Object tree", icon: Layers },
   { id: "scripts", label: "Pine scripts", icon: Code2 },
   { id: "alerts", label: "Alerts", icon: Bell },
+  { id: "journal", label: "Journal", icon: JournalIcon },
 ];
 
 export function RightDock() {
@@ -74,7 +76,7 @@ export function RightDock() {
   return (
     <aside
       className="flex w-[44px] shrink-0 flex-col items-center gap-1 border-l pt-2"
-      style={{ background: "var(--maws-panel)", borderColor: "var(--maws-border)" }}
+      style={{ background: "var(--app-panel)", borderColor: "var(--app-border)" }}
       aria-label="Right panel shortcuts"
     >
       {items.map((item) => {
@@ -138,9 +140,9 @@ export function RightDock() {
               background: dragging
                 ? "rgba(255, 255, 255, 0.10)"
                 : active
-                  ? "var(--maws-hover)"
+                  ? "var(--app-hover)"
                   : "transparent",
-              color: dragging || active ? "var(--maws-text)" : "var(--maws-muted)",
+              color: dragging || active ? "var(--app-text)" : "var(--app-muted)",
             }}
           >
             <Icon size={16} className={dragging ? "opacity-40" : undefined} />

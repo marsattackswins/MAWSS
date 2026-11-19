@@ -513,6 +513,7 @@ export function mawsHostSections(): MawsHostSection[] {
           kind: "select",
           label: "Color theme",
           options: [
+            ["black", "True Black"],
             ["dark", "Vela Muted (Dark)"],
             ["classic", "Standard Classic"],
             ["light", "White"],
@@ -520,13 +521,14 @@ export function mawsHostSections(): MawsHostSection[] {
           ] as const,
           get: (): string => {
             const bg = stApp().backgroundColor.trim().toLowerCase();
+            if (bg === "#000000") return "black";
             if (bg === "#ffffff") return "light";
             if (bg === "#131722") return "classic";
             if (bg === "#282828") return "gruvbox";
             return "dark";
           },
           set: (v: string) => {
-            const name = (v === "classic" || v === "light" || v === "gruvbox" ? v : "dark") as ThemeName;
+            const name = (v === "black" || v === "classic" || v === "light" || v === "gruvbox" ? v : "dark") as ThemeName;
             // Apply CSS vars to shell immediately.
             const next = applyVelaThemeEverywhere(name);
             // Persist the new palette.
@@ -548,6 +550,25 @@ export function mawsHostSections(): MawsHostSection[] {
             // Rebuild so the color rows appear/disappear in the open dialog.
             requestAnimationFrame(rebuildHostSections);
           },
+        },
+        // Row density: one preference for the watchlist, positions and orders.
+        {
+          kind: "select",
+          label: "Row density",
+          options: [
+            ["comfortable", "Comfortable"],
+            ["compact", "Compact"],
+          ] as const,
+          get: (): string => useAppStore.getState().rowDensity,
+          set: (v: string) =>
+            useAppStore.getState().setRowDensity(v === "compact" ? "compact" : "comfortable"),
+        },
+        // "Less movement": turns off every shell transition/animation.
+        {
+          kind: "toggle",
+          label: "Less movement",
+          get: () => useAppStore.getState().reduceMotion === true,
+          set: (v: boolean) => useAppStore.getState().setReduceMotion(v),
         },
         // Color rows — only present when Advanced is on (list is empty otherwise).
         ...colorRows,

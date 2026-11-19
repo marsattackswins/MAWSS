@@ -10,13 +10,13 @@ import {
  * Automated persistence-compatibility guard for the single workspace key
  * (maws.workspace.v6). Replaces "diff the persisted schema by eye":
  *
- *   1. partialize output must contain EXACTLY the approved 44-key set;
+ *   1. partialize output must contain EXACTLY the approved 46-key set;
  *   2. runtime-only fields (feed values, menus, drawing session state) must
  *      never be persisted — hotSymbols included, from the moment it exists;
  *   3. partialize output must be JSON-serializable;
  *   4. hydrating the REAL root store from a representative legacy V6 fixture
  *      must restore the normalized state (renames, merges, migrations);
- *   5. the debounced write path must persist exactly the same 44-key set;
+ *   5. the debounced write path must persist exactly the same 46-key set;
  *
  * The store is imported fresh via jest.isolateModules with a minimal
  * window/localStorage stub (jest env is "node"). zustand's persist hydration
@@ -57,10 +57,12 @@ const EXPECTED_PERSISTED_KEYS = [
   "panesVelaState",
   "performanceCollapsed",
   "range",
+  "reduceMotion",
   "rightDock",
   "rightDockOrder",
   "rightOpen",
   "rightWidth",
+  "rowDensity",
   "shortcuts",
   "stayInDrawingMode",
   "strategyCardsHeight",
@@ -72,8 +74,8 @@ const EXPECTED_PERSISTED_KEYS = [
   "watchlistGroups",
   "watchlistHeight",
 ].sort();
-if (EXPECTED_PERSISTED_KEYS.length !== 44) {
-  throw new Error("Approved persisted key set must contain exactly 44 keys");
+if (EXPECTED_PERSISTED_KEYS.length !== 46) {
+  throw new Error("Approved persisted key set must contain exactly 46 keys");
 }
 
 /** Fields that must NEVER be persisted (runtime-only by design). */
@@ -192,7 +194,7 @@ describe("persistence compatibility (maws.workspace.v6)", () => {
     uninstallWindow();
   });
 
-  it("partialize outputs exactly the approved 44-key set", () => {
+  it("partialize outputs exactly the approved 46-key set", () => {
     installWindow();
     const { useAppStore, workspacePartialize } = freshStore();
     const out = workspacePartialize(useAppStore.getState());
@@ -251,6 +253,7 @@ describe("persistence compatibility (maws.workspace.v6)", () => {
       "objects",
       "scripts",
       "alerts",
+      "journal",
     ]);
     expect(s.bottomTab).toBe("positions");
     // A persisted-open journal must hydrate CLOSED: a reload starts on the
@@ -264,7 +267,7 @@ describe("persistence compatibility (maws.workspace.v6)", () => {
 
     // Chart settings merge: 14px legacy default migrated, bad timezone reset.
     expect(s.chartSettings.scaleFontSize).toBe(12);
-    expect(s.chartSettings.timezone).toBe("Africa/Casablanca");
+    expect(s.chartSettings.timezone).toBe("UTC");
 
     // Remaining guards.
     expect(s.layoutSync).toEqual(DEFAULT_LAYOUT_SYNC);
@@ -317,7 +320,7 @@ describe("persistence compatibility (maws.workspace.v6)", () => {
     expect(useAppStore.getState().connectedBroker).toBeNull();
   });
 
-  it("debounced write path persists exactly the 44-key set", () => {
+  it("debounced write path persists exactly the 46-key set", () => {
     jest.useFakeTimers();
     const map = installWindow();
     const { useAppStore } = freshStore();

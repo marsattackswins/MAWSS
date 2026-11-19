@@ -55,7 +55,7 @@ const TOPBAR_ICON_IDS = [
   "fullscreen",
   "theme",
   "tradestate",
-  "journal",
+  "settings",
   "template",
 ] as const;
 type TopbarIconId = (typeof TOPBAR_ICON_IDS)[number];
@@ -68,7 +68,9 @@ function loadTopbarIconOrder(): TopbarIconId[] {
   try {
     const raw = localStorage.getItem(TOPBAR_ICON_ORDER_KEY);
     const saved: unknown = raw ? JSON.parse(raw) : null;
-    const order = Array.isArray(saved) ? saved.filter(isTopbarIconId) : [];
+    // The journal moved to the right rail; its old top-bar slot becomes Settings.
+    const migrated = Array.isArray(saved) ? saved.map((v) => (v === "journal" ? "settings" : v)) : [];
+    const order = migrated.filter(isTopbarIconId);
     const merged = [
       ...new Set(order),
       ...TOPBAR_ICON_IDS.filter((id) => !order.includes(id)),
@@ -610,18 +612,21 @@ function BuySellStrip({
 }
 
 /** Switch order, and where the crescent points at each stop: the stops walk the
- *  compass clockwise — NE → SE → SW → NW. */
-const THEME_CYCLE = ["dark", "classic", "light", "gruvbox"] as const;
+ *  compass clockwise, one equal step per click (a fifth of a turn). */
+const THEME_CYCLE = ["black", "dark", "classic", "light", "gruvbox"] as const;
+/** One stop's bearing. Five themes ⇒ 72° per click, five clicks per full turn. */
+const THEME_STEP_DEG = 360 / THEME_CYCLE.length;
 const THEME_LABEL: Record<string, string> = {
+  black: "True Black",
   dark: "Vela Muted",
   classic: "Vela Classic",
   light: "White",
   gruvbox: "Gruvbox",
 };
 /**
- * Cumulative quarter-turns already made this session. Module-level on purpose:
+ * Cumulative steps already made this session. Module-level on purpose:
  * the angle must only ever increase, so a CSS clockwise sweep survives every
- * hop including Gruvbox → Muted (270° → 360°), and it must not reset when the
+ * hop including Gruvbox → Black (288° → 360°), and it must not reset when the
  * bar re-mounts (dev fast-refresh, panel churn).
  */
 let themeTurns = 0;
@@ -630,44 +635,12 @@ let themeTurns = 0;
 let themeTurnedTo = "";
 
 /**
- * A stylized trade-journal icon: a small notebook with a pencil overlay.
- * Replaces the generic BookOpen glyph with a purpose-built mark.
- */
-function JournalIcon() {
-  return (
-    <svg
-      width="15"
-      height="15"
-      viewBox="0 0 15 15"
-      fill="none"
-      aria-hidden="true"
-      className="shrink-0"
-    >
-      {/* Notebook body */}
-      <rect x="2" y="1.5" width="9" height="12" rx="1.2" stroke="currentColor" strokeWidth="1.2" />
-      {/* Spine binding marks */}
-      <path d="M2 4.5h-1M2 7.5h-1M2 10.5h-1" stroke="currentColor" strokeWidth="1.1" strokeLinecap="round" />
-      {/* Three ruled lines */}
-      <path d="M4.5 5h4.5M4.5 7.5h4.5M4.5 10h3" stroke="currentColor" strokeWidth="1" strokeLinecap="round" />
-      {/* Pencil nib (bottom-right corner) */}
-      <path
-        d="M9.8 9.8l1.6-1.6.8.8-1.6 1.6-.8-.8z"
-        fill="currentColor"
-        stroke="none"
-      />
-      <path d="M9.8 9.8l-.3 1.1 1.1-.3" stroke="currentColor" strokeWidth="0.8" strokeLinecap="round" strokeLinejoin="round" fill="none" />
-    </svg>
-  );
-}
-
-/**
  * The topbar theme switch's icon.
  *
- * ONE crescent marks the four stops: NORTH-EAST for Vela Muted, SOUTH-EAST for
- * Vela Classic, SOUTH-WEST for White, NORTH-WEST for Gruvbox. The host feeds it
- * a *cumulative* angle that grows by 90° per click, so every switch — and the
- * wrap back to Muted — sweeps clockwise; a per-theme angle would rewind the
- * long way on the last hop.
+ * ONE crescent marks the five stops (True Black, Muted, Classic, White, Gruvbox).
+ * The host feeds it a *cumulative* angle that grows by one equal step (72°) per
+ * click, so every switch — and the wrap back to Black — sweeps clockwise; a
+ * per-theme angle would rewind the long way on the last hop.
  */
 function ThemeIcon({ rotation }: { rotation: number }) {
   return (
@@ -676,7 +649,7 @@ function ThemeIcon({ rotation }: { rotation: number }) {
       size={15}
       style={{
         transform: `rotate(${rotation}deg)`,
-        // One quick quarter turn: most of the arc in the first frames, a short settle.
+        // One equal step: most of the arc in the first frames, a short settle.
         transition: "transform 190ms cubic-bezier(0.2, 0.9, 0.2, 1)",
       }}
     />
@@ -698,6 +671,7 @@ export function TopBar() {
   // The topbar theme switch reads the resolved app theme (string selector — no
   // re-render on unrelated color tweaks).
   const themeName = useAppStore((s) => velaThemeNameFromAppSettings(s.appSettings));
+  const isWhiteTheme = themeName === "light" || themeName === "classic";
   // Crescent angle in degrees; only ever grows — see `themeTurns`.
   const [themeAngle, setThemeAngle] = useState(0);
   useEffect(() => {
@@ -707,14 +681,14 @@ export function TopBar() {
     );
     if (themeTurnedTo === themeName) {
       // Our own click: keep the cumulative angle so the sweep stays clockwise.
-      setThemeAngle(90 * themeTurns);
+      setThemeAngle(THEME_STEP_DEG * themeTurns);
       return;
     }
     // Mounted on a persisted theme, or one picked in the chart-settings dialog:
     // re-anchor the crescent to that theme's resting bearing.
     themeTurnedTo = themeName;
     themeTurns = Math.max(themeTurns, step);
-    setThemeAngle(90 * themeTurns);
+    setThemeAngle(THEME_STEP_DEG * themeTurns);
   }, [themeName]);
   const watchlist = useAppStore((s) => s.watchlist);
   const addToWatchlist = useAppStore((s) => s.addToWatchlist);
@@ -729,7 +703,6 @@ export function TopBar() {
   const indicatorSettingsId = useAppStore((s) => s.indicatorSettingsId);
   const drawingSettingsTarget = useAppStore((s) => s.drawingSettingsTarget);
   const brokerDialogOpen = useAppStore((s) => s.brokerDialogOpen);
-  const setJournalOverlayOpen = useAppStore((s) => s.setJournalOverlayOpen);
   const tfRef = useRef<HTMLDivElement>(null);
   const styleRef = useRef<HTMLDivElement>(null);
   const draggedIconRef = useRef<TopbarIconId | null>(null);
@@ -787,7 +760,7 @@ export function TopBar() {
     // tabs plus the full MAWS section set (Status line, Scales & labels,
     // Chart chrome, Theme, Trading, Alerts, Events) contributed as host
     // sections on every chart mount.
-    (getChart(pane.id)?.renderer as unknown as { openSettings?: (s?: string) => void }).openSettings?.();
+    getChart(pane.id)?.renderer.openSettings();
   };
 
   const placeMarket = (side: "buy" | "sell", price: number, qtyOverride?: number) => {
@@ -865,10 +838,10 @@ export function TopBar() {
           const current = Math.max(0, THEME_CYCLE.indexOf(themeName as (typeof THEME_CYCLE)[number]));
           const step = (current + 1) % THEME_CYCLE.length;
           // Advance the cumulative turn to the next stop, keeping the angle
-          // strictly decreasing (never the 3-turn rewind back to 0°).
+          // strictly increasing (never a rewind back to 0°).
           themeTurns = Math.max(themeTurns + 1, step);
           themeTurnedTo = THEME_CYCLE[step];
-          setThemeAngle(90 * themeTurns);
+          setThemeAngle(THEME_STEP_DEG * themeTurns);
           const next = THEME_CYCLE[step] as ThemeName;
           const nextSettings = applyVelaThemeEverywhere(next);
           useAppStore
@@ -894,18 +867,13 @@ export function TopBar() {
         }}
       />
     ) : null,
-    journal: (
+    settings: (
       <ToolbarBtn
-        label="Trade Journal"
-        className="gap-2 px-2 text-[13px]"
-        onClick={() => {
-          closeAllMenus();
-          if (settingsOpen) setSettingsOpen(false);
-          setJournalOverlayOpen(true);
-        }}
+        label="Settings"
+        className="rounded-full"
+        onClick={toggleSettings}
       >
-        <JournalIcon />
-        Journal
+        <Settings size={15} />
       </ToolbarBtn>
     ),
     template: (
@@ -975,7 +943,11 @@ export function TopBar() {
       <button
         type="button"
         title={starred ? "Remove from watchlist" : "Add to watchlist"}
-        className="relative z-[2] ml-1 flex h-[28px] w-[28px] shrink-0 items-center justify-center rounded-full text-(--app-muted) hover:bg-(--app-hover) hover:text-(--app-text)"
+        className={`relative z-[2] ml-1 flex h-[28px] w-[28px] shrink-0 items-center justify-center rounded-full transition-colors ${
+          isWhiteTheme
+            ? "text-(--app-muted) hover:bg-(--app-hover) hover:text-(--app-text)"
+            : "text-(--app-muted) hover:text-white"
+        }`}
         onClick={() => {
           closeAllMenus();
           if (starred) removeFromWatchlist(pane.symbol);
@@ -984,8 +956,8 @@ export function TopBar() {
       >
         <Diamond
           size={14}
-          color="#ffffff"
-          fill={starred ? "#ffffff" : "none"}
+          color={starred ? (isWhiteTheme ? "var(--app-text)" : "#ffffff") : "currentColor"}
+          fill={starred ? (isWhiteTheme ? "var(--app-text)" : "#ffffff") : "none"}
           strokeWidth={1.6}
         />
       </button>
@@ -1004,8 +976,14 @@ export function TopBar() {
                 closeAllMenus();
                 setTimeframe(id);
               }}
-              className={`h-[26px] rounded-[4px] px-2 text-[13px] ${
-                on ? "bg-(--app-hover) text-(--app-text)" : "text-(--app-muted) hover:text-(--app-text)"
+              className={`h-[26px] rounded-[4px] px-2 text-[13px] transition-colors ${
+                isWhiteTheme
+                  ? on
+                    ? "bg-(--app-hover) text-(--app-text)"
+                    : "text-(--app-muted) hover:bg-(--app-hover) hover:text-(--app-text)"
+                  : on
+                    ? "text-white"
+                    : "text-(--app-muted) hover:text-white"
               }`}
             >
               {tf.label}
@@ -1015,7 +993,11 @@ export function TopBar() {
         <div className="relative" ref={tfRef}>
           <button
             type="button"
-            className="flex h-[26px] w-[20px] items-center justify-center text-(--app-muted) hover:text-(--app-text)"
+            className={`flex h-[26px] w-[20px] items-center justify-center rounded-[4px] transition-colors ${
+              isWhiteTheme
+                ? "text-(--app-muted) hover:bg-(--app-hover) hover:text-(--app-text)"
+                : "text-(--app-muted) hover:text-white"
+            }`}
             onClick={toggleTfMore}
           >
             <ChevronDown size={12} />
@@ -1117,11 +1099,11 @@ export function TopBar() {
           label="Indicators"
           active={indicatorMenuOpen}
           onClick={toggleIndicatorMenu}
-          className="gap-1 px-2 text-[13px] text-(--app-text)"
+          className="gap-1 px-2 text-[13px]"
         >
           <IndicatorsIcon />
           Indicators
-          <ChevronDown size={11} className="text-(--app-muted)" />
+          <ChevronDown size={11} className="text-inherit" />
         </ToolbarBtn>
 
         <span className="top-sep" />
@@ -1195,7 +1177,11 @@ export function TopBar() {
         ))}
         <button
           type="button"
-          className="ml-1 flex h-[28px] w-[30px] shrink-0 items-center justify-center rounded-[4px] text-(--app-muted) hover:bg-(--app-hover) hover:text-(--app-text)"
+          className={`ml-1 flex h-[28px] w-[30px] shrink-0 items-center justify-center rounded-[4px] transition-colors ${
+            isWhiteTheme
+              ? "text-(--app-muted) hover:bg-(--app-hover) hover:text-(--app-text)"
+              : "text-(--app-muted) hover:text-white"
+          }`}
           title={rightOpen ? "Hide right side" : "Show right side"}
           aria-label={rightOpen ? "Hide right side" : "Show right side"}
           aria-pressed={rightOpen}

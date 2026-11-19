@@ -60,6 +60,10 @@ export type Quote = {
   changePct: number;
   rsi: number | null;
   atr: number | null;
+  /** UTC-day stats from the forming 1D bar (absent until it loads). */
+  dayOpen?: number;
+  dayHigh?: number;
+  dayLow?: number;
 };
 
 export type SymbolInfo = {
@@ -336,7 +340,7 @@ export const DEFAULT_CHART_SETTINGS: ChartSettings = {
   wickUpColor: "#b2b5be",
   wickDownColor: "#787b86",
   pricePrecision: "default",
-  timezone: "Africa/Casablanca",
+  timezone: "UTC",
   showLogo: true,
   showTitle: false,
   titleMode: "symbol",
@@ -447,7 +451,8 @@ export type DockId =
   | "alerts"
   | "calendar" // News & Calendar (combined)
   | "objects"
-  | "scripts"; // Pine script editor (Vela scripting engine)
+  | "scripts" // Pine script editor (Vela scripting engine)
+  | "journal"; // Trade Journal preview (expand opens the full suite)
 
 export type PriceAlert = {
   id: string;

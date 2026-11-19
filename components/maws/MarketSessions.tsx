@@ -33,10 +33,10 @@ import { useEffect, useRef, useState } from "react";
  * than a tight block, and nothing else on the card competes for the space. */
 const TIMELINE_ROW_TOP = 8;
 const TIMELINE_ROW_PITCH = 23;
-/** Session pill height — taller than the rail it rides, so live windows read raised. */
-const TIMELINE_ROW_HEIGHT = 8;
-/** The rail every session rides: a quiet 4px hairline instead of a second full bar. */
-const TIMELINE_TRACK_HEIGHT = 4;
+/** Session pill height — matches the track so pills sit flush and consistent. */
+const TIMELINE_ROW_HEIGHT = 5;
+/** The rail every session rides: 5px, same as TechnicalsGauge and DayGauge. */
+const TIMELINE_TRACK_HEIGHT = 5;
 /** Hour-label gutter under the rows. The chip on the axis sits on its baseline, so this
  * is what sets how far the time strip sits below the last session bar: rows end at
  * ROW_TOP + 2*PITCH + ROW_HEIGHT = 62, and the axis starts ~22px lower. */
@@ -69,7 +69,8 @@ type Ink = {
 
 const DARK_INK: Ink = {
   light: false,
-  track: "rgba(255,255,255,0.055)",
+  /** Matches bg-(--app-faint)/60 from DayGauge / StrategyScreener row bars. */
+  track: "rgba(122,124,134,0.3)",
   label: "var(--app-text)",
   hour: "var(--app-muted)",
   now: "#ffffff",
@@ -77,7 +78,8 @@ const DARK_INK: Ink = {
 
 const LIGHT_INK: Ink = {
   light: true,
-  track: "rgba(17,19,24,0.07)",
+  /** Light-mode faint equivalent: matches DayGauge at ~60% opacity. */
+  track: "rgba(17,19,24,0.12)",
   label: "#23262f",
   hour: "#8b8f9a",
   now: "#111318",
@@ -95,15 +97,6 @@ function withAlpha(hex: string, a: number): string {
   if (!m) return hex;
   const n = parseInt(m[1], 16);
   return `rgba(${(n >> 16) & 255}, ${(n >> 8) & 255}, ${n & 255}, ${a})`;
-}
-
-/** Lift a session colour toward white for the pill's top highlight. */
-function lift(hex: string, amount: number): string {
-  const m = /^#([0-9a-f]{6})$/i.exec(hex);
-  if (!m) return hex;
-  const n = parseInt(m[1], 16);
-  const up = (c: number) => Math.round(c + (255 - c) * amount);
-  return `rgb(${up((n >> 16) & 255)}, ${up((n >> 8) & 255)}, ${up(n & 255)})`;
 }
 
 /** `roundRect` with a squared fallback; the radius never exceeds half the shorter side. */
@@ -144,8 +137,8 @@ function fitCanvas(
   return [ctx as CanvasRenderingContext2D, w, h];
 }
 
-/** The 24-hour strip: a quiet rail per session, filled windows as raised pills, and a
- *  hairline at "now" that fades into the axis. */
+/** The 24-hour strip: a quiet 5px rail per session (matching TechnicalsGauge and DayGauge),
+ *  flat solid fills for session windows, and a solid rounded needle at "now" on each row. */
 function drawTimeline(
   ctx: CanvasRenderingContext2D,
   w: number,
@@ -166,9 +159,9 @@ function drawTimeline(
     const y = TIMELINE_ROW_TOP + i * TIMELINE_ROW_PITCH;
     const centre = y + TIMELINE_ROW_HEIGHT / 2;
 
-    // Rail: a hairline the pills ride on, not a second full-height bar.
+    // Rail: a quiet 5px rounded track, matching TechnicalsGauge and DayGauge.
     ctx.fillStyle = ink.track;
-    pill(ctx, x0, centre - TIMELINE_TRACK_HEIGHT / 2, trackW, TIMELINE_TRACK_HEIGHT, 2);
+    pill(ctx, x0, centre - TIMELINE_TRACK_HEIGHT / 2, trackW, TIMELINE_TRACK_HEIGHT, TIMELINE_TRACK_HEIGHT / 2);
     ctx.fill();
 
     const open = isSessionOpen(session, at);
@@ -198,21 +191,11 @@ function drawTimeline(
       const live = minuteOfDay >= a && minuteOfDay < b;
       const runX = x0 + (a / 1440) * trackW;
       const runW = ((b - a) / 1440) * trackW;
-      // Vertical sheen: a lifted top edge reads as a rounded solid, not a flat block.
-      const grad = ctx.createLinearGradient(0, y, 0, y + TIMELINE_ROW_HEIGHT);
-      grad.addColorStop(0, lift(session.color, live ? 0.2 : 0.1));
-      grad.addColorStop(1, session.color);
-      ctx.fillStyle = grad;
-      ctx.globalAlpha = live ? 1 : 0.45;
-      if (live) {
-        // A soft bloom under the running window — lit, never glued on.
-        ctx.shadowColor = withAlpha(session.color, 0.5);
-        ctx.shadowBlur = 7;
-      }
-      pill(ctx, runX, y, runW, TIMELINE_ROW_HEIGHT, TIMELINE_ROW_HEIGHT / 2);
+      // Flat solid fill — no 3-D sheen gradient, no glow. Exactly like DayGauge / TechnicalsGauge.
+      ctx.fillStyle = session.color;
+      ctx.globalAlpha = live ? 1 : 0.4;
+      pill(ctx, runX, centre - TIMELINE_TRACK_HEIGHT / 2, runW, TIMELINE_TRACK_HEIGHT, TIMELINE_TRACK_HEIGHT / 2);
       ctx.fill();
-      ctx.shadowBlur = 0;
-      ctx.shadowColor = "transparent";
       ctx.globalAlpha = 1;
     }
   });
@@ -240,16 +223,18 @@ function drawTimeline(
   }
   tracking(ctx, "0px");
 
-  // Now marker: a plain hairline that fades downward — no cap dot at the tip.
-  const marker = ctx.createLinearGradient(0, 0, 0, rowsBottom + 4);
-  marker.addColorStop(0, withAlpha(ink.now, 0.45));
-  marker.addColorStop(1, withAlpha(ink.now, 0.1));
-  ctx.strokeStyle = marker;
-  ctx.lineWidth = 1;
-  ctx.beginPath();
-  ctx.moveTo(x, 1.5);
-  ctx.lineTo(x, rowsBottom + 2);
-  ctx.stroke();
+  // Now marker: solid rounded needle on active (open) session rows only.
+  // Matches TechnicalsGauge and DayGauge needle style — no connector line.
+  venues.forEach((session, i) => {
+    if (!isSessionOpen(session, at)) return;
+    const y = TIMELINE_ROW_TOP + i * TIMELINE_ROW_PITCH;
+    const centre = y + TIMELINE_ROW_HEIGHT / 2;
+    // Needle only on active rows — 2px wide × 9px tall, fully rounded, centred on the
+    // track, same proportions as TechnicalsGauge (w-[3px] h-[11px]).
+    ctx.fillStyle = ink.now;
+    pill(ctx, x - 1, centre - 4.5, 2, 9, 1);
+    ctx.fill();
+  });
 }
 
 /** One unit only — `45m` / `12h` / `3d`, never `12h 55m`. */

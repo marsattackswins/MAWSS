@@ -44,7 +44,7 @@ export const SHORTCUT_DEFS: {
 ];
 
 export const DEFAULT_SHORTCUTS: ShortcutMap = {
-  openSearch: { key: "/", ctrl: false, alt: false, shift: false },
+  openSearch: { key: "k", ctrl: true, alt: false, shift: false },
   toggleJournal: { key: "z", ctrl: false, alt: true, shift: false },
   fitChart: { key: "r", ctrl: false, alt: true, shift: false },
   addAlert: { key: "a", ctrl: false, alt: true, shift: false },
@@ -91,15 +91,14 @@ export function chordsEqual(a: ShortcutChord | null, b: ShortcutChord | null): b
 export function eventMatchesShortcut(e: KeyboardEvent, chord: ShortcutChord | null): boolean {
   if (!chord) return false;
   const key = normalizeKey(e.key);
-  // Allow openSearch default "/" also via Ctrl/Cmd+K legacy
+  // One search box, one shortcut: Ctrl/Cmd+K is the default, and a bare "/"
+  // stays a quick alias for the same dialog. Documents that still bind "/"
+  // keep Ctrl/Cmd+K working too.
   if (
-    chord.key === "/" &&
-    !chord.ctrl &&
     !chord.alt &&
     !chord.shift &&
-    e.ctrlKey &&
-    !e.altKey &&
-    key === "k"
+    ((chord.key === "k" && chord.ctrl && key === "/" && !e.ctrlKey && !e.metaKey) ||
+      (chord.key === "/" && !chord.ctrl && key === "k" && (e.ctrlKey || e.metaKey)))
   ) {
     return true;
   }

@@ -9,7 +9,8 @@ import { formatTicker } from "@/lib/maws/universe";
 import { useAppStore } from "@/lib/store";
 import type { Quote } from "@/types";
 import { ChevronDown, MoreVertical } from "lucide-react";
-import { memo, useEffect, useLayoutEffect, useRef, useState } from "react";
+import { memo, useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 
 const MIN_LAST_WIDTH = 45;
 const MIN_CHANGE_WIDTH = 40;
@@ -66,7 +67,15 @@ function useScreenerQuotes(): Map<string, Quote> {
         const out = new Map<string, Quote>();
         for (const [sym, q] of next) {
           const old = prev.get(sym);
-          if (old && old.last === q.last && old.changePct === q.changePct && old.volume === q.volume) {
+          if (
+            old &&
+            old.last === q.last &&
+            old.changePct === q.changePct &&
+            old.volume === q.volume &&
+            old.dayOpen === q.dayOpen &&
+            old.dayHigh === q.dayHigh &&
+            old.dayLow === q.dayLow
+          ) {
             out.set(sym, old);
           } else { out.set(sym, q); changed = true; }
         }
@@ -297,12 +306,221 @@ function ColumnHeader({
 
 // ─── symbol row ────────────────────────────────────────────────────────────
 
+/** Hover intent: long enough that sweeping the list never flashes tips. */
+const RANGE_TIP_DELAY_MS = 700;
+
+/** Beside the row, over the chart; clamped inside the viewport on narrow windows. */
+export function placeRangeTip(
+  row: { left: number; top: number; height: number },
+  tipW: number,
+  tipH: number,
+  vw: number,
+  vh: number,
+): { x: number; y: number } {
+  let x = row.left - tipW - 8;
+  if (x < 8) x = Math.max(8, Math.min(row.left + 8, vw - tipW - 8));
+  const y = Math.max(8, Math.min(row.top + row.height / 2 - tipH / 2, vh - tipH - 8));
+  return { x, y };
+}
+
+/** Open-anchored diverging gauge: the CENTER is today's open, the left end is
+ *  today's low and the right end today's high (each half scaled to its own
+ *  extreme). The fill always grows out from the center toward the last price,
+ *  so its direction and its color both read as "above / below the open".
+ *  Percentages are 0–100 along the track; the fill keeps a 2% minimum so it
+ *  stays visible when the price sits exactly on the open. */
+export function dayBarGeometry(
+  day: { open: number; high: number; low: number },
+  last: number,
+): { lastPct: number; fillLeft: number; fillWidth: number } | null {
+  if (!(day.high > day.low) || !(day.open > 0) || !(last > 0)) return null;
+  const up = last >= day.open;
+  const side = up ? day.high - day.open : day.open - day.low;
+  const frac = side > 0 ? Math.max(0, Math.min(1, Math.abs(last - day.open) / side)) : 0;
+  const lastPct = 50 + (up ? frac * 50 : -frac * 50);
+  return {
+    lastPct,
+    fillLeft: Math.min(50, lastPct),
+    fillWidth: Math.max(2, Math.abs(lastPct - 50)),
+  };
+}
+
+function formatPct(value: number): string {
+  return `${value > 0 ? "+" : ""}${value.toFixed(2)}%`;
+}
+
+/** One label/value column in the tooltip's stat row. */
+function TipStat({ label, value, align = "left" }: { label: string; value: string; align?: "left" | "center" | "right" }) {
+  return (
+    <span
+      className={`flex min-w-0 flex-col ${align === "center" ? "items-center" : align === "right" ? "items-end" : ""}`}
+    >
+      <span className="text-[10px] uppercase tracking-[0.05em]" style={{ color: "var(--app-meta)" }}>
+        {label}
+      </span>
+      <span className="truncate text-[11px] font-semibold tabular-nums" style={{ color: "var(--app-text)" }}>
+        {value}
+      </span>
+    </span>
+  );
+}
+
+/** The day gauge at reading size: a small center notch marks the open and the
+ *  fill grows from it to the last price (the fill's edge). No other marks. */
+function DayGauge({
+  bar,
+  chgColor,
+}: {
+  bar: { fillLeft: number; fillWidth: number };
+  chgColor: string;
+}) {
+  return (
+    <div aria-hidden="true" className="relative mt-2 h-[5px] rounded-full bg-(--app-faint)/60">
+      <span
+        className="absolute inset-y-0 rounded-full"
+        style={{ left: `${bar.fillLeft}%`, width: `${bar.fillWidth}%`, background: chgColor }}
+      />
+      <span
+        className="absolute top-1/2 h-[7px] w-[2px] -translate-x-1/2 -translate-y-1/2 rounded-full"
+        style={{ left: "50%", background: "var(--app-text)" }}
+      />
+    </div>
+  );
+}
+
+/** The move bar, explained: today's low/open/high and the last price's seat
+ *  relative to the open. Falls back to the 24h range until the daily bar loads. */
+function RangeTooltip({
+  id,
+  symbol,
+  last,
+  high,
+  low,
+  rangePos,
+  chgColor,
+  anchor,
+  day,
+  dayChg,
+  changePct,
+}: {
+  id: string;
+  symbol: string;
+  last: number;
+  high: number;
+  low: number;
+  rangePos: number;
+  chgColor: string;
+  anchor: HTMLElement;
+  day: { open: number; high: number; low: number } | null;
+  dayChg: number | null;
+  changePct: number | null;
+}) {
+  const ref = useRef<HTMLDivElement>(null);
+  const [pos, setPos] = useState<{ x: number; y: number } | null>(null);
+  useLayoutEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    setPos(placeRangeTip(anchor.getBoundingClientRect(), el.offsetWidth, el.offsetHeight, window.innerWidth, window.innerHeight));
+  }, [anchor]);
+  const bar = day != null ? dayBarGeometry(day, last) : null;
+  const dayMode = day != null && bar != null && dayChg != null;
+  const pct = Math.round(rangePos * 100);
+  return (
+    <div
+      ref={ref}
+      id={id}
+      role="tooltip"
+      className="wl-range-tip"
+      style={{ left: pos?.x ?? 0, top: pos?.y ?? 0, visibility: pos ? "visible" : "hidden" }}
+    >
+      <div className="flex items-baseline justify-between gap-2">
+        <span className="truncate text-[12px] font-bold" style={{ color: "var(--app-text)" }}>
+          {formatTicker(symbol)}
+        </span>
+        <span
+          className="shrink-0 text-[10px] font-medium uppercase tracking-[0.05em]"
+          style={{ color: "var(--app-meta)" }}
+        >
+          {dayMode ? "Today" : "24h range"}
+        </span>
+      </div>
+      {dayMode ? (
+        <>
+          <DayGauge bar={bar} chgColor={chgColor} />
+          <div className="mt-1 flex items-start justify-between gap-2">
+            <TipStat label="Low" value={formatPrice(symbol, day.low)} />
+            <TipStat label="Open" value={formatPrice(symbol, day.open)} align="center" />
+            <TipStat label="High" value={formatPrice(symbol, day.high)} align="right" />
+          </div>
+          <div
+            className="mt-2 flex items-baseline justify-between gap-2 border-t pt-2"
+            style={{ borderColor: "var(--app-border)" }}
+          >
+            <span className="flex min-w-0 items-baseline gap-1">
+              <span className="shrink-0 text-[10px] uppercase tracking-[0.05em]" style={{ color: "var(--app-meta)" }}>
+                Last
+              </span>
+              <DigitFlashPrice symbol={symbol} value={last} />
+            </span>
+            <span className="shrink-0 text-[11px] font-semibold tabular-nums" style={{ color: chgColor }}>
+              {formatPct(dayChg)}
+            </span>
+          </div>
+          {changePct != null ? (
+            <div className="mt-1 flex items-baseline justify-between gap-2">
+              <span className="text-[10px] uppercase tracking-[0.05em]" style={{ color: "var(--app-meta)" }}>
+                24h change
+              </span>
+              <span className="text-[11px] font-medium tabular-nums" style={{ color: "var(--app-meta)" }}>
+                {formatPct(changePct)}
+              </span>
+            </div>
+          ) : null}
+        </>
+      ) : (
+        <>
+          {/* the row's bar at reading size */}
+          <div aria-hidden="true" className="relative mt-2 h-[5px] rounded-full bg-(--app-faint)/60">
+            <span
+              className="absolute inset-y-0 left-0 rounded-full"
+              style={{ width: `${Math.max(2, pct)}%`, background: chgColor }}
+            />
+          </div>
+          <div className="mt-1 flex items-start justify-between gap-2">
+            <TipStat label="Low" value={formatPrice(symbol, low)} />
+            <TipStat label="High" value={formatPrice(symbol, high)} align="right" />
+          </div>
+          <div
+            className="mt-2 flex items-baseline justify-between gap-2 border-t pt-2"
+            style={{ borderColor: "var(--app-border)" }}
+          >
+            <span className="flex min-w-0 items-baseline gap-1">
+              <span className="shrink-0 text-[10px] uppercase tracking-[0.05em]" style={{ color: "var(--app-meta)" }}>
+                Last
+              </span>
+              <DigitFlashPrice symbol={symbol} value={last} />
+            </span>
+            <span className="shrink-0 text-[11px] font-semibold tabular-nums" style={{ color: chgColor }}>
+              {pct}% of range
+            </span>
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+
 const WatchlistRow = memo(function WatchlistRow({
   symbol,
   selected,
   dragging,
   last,
   changePct,
+  high,
+  low,
+  dayOpen,
+  dayHigh,
+  dayLow,
   lastWidth,
   changeWidth,
   onOpen,
@@ -313,6 +531,11 @@ const WatchlistRow = memo(function WatchlistRow({
   dragging: boolean;
   last: number | null;
   changePct: number | null;
+  high: number;
+  low: number;
+  dayOpen: number | null;
+  dayHigh: number | null;
+  dayLow: number | null;
   lastWidth: number;
   changeWidth: number;
   onOpen: (symbol: string) => void;
@@ -320,10 +543,61 @@ const WatchlistRow = memo(function WatchlistRow({
 }) {
   const suppressClick = useRef(false);
   const startRef = useRef<{ x: number; y: number; pointerId: number } | null>(null);
+  // Day stats (UTC daily bar) drive the bar and the Day % column; until the
+  // daily bar loads, fall back to the rolling 24h numbers.
+  const day =
+    dayOpen != null && dayHigh != null && dayLow != null
+      ? { open: dayOpen, high: dayHigh, low: dayLow }
+      : null;
+  const dayChg =
+    day != null && day.open > 0 && last != null ? ((last - day.open) / day.open) * 100 : null;
+  const shownPct = dayChg ?? changePct;
   const chgColor =
-    changePct == null || changePct === 0
+    shownPct == null || shownPct === 0
       ? "var(--app-muted)"
-      : changePct > 0 ? "var(--app-up)" : "var(--app-down)";
+      : shownPct > 0 ? "var(--app-up)" : "var(--app-down)";
+  const bar = day != null && last != null ? dayBarGeometry(day, last) : null;
+  // 24h fallback: where the last price sits inside the rolling range.
+  const rangePos =
+    high > low && last != null ? Math.max(0, Math.min(1, (last - low) / (high - low))) : null;
+
+  const bodyRef = useRef<HTMLDivElement>(null);
+  const tipTimer = useRef<number | null>(null);
+  const [tipOpen, setTipOpen] = useState(false);
+  const tipId = `wl-range-tip-${symbol}`;
+  const cancelTipTimer = useCallback(() => {
+    if (tipTimer.current != null) {
+      window.clearTimeout(tipTimer.current);
+      tipTimer.current = null;
+    }
+  }, []);
+  const hideTip = useCallback(() => {
+    cancelTipTimer();
+    setTipOpen(false);
+  }, [cancelTipTimer]);
+  const queueTip = useCallback(
+    (delay: number) => {
+      cancelTipTimer();
+      tipTimer.current = window.setTimeout(() => setTipOpen(true), delay);
+    },
+    [cancelTipTimer],
+  );
+  useEffect(() => cancelTipTimer, [cancelTipTimer]);
+  // A reorder drag owns the pointer — the tooltip would only chase the ghost.
+  useEffect(() => {
+    if (dragging) hideTip();
+  }, [dragging, hideTip]);
+  // The tip anchors to the row's rect at open time: any scroll or resize moves
+  // that rect, so drop the tip instead of letting it float off its row.
+  useEffect(() => {
+    if (!tipOpen) return;
+    window.addEventListener("scroll", hideTip, true);
+    window.addEventListener("resize", hideTip);
+    return () => {
+      window.removeEventListener("scroll", hideTip, true);
+      window.removeEventListener("resize", hideTip);
+    };
+  }, [tipOpen, hideTip]);
 
   return (
     <div
@@ -335,10 +609,53 @@ const WatchlistRow = memo(function WatchlistRow({
         dragging ? "wl-row is-dragging" : selected ? "wl-row is-selected" : "",
       ].join(" ")}
     >
+      {bar != null ? (
+        <span
+          aria-hidden="true"
+          className="pointer-events-none absolute inset-x-3 bottom-0 h-[3px] rounded-full bg-(--app-faint)/60"
+        >
+          <span
+            className="absolute inset-y-0 rounded-full"
+            style={{
+              left: `${bar.fillLeft}%`,
+              width: `${bar.fillWidth}%`,
+              background: chgColor,
+            }}
+          />
+          <span
+            className="absolute top-1/2 h-[5px] w-[2px] -translate-x-1/2 -translate-y-1/2 rounded-full"
+            style={{ left: "50%", background: "var(--app-text)" }}
+          />
+        </span>
+      ) : rangePos != null ? (
+        <span
+          aria-hidden="true"
+          className="pointer-events-none absolute inset-x-3 bottom-0 h-[3px] overflow-hidden rounded-full bg-(--app-faint)/60"
+        >
+          <span
+            className="block h-full rounded-full"
+            style={{
+              width: `${Math.max(2, Math.round(rangePos * 100))}%`,
+              background: chgColor,
+            }}
+          />
+        </span>
+      ) : null}
+
       {/* main clickable row — 36px tall to match Vela */}
       <div
+        ref={bodyRef}
         role="button"
         tabIndex={0}
+        aria-describedby={tipOpen && (bar != null || rangePos != null) ? tipId : undefined}
+        onPointerEnter={() => queueTip(RANGE_TIP_DELAY_MS)}
+        onPointerLeave={hideTip}
+        onFocus={(e) => {
+          // Mouse clicks also focus the row; reopening here would undo the
+          // pointerdown hide and replay the tip's entrance animation.
+          if (e.currentTarget.matches(":focus-visible")) queueTip(0);
+        }}
+        onBlur={hideTip}
         onPointerDown={(e) => {
           if (e.button !== 0) return;
           startRef.current = { x: e.clientX, y: e.clientY, pointerId: e.pointerId };
@@ -360,6 +677,7 @@ const WatchlistRow = memo(function WatchlistRow({
         onKeyDown={(e) => {
           if (e.key === "Enter" || e.key === " ") { e.preventDefault(); onOpen(symbol); }
         }}
+        data-row-body
         className={`flex h-[36px] w-full items-center gap-0 select-none px-3 ${dragging ? "cursor-grabbing" : "cursor-default"}`}
       >
         {/* logo */}
@@ -385,12 +703,28 @@ const WatchlistRow = memo(function WatchlistRow({
         {/* day % */}
         <div className="shrink-0 text-right" style={{ width: changeWidth }}>
           <span className="text-[12px] font-semibold tabular-nums" style={{ color: chgColor }}>
-            {changePct == null
-              ? "—"
-              : `${changePct > 0 ? "+" : ""}${changePct.toFixed(2)}%`}
+            {shownPct == null ? "—" : formatPct(shownPct)}
           </span>
         </div>
       </div>
+      {tipOpen && last != null && bodyRef.current && (bar != null || rangePos != null)
+        ? createPortal(
+            <RangeTooltip
+              id={tipId}
+              symbol={symbol}
+              last={last}
+              high={high}
+              low={low}
+              rangePos={rangePos ?? 0}
+              chgColor={chgColor}
+              anchor={bodyRef.current}
+              day={day}
+              dayChg={dayChg}
+              changePct={changePct}
+            />,
+            document.body,
+          )
+        : null}
     </div>
   );
 });
@@ -421,6 +755,7 @@ function PendingRow({
     <div
       data-screener-card={symbol}
       data-selected={selected ? "true" : undefined}
+      data-row-body
       role="button"
       tabIndex={0}
       onClick={() => onOpen(symbol)}
@@ -468,6 +803,7 @@ function bareSymbol(symbol: string) {
 
 export function StrategyScreener() {
   const watchlist          = useAppStore((s) => s.watchlist);
+  const rowDensity         = useAppStore((s) => s.rowDensity);
   const setWatchlistOrder  = useAppStore((s) => s.setWatchlistOrder);
   const setSymbol          = useAppStore((s) => s.setSymbol);
   const active             = useAppStore((s) => s.panes.find((p) => p.id === s.activePaneId)?.symbol);
@@ -691,7 +1027,7 @@ export function StrategyScreener() {
       <div
         className="relative min-h-0 flex-1 overflow-hidden"
       >
-        <div className="flex h-full flex-col overflow-auto">
+        <div className="flex h-full flex-col overflow-auto" data-density={rowDensity}>
           <ColumnHeader
             lastWidth={lastWidth}
             changeWidth={changeWidth}
@@ -744,7 +1080,12 @@ export function StrategyScreener() {
                     selected={activeKey === bareSymbol(sym)}
                     dragging={dragSymbol === sym}
                     last={q.last}
+                    high={q.high}
+                    low={q.low}
                     changePct={q.changePct}
+                    dayOpen={q.dayOpen ?? null}
+                    dayHigh={q.dayHigh ?? null}
+                    dayLow={q.dayLow ?? null}
                     lastWidth={lastWidth}
                     changeWidth={changeWidth}
                     onOpen={setSymbol}
