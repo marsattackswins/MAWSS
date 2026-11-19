@@ -182,6 +182,8 @@ export interface FreezeDto {
   clearRule: string | null;
   clearsWithOperator: boolean;
   blockingReason: string | null;
+  /** True when pressing "Clear freeze" would actually clear this row. */
+  operatorCanClearNow: boolean;
 }
 
 export interface FreezeListDto {

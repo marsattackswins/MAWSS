@@ -55,7 +55,9 @@ export function FreezeBanner() {
   // hide behind a stale health flag. It refreshes when health changes.
   if (freezes.length === 0) return null;
 
-  const blockers = freezes.filter((freeze) => freeze.blockingReason !== null);
+  // A freeze the operator action itself clears is not "blocked", even though
+  // its read-view text names that action.
+  const blockers = freezes.filter((freeze) => !freeze.operatorCanClearNow);
   const disabled = blockers.length > 0;
   const firstBlocker = blockers[0]?.blockingReason ?? null;
 

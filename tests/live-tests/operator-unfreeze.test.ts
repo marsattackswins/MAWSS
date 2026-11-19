@@ -151,6 +151,8 @@ describe("operator-class clears", () => {
     const readBody = await read.json();
     expect(readBody.freezes).toHaveLength(1);
     expect(readBody.freezes[0].blockingReason).toBe("needs an explicit operator unfreeze");
+    // The action itself satisfies the rule, so the UI may press the button.
+    expect(readBody.freezes[0]).toMatchObject({ clearsWithOperator: true, operatorCanClearNow: true });
 
     const cleared = await postFreezes(post({ code: "KEY_REJECTED", confirm: true }));
     expect((await cleared.json()).cleared).toEqual(["KEY_REJECTED"]);
@@ -183,6 +185,7 @@ describe("operator-class clears", () => {
     expect(body.frozen).toBe(true);
     expect(body.freezes[0].code).toBe("RECON_DRIFT");
     expect(body.freezes[0].blockingReason).toContain("needs a clean reconciliation after");
+    expect(body.freezes[0]).toMatchObject({ clearsWithOperator: false, operatorCanClearNow: false });
     expect(activeFreezes(profile).map((row) => row.code)).toEqual(["RECON_DRIFT"]);
     expect(getRuntime(RUNTIME_KEYS.frozen, "", profile)).toBe("true");
   });

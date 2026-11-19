@@ -37,6 +37,7 @@ const BLOCKED_FREEZE = {
   clearRule: "clean_recon",
   clearsWithOperator: false,
   blockingReason: "needs a clean reconciliation after 2023-11-14T22:13:20.000Z",
+  operatorCanClearNow: false,
 };
 
 const OPERATOR_FREEZE = {
@@ -46,6 +47,7 @@ const OPERATOR_FREEZE = {
   clearRule: "operator",
   clearsWithOperator: true,
   blockingReason: "needs an explicit operator unfreeze",
+  operatorCanClearNow: true,
 };
 
 async function stubLive(page: import("@playwright/test").Page, freezes: unknown[], onClear?: () => unknown[]) {

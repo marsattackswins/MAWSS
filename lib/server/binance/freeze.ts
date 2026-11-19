@@ -318,6 +318,13 @@ export interface FreezeStatus {
   clearsWithOperator: boolean;
   /** Null when the clear condition is already met under `ctx`. */
   blockingReason: string | null;
+  /**
+   * True when the operator action itself satisfies the remaining condition
+   * (OPERATOR / KEY_REJECTED outright, LEGACY once a clean recon has run).
+   * `blockingReason` describes the action in that case; this is what the UI
+   * uses to decide whether the button may be pressed.
+   */
+  operatorCanClearNow: boolean;
 }
 
 /**
@@ -339,6 +346,7 @@ export function freezeStatuses(
       clearRule: rule,
       clearsWithOperator: rule === "operator" || rule === "legacy",
       blockingReason: freezeBlockingReason(row, ctx),
+      operatorCanClearNow: isFreezeClearable(row, { ...ctx, operatorAction: true }),
     };
   });
 }
