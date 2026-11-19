@@ -132,38 +132,114 @@ type ProtectionReplaceResult = OrderResult & {
   rollbackError?: string;
 };
 
+/** Documented production outcome of a -2022 close rejection (nothing is sent). */
+export const REDUCE_ONLY_REJECTED_PRODUCTION = "reduce-only rejected: nothing to reduce (position changed)";
+
+interface ReduceOnlyFallbackOptions {
+  /** Only the demo profile may ever resubmit without reduceOnly. */
+  allowFallback: boolean;
+  /** Side/size the close was planned from (read from the exchange). */
+  expectedSide: "long" | "short";
+  expectedQty: string;
+  /** Fresh exchange position read, performed before any resubmit. */
+  readPosition: () => Promise<{ side: "long" | "short"; qty: string } | null>;
+  /**
+   * Optional extra demo-only guard: no working orders may reserve the size
+   * (a conflicting close order is the legitimate -2022 meaning). A failed
+   * check aborts the fallback and keeps the original rejection.
+   */
+  verifyBookClean?: () => Promise<boolean>;
+  /** Resubmits the close (never reduce-only) at the freshly read quantity. */
+  resubmit: (freshQty: string) => Promise<OrderResult>;
+}
+
 /**
- * Binance testnet occasionally rejects fully valid reduce-only closes with
- * -2022 REDUCE_ONLY_REJECT even in one-way mode with no open orders. The same
- * order without the flag is accepted; production honors the flag correctly.
+ * -2022 REDUCE_ONLY_REJECT with nothing to reduce.
  *
- * -2022 also has a legitimate meaning — an existing open order conflicting
- * with the close — so the fallback only fires when `verifySafeToFallback`
- * confirms the testnet-defect signature: no open orders AND the position
- * still matches the quantity/side that was read for the close. Otherwise the
- * original rejection is returned unchanged. The retry is safety-equivalent:
- * -2022 on HTTP 400 is a definite rejection (nothing executed), and the plain
- * order is verified to only flatten right before it is sent.
+ * Production: never resubmits without reduceOnly. The position is re-read,
+ * the outcome is recorded and alerted, nothing is sent, and the caller gets a
+ * definite rejection.
+ *
+ * Demo/testnet: Binance's demo venue rejects fully valid reduce-only closes
+ * with -2022 even in one-way mode. Only that profile may retry without the
+ * flag, and only after a fresh position read matches the planned side/size;
+ * the retry then uses the freshly read quantity so it can only flatten. The
+ * caller holds the mutation queue for the whole sequence, so no concurrent
+ * mutation can change the position between the read and the resubmit.
  */
-function submitCloseWithReduceOnlyFallback(
+async function submitCloseWithReduceOnlyFallback(
   place: (reduceOnly: boolean) => Promise<OrderResult>,
-  verifySafeToFallback: () => Promise<boolean>,
+  options: ReduceOnlyFallbackOptions,
 ): Promise<OrderResult> {
-  return (async () => {
-    const first = await place(true);
-    if (!(first.ok === false && first.errorCode === ERR_REDUCE_ONLY_REJECT)) return first;
-    audit("operator", "order.close.reduce_only_rejected", { code: ERR_REDUCE_ONLY_REJECT });
-    let safeToFallback = false;
+  const first = await place(true);
+  if (!(first.ok === false && first.errorCode === ERR_REDUCE_ONLY_REJECT)) return first;
+
+  let fresh: { side: "long" | "short"; qty: string } | null = null;
+  let readFailed = false;
+  try {
+    fresh = await options.readPosition();
+  } catch {
+    readFailed = true;
+  }
+
+  audit("operator", "order.close.reduce_only_rejected", {
+    code: ERR_REDUCE_ONLY_REJECT,
+    profile: options.allowFallback ? "demo" : "production",
+    expectedSide: options.expectedSide,
+    expectedQty: options.expectedQty,
+    fresh,
+    readFailed,
+  });
+
+  if (!options.allowFallback) {
+    alert("order.reduce_only_rejected_production", {
+      expectedSide: options.expectedSide,
+      expectedQty: options.expectedQty,
+      fresh,
+      readFailed,
+      severity: "high",
+    });
+    return { ...first, error: REDUCE_ONLY_REJECTED_PRODUCTION, failureKind: "definite_rejection" };
+  }
+
+  if (!fresh || fresh.side !== options.expectedSide || fresh.qty !== options.expectedQty) {
+    // Side or size moved: a flag-free retry could open exposure. Abort.
+    audit("operator", "order.close.reduce_only_fallback_aborted", {
+      expectedSide: options.expectedSide,
+      expectedQty: options.expectedQty,
+      fresh,
+      readFailed,
+    });
+    return {
+      ...first,
+      error: "reduce-only rejected: position changed; fallback aborted",
+      failureKind: "definite_rejection",
+    };
+  }
+
+  if (options.verifyBookClean) {
+    let clean = false;
     try {
-      safeToFallback = await verifySafeToFallback();
+      clean = await options.verifyBookClean();
     } catch {
-      // Cannot verify exchange state: fail closed, keep the original rejection.
+      clean = false;
     }
-    if (!safeToFallback) return first;
-    const second = await place(false);
-    audit("operator", "order.close.reduce_only_fallback", { clientOrderId: second.clientOrderId, ok: second.ok });
-    return second;
-  })();
+    if (!clean) {
+      audit("operator", "order.close.reduce_only_fallback_aborted", {
+        reason: "working orders present or unreadable",
+        expectedQty: options.expectedQty,
+      });
+      return first;
+    }
+  }
+
+  const second = await options.resubmit(fresh.qty);
+  audit("operator", "order.close.reduce_only_fallback", {
+    clientOrderId: second.clientOrderId,
+    ok: second.ok,
+    qty: fresh.qty,
+  });
+  return second;
 }
 
 export interface OrderResult {
@@ -212,6 +288,17 @@ export interface OrderServiceDeps {
   unfreeze?: () => void;
   emit(event: string, data: unknown): void;
   sleep?: (ms: number) => Promise<void>;
+}
+
+/** Normalizes a position-risk row into the side/absolute-quantity identity. */
+function toPositionIdentity(
+  rows: PositionRiskRow[],
+  symbol: string,
+): { side: "long" | "short"; qty: string } | null {
+  const row = rows.find((candidate) => candidate.symbol === symbol && !isZero(parseDec(candidate.positionAmt)));
+  if (!row) return null;
+  const amount = parseDec(row.positionAmt);
+  return { side: isNegative(amount) ? "short" : "long", qty: toStr(abs(amount)) };
 }
 
 /** Binance newClientOrderId charset/length. */
@@ -1295,19 +1382,23 @@ export class OrderService {
             isClose: true,
             clientOrderId: newServerClientOrderId("em"),
           }),
-        async () => {
-          const [orders, rows] = await Promise.all([
-            this.deps.rest.getOpenOrdersEmergency(symbol),
-            this.deps.rest.getPositionRiskEmergency(symbol),
-          ]);
-          const row = rows.find((candidate) => candidate.symbol === symbol);
-          return (
-            orders.length === 0 &&
-            row != null &&
-            !isZero(parseDec(row.positionAmt)) &&
-            isNegative(parseDec(row.positionAmt)) === short &&
-            toStr(abs(parseDec(row.positionAmt))) === qty
-          );
+        {
+          allowFallback: this.deps.cfg.env === "testnet",
+          expectedSide: short ? "short" : "long",
+          expectedQty: qty,
+          readPosition: () => this.readEmergencyPosition(symbol),
+          verifyBookClean: async () => (await this.deps.rest.getOpenOrdersEmergency(symbol)).length === 0,
+          resubmit: (freshQty) =>
+            this.submitOrderSerialized({
+              symbol,
+              side: short ? "BUY" : "SELL",
+              type: "MARKET",
+              qty: freshQty,
+              reduceOnly: false,
+              emergencyClose: true,
+              isClose: true,
+              clientOrderId: newServerClientOrderId("em"),
+            }),
         },
       );
       if (result.ok) deleteProtectionIntent(symbol, this.persistenceProfile);
@@ -1315,8 +1406,29 @@ export class OrderService {
     });
   }
 
+  /**
+   * Fresh exchange position read (side + absolute qty) used by the demo-only
+   * reduce-only fallback. Returns null when the symbol is flat.
+   */
+  private async readPosition(symbol: string): Promise<{ side: "long" | "short"; qty: string } | null> {
+    const rows = await this.deps.rest.getPositionRisk(symbol);
+    return toPositionIdentity(rows, symbol);
+  }
+
+  private async readEmergencyPosition(symbol: string): Promise<{ side: "long" | "short"; qty: string } | null> {
+    const rows = await this.deps.rest.getPositionRiskEmergency(symbol);
+    return toPositionIdentity(rows, symbol);
+  }
+
   /** Reduce-only market close of the exchange's current position. */
   async closePosition(symbol: string): Promise<OrderResult> {
+    // The whole close — read, reduce-only attempt, demo fallback, resubmit —
+    // runs under the mutation queue so verification and resubmit cannot race
+    // another mutation into an opening order.
+    return withRiskMutation(() => this.closePositionSerialized(symbol));
+  }
+
+  private async closePositionSerialized(symbol: string): Promise<OrderResult> {
     // Emergency closes must not rely on a stale stream snapshot. If the
     // exchange cannot provide position truth, fail closed and send no order.
     let rows;
@@ -1349,7 +1461,7 @@ export class OrderService {
     // emergency-flatten path may bypass the execution gates.
     const result = await submitCloseWithReduceOnlyFallback(
       (reduceOnly) =>
-        this.submitOrder({
+        this.submitOrderSerialized({
           symbol,
           side: short ? "BUY" : "SELL",
           type: "MARKET",
@@ -1358,19 +1470,22 @@ export class OrderService {
           isClose: true,
           clientOrderId: newServerClientOrderId("cls"),
         }),
-      async () => {
-        const [orders, rows] = await Promise.all([
-          this.getOpenOrdersIncludingAlgos(symbol),
-          this.deps.rest.getPositionRisk(symbol),
-        ]);
-        const row = rows.find((candidate) => candidate.symbol === symbol);
-        return (
-          orders.length === 0 &&
-          row != null &&
-          !isZero(parseDec(row.positionAmt)) &&
-          isNegative(parseDec(row.positionAmt)) === short &&
-          toStr(abs(parseDec(row.positionAmt))) === qty
-        );
+      {
+        allowFallback: this.deps.cfg.env === "testnet",
+        expectedSide: short ? "short" : "long",
+        expectedQty: qty,
+        readPosition: () => this.readPosition(symbol),
+        verifyBookClean: async () => (await this.getOpenOrdersIncludingAlgos(symbol)).length === 0,
+        resubmit: (freshQty) =>
+          this.submitOrderSerialized({
+            symbol,
+            side: short ? "BUY" : "SELL",
+            type: "MARKET",
+            qty: freshQty,
+            reduceOnly: false,
+            isClose: true,
+            clientOrderId: newServerClientOrderId("cls"),
+          }),
       },
     );
     if (result.ok) deleteProtectionIntent(symbol, this.persistenceProfile);
