@@ -147,7 +147,7 @@ function reasonForHealth(config: EnvConfig, manager: BinanceLiveManager | null):
   // offset-corrected timestamps and a -1021 resyncs + retries. A large raw
   // drift only disqualifies production, where wall-clock truth matters.
   if (config.env === "production" && !health.clockHealthy) return "clock_unhealthy";
-  if (!health.signals.snapshot || Date.now() - health.signals.snapshot.fetchedAt > config.snapshotMaxAgeMs) return "snapshot_stale";
+  if (!health.signals.snapshot || Date.now() - health.signals.snapshot.fetchedAt > config.gateSnapshotMaxAgeMs) return "snapshot_stale";
   if (!health.positionModeHealthy) return "position_mode_invalid";
   if (!health.reconHealthy) return health.signals.recon.lastResult === "drift" ? "reconciliation_drift" : "reconciliation_failed";
   if (health.execution.frozen) return "execution_frozen";
@@ -440,7 +440,7 @@ export class ProfileCoordinator {
       const release = await acquireRiskMutationDrain();
       release();
       const signals = healthSignals();
-      if (!signals.snapshot || Date.now() - signals.snapshot.fetchedAt > config.snapshotMaxAgeMs) {
+      if (!signals.snapshot || Date.now() - signals.snapshot.fetchedAt > config.gateSnapshotMaxAgeMs) {
         throw new ProfileCoordinatorError("exposure_unknown");
       }
       if (recon.result === "error" || signals.recon.lastResult === "error") {

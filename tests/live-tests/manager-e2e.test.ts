@@ -210,7 +210,7 @@ describe("BinanceLiveManager end-to-end (fake testnet)", () => {
     expect(manager.getRiskSnapshot().marginDataFresh).toBe(false);
 
     liveState().account!.maintenanceMargin = "0";
-    liveState().account!.marginHealthFetchedAt = Date.now() - makeCfg().snapshotMaxAgeMs - 1;
+    liveState().account!.marginHealthFetchedAt = Date.now() - makeCfg().riskDataMaxAgeMs - 1;
     expect(manager.getRiskSnapshot().marginDataFresh).toBe(false);
   });
 
@@ -228,7 +228,7 @@ describe("BinanceLiveManager end-to-end (fake testnet)", () => {
       positionSide: "BOTH",
     }], now);
     liveState().positions.get("BTCUSDT")!.riskSnapshotFetchedAt =
-      now - makeCfg().snapshotMaxAgeMs - 1;
+      now - makeCfg().riskDataMaxAgeMs - 1;
     liveState().positions.get("BTCUSDT")!.updatedAt = now;
 
     expect(manager.getRiskSnapshot().marginDataFresh).toBe(false);

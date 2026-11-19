@@ -1130,7 +1130,7 @@ export class BinanceLiveManager {
     const accountFresh =
       state.account !== null &&
       Number.isFinite(state.account.fetchedAt) &&
-      now - state.account.fetchedAt <= this.cfg.snapshotMaxAgeMs;
+      now - state.account.fetchedAt <= this.cfg.riskDataMaxAgeMs;
     const positions = [...state.positions.values()];
     const unrealizedPnlFresh =
       accountFresh &&
@@ -1147,7 +1147,7 @@ export class BinanceLiveManager {
       positions.length === 0 ||
       (state.account !== null &&
         Number.isFinite(state.account.marginHealthFetchedAt) &&
-        now - state.account.marginHealthFetchedAt <= this.cfg.snapshotMaxAgeMs &&
+        now - state.account.marginHealthFetchedAt <= this.cfg.riskDataMaxAgeMs &&
         Number.isFinite(Number(state.account.marginHealthBalance)) &&
         Number(state.account.marginHealthBalance) > 0 &&
         state.account.maintenanceMargin !== "" &&
@@ -1163,7 +1163,7 @@ export class BinanceLiveManager {
               now - position.updatedAt <= MARK_STALE_AFTER_MS &&
               typeof position.riskSnapshotFetchedAt === "number" &&
               Number.isFinite(position.riskSnapshotFetchedAt) &&
-              now - position.riskSnapshotFetchedAt <= this.cfg.snapshotMaxAgeMs &&
+              now - position.riskSnapshotFetchedAt <= this.cfg.riskDataMaxAgeMs &&
               Number.isFinite(Number(position.markPrice)) &&
               Number(position.markPrice) > 0 &&
               (liquidationPrice === "" ||

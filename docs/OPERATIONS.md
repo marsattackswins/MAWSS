@@ -297,7 +297,7 @@ trade; neither setting guarantees that liquidation cannot occur.
 The daily loss guard uses realized P&L from the durable fills log since UTC
 midnight plus the sum of open-position unrealized P&L from mark-derived
 positions. The manager treats unrealized P&L as fresh only when the account
-snapshot is within `MAWS_SNAPSHOT_MAX_AGE_MS` and every open position has
+snapshot is within `MAWS_RISK_DATA_MAX_AGE_MS` and every open position has
 exchange-mark-derived P&L updated within 10 seconds. Fill-time fallback,
 missing, non-finite, or stale data rejects risk-increasing orders; reduce-only,
 close, and emergency-close orders remain available. The existing realized-only
@@ -307,7 +307,7 @@ realized-plus-unrealized loss limit.
 Margin health uses `totalMaintMargin` and `totalMarginBalance` from the existing
 account snapshot; no additional exchange request is made. Position mark and
 liquidation prices come from the existing position-risk snapshot and mark-price
-updates. The margin snapshot must be within `MAWS_SNAPSHOT_MAX_AGE_MS`; open
+updates. The margin snapshot must be within `MAWS_RISK_DATA_MAX_AGE_MS`; open
 position marks must be exchange-derived and no more than 10 seconds old. Missing
 or stale data fails closed for risk-increasing orders while positions are open.
 Zero or missing liquidation prices are treated as not applicable. With no open

@@ -43,7 +43,8 @@ jest.mock("@/lib/server/env/config", () => ({
     rateInternalPerMin: 60,
     reconIntervalMs: 60000,
     leaseTtlMs: 60000,
-    snapshotMaxAgeMs: 300000,
+    gateSnapshotMaxAgeMs: 300000,
+    riskDataMaxAgeMs: 60000,
     protectionPendingMaxAgeMs: 120000,
     alertWebhookUrl: "https://example.com/webhook",
     risk: {

@@ -120,12 +120,19 @@ export interface EnvConfig {
   historyBackfillMs: number;
   leaseTtlMs: number;
   /**
-   * Maximum age of the last authoritative account/positions snapshot used by
-   * margin/liquidation checks (and by the execution gate). Default 60 s —
-   * short enough that a fill cannot slip between two snapshots. Override with
-   * MAWS_SNAPSHOT_MAX_AGE_MS when reconciliation cadence demands it.
+   * Maximum age of the last authoritative account/positions snapshot for the
+   * execution gate. Default 180 s: reconciliation refreshes the snapshot every
+   * 60 s, so a 60 s bound would reject orders between passes purely because a
+   * pass is due. Override with MAWS_GATE_SNAPSHOT_MAX_AGE_MS.
    */
-  snapshotMaxAgeMs: number;
+  gateSnapshotMaxAgeMs: number;
+  /**
+   * Maximum age of the account/margin/liquidation fields behind risk checks on
+   * new exposure. Default 60 s; Fix D re-reads these immediately before a
+   * risk-increasing order, so this only bounds stale paths. Override with
+   * MAWS_RISK_DATA_MAX_AGE_MS.
+   */
+  riskDataMaxAgeMs: number;
   /** Maximum age for automatically restoring an interrupted protection replacement. */
   protectionPendingMaxAgeMs: number;
   alertWebhookUrl: string | null;
@@ -429,7 +436,8 @@ export function loadEnvConfig(source: NodeJS.ProcessEnv = process.env): EnvConfi
     markPriceIntervalMs: num(source.MAWS_MARK_PRICE_INTERVAL_MS, 15_000),
     historyBackfillMs: num(source.MAWS_HISTORY_BACKFILL_MS, 3 * 24 * 60 * 60 * 1000),
     leaseTtlMs: num(source.MAWS_LEASE_TTL_MS, 5 * 60_000),
-    snapshotMaxAgeMs: num(source.MAWS_SNAPSHOT_MAX_AGE_MS, 60_000),
+    gateSnapshotMaxAgeMs: num(source.MAWS_GATE_SNAPSHOT_MAX_AGE_MS, 180_000),
+    riskDataMaxAgeMs: num(source.MAWS_RISK_DATA_MAX_AGE_MS, 60_000),
     protectionPendingMaxAgeMs: num(source.MAWS_PROTECTION_PENDING_MAX_AGE_MS, 2 * 60_000),
     alertWebhookUrl: source.MAWS_ALERT_WEBHOOK_URL?.trim() || null,
     missingProductionRiskLimitVariables,

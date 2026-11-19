@@ -68,7 +68,7 @@ export function executionDecision(cfg: EnvConfig): ExecutionDecision {
     (streamHeartbeatAt == null || Date.now() - streamHeartbeatAt <= PRIVATE_STREAM_HEARTBEAT_MS);
   const snapshotFresh =
     signals.snapshot != null &&
-    Date.now() - signals.snapshot.fetchedAt <= cfg.snapshotMaxAgeMs;
+    Date.now() - signals.snapshot.fetchedAt <= cfg.gateSnapshotMaxAgeMs;
   const positionModeVerified = signals.positionMode.mode === "one-way" && signals.positionMode.error == null;
 
   const reasons: string[] = [];
