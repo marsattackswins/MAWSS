@@ -1,7 +1,7 @@
 # MAWS Verification Status
 
 What has been executed against a real exchange versus what has only been
-exercised with fakes. Last updated 2026-11-12 on `master` after Stage 1.
+exercised with fakes. Last updated 2026-11-19 on `master` after Engine safety batch 2.
 
 ## Verified
 
@@ -75,3 +75,19 @@ and preserves the risk/reward distances), not in CI.
 
 Do not attach the Production profile or trade live size with this code until
 `npm run verify:testnet` passes and its report is reviewed.
+
+## Engine safety batch 2 (fakes only)
+
+Everything below is exercised against the fake exchange transport, fake
+timers and a temporary SQLite database. None of it has been run against a real
+exchange account, a real alert webhook or a real external monitor.
+
+| Area | Verified how | Real operation |
+| --- | --- | --- |
+| Operator unfreeze (`POST /api/live/freezes`) | Session/CSRF/Origin tests, service-token rejection, per-code clear rules, LEGACY requiring a clean recon, rate limit, and the execution/kill-switch invariant (`tests/live-tests/operator-unfreeze.test.ts`). UI banner covered by `e2e/operator-unfreeze.spec.ts` with stubbed state. | Not verified. No real freeze has been cleared end to end. |
+| Request budget | Mark poll targets only stream-stale marks; exchangeInfo limits adopted with a fallback health warning (`tests/live-tests/request-budget.test.ts`). | Not verified against a live `exchangeInfo` payload or Binance's header accounting. |
+| Retention and database health | Batched deletion, 24 h-guard rails for unprocessed events/intents/fills/income/protection, override windows, size warning (`tests/unit/retention.test.ts`). | Not verified on a production-sized database; no VACUUM is ever run automatically. |
+| SSE hardening | Heartbeat session revalidation and slow-client close (`tests/live-tests/sse-route.test.ts`). | Not verified behind a real proxy. |
+| Alert outbox | Durable rows, backoff, 24 h give-up, non-critical throttle (`tests/live-tests/alert-outbox.test.ts`). | Not verified against a real webhook endpoint. |
+| Heartbeat | Optional 60 s GET, failure swallowed, stop semantics (`tests/live-tests/heartbeat.test.ts`). | Not verified against a real external monitor; the monitor must alert on silence. |
+| Fail-closed fixes | MIN_NOTIONAL/MAX_NUM_ORDERS, unreadable pending exposure, mark-stream connect timeout and 30 s recycle, protection restore retries (policy), unpriced commission asset diagnosis (`tests/live-tests/fail-closed.test.ts`, `tests/live-tests/mark-price-stream.test.ts`). | Protection restore retry pacing is unit-tested at policy level only; no real restore loop has run. |
