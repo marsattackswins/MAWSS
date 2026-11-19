@@ -29,7 +29,7 @@ import type { FreezeCode } from "./freeze";
 import type { SymbolConstraints } from "./filters";
 import { validateAgainstConstraints, validateMarketQty } from "./filters";
 import { checkRisk, type RiskSnapshot } from "./risk";
-import { withRiskMutation } from "./mutation-queue";
+import { EMERGENCY_MAX_WAIT_MS, withEmergencyMutation, withRiskMutation } from "./mutation-queue";
 import {
   createIntent as createIntentRecord,
   findByClientOrderId as findIntentByClientOrderId,
@@ -279,6 +279,8 @@ export interface OrderServiceDeps {
     current: RiskSnapshot;
   }): Promise<RiskSnapshot | null> | RiskSnapshot | null;
   freeze(reason: string, code?: FreezeCode, detail?: Record<string, unknown>): void;
+  /** Override the emergency lane wait budget (tests). */
+  emergencyMaxWaitMs?: number;
   /**
    * Fresh account + positionRisk read used for risk-increasing orders only.
    * Runs inside the mutation queue, before checkRisk, so a stale snapshot can
@@ -1367,7 +1369,59 @@ export class OrderService {
 
   /** Emergency-only close using exchange truth and bypassing normal submission gates. */
   async emergencyClosePosition(symbol: string, positionAmt?: string): Promise<OrderResult> {
-    return withRiskMutation(async () => {
+    // Priority lane: front of the waiting line, never preempting the running
+    // task. A wait over the budget proceeds without the lock, which is safe
+    // only because this path re-reads the position, sends reduce-only and
+    // verifies the result afterwards.
+    const { result, waitedOut } = await withEmergencyMutation(
+      () => this.emergencyCloseSerialized(symbol, positionAmt),
+      this.deps.emergencyMaxWaitMs ?? EMERGENCY_MAX_WAIT_MS,
+    );
+    if (waitedOut) {
+      audit("operator", "position.emergency.priority_lane_timeout", {
+        symbol,
+        maxWaitMs: this.deps.emergencyMaxWaitMs ?? EMERGENCY_MAX_WAIT_MS,
+      });
+      await this.verifyEmergencyFlat(symbol, result);
+    }
+    return result;
+  }
+
+  /**
+   * Post-close verification for the degraded emergency lane: nothing may be
+   * left open. Runs only after a lock-timeout (the normal path's caller keeps
+   * its existing contract).
+   */
+  private async verifyEmergencyFlat(symbol: string, result: OrderResult): Promise<void> {
+    if (!result.ok) return;
+    try {
+      const rows = await this.deps.rest.getPositionRiskEmergency(symbol);
+      const remaining = rows.find((row) => row.symbol === symbol && !isZero(parseDec(row.positionAmt)));
+      if (!remaining) return;
+      audit("operator", "position.emergency.position_remaining", {
+        symbol,
+        positionAmt: remaining.positionAmt,
+        severity: "high",
+      }, undefined, this.persistenceProfile);
+      alert(`position_emergency_remaining:${symbol}`, {
+        symbol,
+        positionAmt: remaining.positionAmt,
+        severity: "high",
+      });
+    } catch (err) {
+      audit("operator", "position.emergency.verify_failed", {
+        symbol,
+        error: String(err),
+        severity: "high",
+      }, undefined, this.persistenceProfile);
+    }
+  }
+
+  private async emergencyCloseSerialized(symbol: string, positionAmt?: string): Promise<OrderResult> {
+    return this.emergencyCloseIntent(symbol, positionAmt);
+  }
+
+  private async emergencyCloseIntent(symbol: string, positionAmt?: string): Promise<OrderResult> {
       const rows = positionAmt
         ? [{ symbol, positionAmt }]
         : await this.deps.rest.getPositionRiskEmergency(symbol);
@@ -1423,9 +1477,8 @@ export class OrderService {
             }),
         },
       );
-      if (result.ok) deleteProtectionIntent(symbol, this.persistenceProfile);
-      return result;
-    });
+    if (result.ok) deleteProtectionIntent(symbol, this.persistenceProfile);
+    return result;
   }
 
   /**
