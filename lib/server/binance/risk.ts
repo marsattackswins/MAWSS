@@ -52,6 +52,12 @@ export interface RiskSnapshot {
   workingOrders?: PendingRiskExposure[];
   /** Intents whose exchange outcome is not yet certain. */
   uncertainIntents?: PendingRiskExposure[];
+  /**
+   * Non-USD commission assets with no fresh USD price. While non-empty the
+   * day's fee total is unavailable, so risk-increasing orders are rejected
+   * rather than valued at a guess.
+   */
+  commissionAssetsUnpriced?: string[];
 }
 
 export interface RiskOrderDraft {
@@ -68,8 +74,65 @@ export interface RiskOrderDraft {
 /** Assets treated as USD at 1:1 for the daily-loss limit. */
 const USD_PEGGED_ASSETS = new Set(["USDT", "USDC", "BUSD", "FDUSD"]);
 
-/** Assets already warned about being counted at face value (per process). */
-const warnedCommissionAssets = new Set<string>();
+/**
+ * A commission asset's USD price is only usable while it is this fresh. The
+ * risk-increasing path refreshes prices immediately before evaluating, so in
+ * normal operation this bound is never reached.
+ */
+export const COMMISSION_PRICE_MAX_AGE_MS = 10 * 60 * 1000;
+
+/** USD price of a commission asset, as last read from the ticker cache. */
+export interface CommissionPriceQuote {
+  usd: number;
+  at: number;
+}
+
+const commissionPriceQuotes = new Map<string, CommissionPriceQuote>();
+/** Assets already warned about having no usable price (per process). */
+const warnedUnpricedAssets = new Set<string>();
+
+/** Records the latest USD price for a commission asset (ticker/cache source). */
+export function recordCommissionPrice(asset: string, usd: number, at = Date.now()): void {
+  const key = asset.trim().toUpperCase();
+  if (!key || !Number.isFinite(usd) || usd <= 0) return;
+  commissionPriceQuotes.set(key, { usd, at });
+}
+
+/**
+ * USD price for a fee asset, or null when it cannot be valued: no quote, a
+ * non-positive quote, or a quote older than COMMISSION_PRICE_MAX_AGE_MS.
+ * USD-pegged assets always return 1 and ignore time.
+ */
+export function commissionPriceFor(asset: string, now = Date.now()): CommissionPriceQuote | null {
+  const key = asset.trim().toUpperCase();
+  if (USD_PEGGED_ASSETS.has(key)) return { usd: 1, at: now };
+  const quote = commissionPriceQuotes.get(key);
+  if (!quote || !Number.isFinite(quote.usd) || quote.usd <= 0) return null;
+  if (Math.abs(now - quote.at) > COMMISSION_PRICE_MAX_AGE_MS) return null;
+  return quote;
+}
+
+export function resetCommissionPricesForTests(): void {
+  commissionPriceQuotes.clear();
+  warnedUnpricedAssets.clear();
+}
+
+/** Distinct non-USD commission assets charged since UTC midnight. */
+export function commissionAssetsSinceUtcMidnight(
+  now = Date.now(),
+  profile: PersistenceProfile = activePersistenceProfile(),
+): string[] {
+  assertPersistenceProfile(profile);
+  const rows = getDb()
+    .prepare(
+      `SELECT DISTINCT fee_asset FROM fills_log
+        WHERE profile_id = ? AND ts >= ? AND fee IS NOT NULL AND CAST(fee AS REAL) > 0`,
+    )
+    .all(profile.id, utcMidnight(now)) as Array<{ fee_asset: string | null }>;
+  return rows
+    .map((row) => (row.fee_asset ?? "").trim().toUpperCase())
+    .filter((asset) => asset !== "" && !USD_PEGGED_ASSETS.has(asset));
+}
 
 export interface DailyPnl {
   /** Realized trading PnL only (fills_log.realized_pnl). */
@@ -80,8 +143,14 @@ export interface DailyPnl {
   fundingUsd: number;
   /** realizedPnl - commission + funding: what the daily-loss check uses. */
   netUsd: number;
-  /** Commission assets that are not USD-pegged (counted at face value). */
+  /** Commission assets that are not USD-pegged (converted to USD). */
   nonUsdCommissionAssets: string[];
+  /**
+   * Fee assets that cannot be valued right now (no fresh USD price). Their
+   * commission is NOT part of commissionUsd, so the day's result is
+   * incomplete; callers must treat the daily-loss figure as unavailable.
+   */
+  commissionPricesMissing: string[];
 }
 
 function utcMidnight(now: number): number {
@@ -103,10 +172,12 @@ function toNumber(raw: unknown): number {
  * them would double-count.
  *
  * Commission conversion: USDT/USDC/BUSD/FDUSD at 1:1. Any other asset (BNB
- * being the common case) is counted at face value (1 unit = 1 USD), which can
- * only overstate the cost and therefore fails closed against the loss limit;
- * it is never silently dropped. A one-time warning + audit records each such
- * asset.
+ * being the common case) is converted with the latest USD price from the
+ * ticker cache at evaluation time. Face value is not used: one BNB is worth
+ * far more than one USD, so face value would UNDERSTATE the fee and let a
+ * losing day through the limit. When a non-USD asset has no fresh price the
+ * day's result is marked incomplete (never valued at zero or one USD) and
+ * risk-increasing orders are rejected; closes and reduce-only orders are not.
  */
 export function dailyPnlSinceUtcMidnight(
   now = Date.now(),
@@ -132,24 +203,28 @@ export function dailyPnlSinceUtcMidnight(
 
   let commissionUsd = 0;
   const nonUsd = new Set<string>();
+  const missing = new Set<string>();
   for (const row of feeRows) {
     const fee = toNumber(row.fee);
     if (fee <= 0) continue;
     const asset = (row.fee_asset ?? "").trim().toUpperCase();
-    if (asset === "" || USD_PEGGED_ASSETS.has(asset)) {
-      // An unknown asset is treated as USD rather than dropped: counting it
-      // can only increase the measured loss.
-      commissionUsd += fee;
+    // A row without an asset label cannot be valued either: fail closed rather
+    // than assume USD.
+    const label = asset === "" ? "UNKNOWN" : asset;
+    const quote = asset === "" ? null : commissionPriceFor(asset, now);
+    if (!quote) {
+      if (!USD_PEGGED_ASSETS.has(label)) nonUsd.add(label);
+      missing.add(label);
+      if (!warnedUnpricedAssets.has(label)) {
+        warnedUnpricedAssets.add(label);
+        log.warn("commission asset has no fresh USD price; daily loss data is unavailable", { asset: label });
+        audit("system", "risk.commission_asset_unpriced", { asset: label }, undefined, profile);
+        alert("commission_asset_price_unavailable", { asset: label, severity: "high" });
+      }
       continue;
     }
-    nonUsd.add(asset);
-    commissionUsd += fee; // conservative face value, see doc comment
-    if (!warnedCommissionAssets.has(asset)) {
-      warnedCommissionAssets.add(asset);
-      log.warn("commission charged in a non-USD asset; counted at face value for the daily-loss limit", { asset });
-      audit("system", "risk.commission_asset_non_usd", { asset, basis: "face_value_1usd_per_unit" }, undefined, profile);
-      alert("commission_asset_non_usd", { asset, severity: "medium" });
-    }
+    if (!USD_PEGGED_ASSETS.has(label)) nonUsd.add(label);
+    commissionUsd += fee * quote.usd;
   }
 
   const funding = db
@@ -166,6 +241,7 @@ export function dailyPnlSinceUtcMidnight(
     fundingUsd: toNumber(funding.funding),
     netUsd: toNumber(fills.realized) - commissionUsd + toNumber(funding.funding),
     nonUsdCommissionAssets: [...nonUsd],
+    commissionPricesMissing: [...missing],
   };
 }
 
@@ -218,6 +294,9 @@ export function checkRisk(
   }
   if (!order.reduceOnly && snap.openPositionCount >= risk.maxOpenPositions) {
     errors.push(`RISK_MAX_OPEN_POSITIONS: open position cap reached (${risk.maxOpenPositions})`);
+  }
+  for (const asset of snap.commissionAssetsUnpriced ?? []) {
+    errors.push(`EXECUTION_UNHEALTHY: commission asset price unavailable (${asset})`);
   }
   if (snap.balanceUsd > 0 && snap.realizedTodayUsd < 0) {
     const limit = (snap.balanceUsd * risk.dailyLossPct) / 100;

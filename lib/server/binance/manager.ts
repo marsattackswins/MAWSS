@@ -20,7 +20,12 @@ import { RateLimiter } from "./ratelimit";
 import { BinanceRestClient, BinanceApiError } from "./rest";
 import { TransportTimeoutError } from "./transport";
 import { CircuitBreakerOpenError } from "../resilience/circuit-breaker";
-import { dailyPnlSinceUtcMidnight, type RiskSnapshot } from "./risk";
+import {
+  commissionAssetsSinceUtcMidnight,
+  dailyPnlSinceUtcMidnight,
+  recordCommissionPrice,
+  type RiskSnapshot,
+} from "./risk";
 import { Reconciler, checkPositionProtection, type ReconResult } from "./recon";
 import { incomeLedgerIncludes, syncIncomeHistory, type IncomeSyncResult } from "./income";
 import { markIncomeSyncFailed, markIncomeSyncSucceeded } from "./metrics-freshness";
@@ -166,6 +171,9 @@ export class BinanceLiveManager {
           this.rest.getAccount(),
           this.rest.getPositionRisk(),
         ]);
+        // The daily-loss figure needs the current USD value of any non-USD
+        // commission asset, so prices are refreshed at evaluation time.
+        await this.refreshCommissionPrices();
         return { account, positions };
       },
       freeze: (reason, code) => this.freeze(reason, code),
@@ -1076,6 +1084,26 @@ export class BinanceLiveManager {
     log.info("submissions remain frozen after partial unfreeze", { cleared: result.cleared, remaining: remaining.map((row) => row.code) });
   }
 
+  /**
+   * Refreshes the USD price of every non-USD asset that paid commission today,
+   * through the same cache/ticker path as getReferencePrice. A failed lookup
+   * records nothing: the day's fee total stays unavailable and risk-increasing
+   * orders are rejected with EXECUTION_UNHEALTHY until a price can be read.
+   */
+  private async refreshCommissionPrices(): Promise<void> {
+    const assets = commissionAssetsSinceUtcMidnight(Date.now(), this.persistenceProfile);
+    await Promise.all(
+      assets.map(async (asset) => {
+        try {
+          const reference = await this.getReferencePrice(`${asset}USDT`);
+          if (reference) recordCommissionPrice(asset, Number(reference.price), reference.at);
+        } catch {
+          // Leave the asset unpriced; the risk check fails closed.
+        }
+      }),
+    );
+  }
+
   /** Mark/last price for collars and market-order notional, tagged with observation time. */
   async getReferencePrice(symbol: string): Promise<ReferencePrice | null> {
     const pos = liveState().positions.get(symbol);
@@ -1202,6 +1230,7 @@ export class BinanceLiveManager {
       liquidationDistancesPct,
       workingOrders,
       uncertainIntents,
+      commissionAssetsUnpriced: daily.commissionPricesMissing,
     };
   }
 

@@ -4,7 +4,12 @@
  */
 
 import { getDb } from "@/lib/server/db/connection";
-import { dailyPnlSinceUtcMidnight } from "@/lib/server/binance/risk";
+import {
+  COMMISSION_PRICE_MAX_AGE_MS,
+  dailyPnlSinceUtcMidnight,
+  recordCommissionPrice,
+  resetCommissionPricesForTests,
+} from "@/lib/server/binance/risk";
 import { checkRisk, type RiskSnapshot } from "@/lib/server/binance/risk";
 import { persistenceProfileFromConfig } from "@/lib/server/profile/context";
 import { resetAlertsForTests } from "@/lib/server/alerts/dispatch";
@@ -12,6 +17,7 @@ import { freshEnv, makeCfg } from "./helpers";
 
 function setup() {
   resetAlertsForTests();
+  resetCommissionPricesForTests();
   const cfg = freshEnv(makeCfg({ risk: { ...makeCfg().risk, dailyLossPct: 1 } }));
   const profile = persistenceProfileFromConfig(cfg);
   const db = getDb();
@@ -105,12 +111,73 @@ describe("daily-loss accounting", () => {
     expect(daily.fundingUsd).toBe(0);
   });
 
-  test("non-USDT commission is counted conservatively, never silently zeroed", () => {
+  test("USDT commission stays 1:1 and needs no price", () => {
+    const { addFill } = setup();
+    addFill({ realized: "0", fee: "2", feeAsset: "USDT" });
+    const daily = dailyPnlSinceUtcMidnight(Date.now());
+    expect(daily.commissionUsd).toBeCloseTo(2);
+    expect(daily.commissionPricesMissing).toEqual([]);
+    expect(daily.netUsd).toBeCloseTo(-2);
+  });
+
+  test("BNB commission uses the ticker price and tips the day over the limit where face value would not", () => {
+    const { cfg, addFill } = setup();
+    addFill({ realized: "-9", fee: "0.02", feeAsset: "BNB" });
+    recordCommissionPrice("BNB", 600);
+
+    const daily = dailyPnlSinceUtcMidnight(Date.now());
+    // 0.02 BNB at 600 USD = 12 USD, not the 0.02 USD face value.
+    expect(daily.commissionUsd).toBeCloseTo(12);
+    expect(daily.netUsd).toBeCloseTo(-21);
+    expect(daily.commissionPricesMissing).toEqual([]);
+
+    // 1% of 1000 USD = 10 USD limit: face value sits inside it, real value does not.
+    expect(checkRisk(cfg, snapshot(-9.02), order, "50000")).toEqual([]);
+    const errors = checkRisk(cfg, snapshot(daily.netUsd), order, "50000");
+    expect(errors.some((e) => e.includes("daily realized loss limit"))).toBe(true);
+  });
+
+  test("a non-USD fee without a price makes the day unavailable and rejects risk-increasing orders only", () => {
+    const { cfg, addFill } = setup();
+    addFill({ realized: "0", fee: "0.02", feeAsset: "BNB" });
+
+    const daily = dailyPnlSinceUtcMidnight(Date.now());
+    expect(daily.commissionPricesMissing).toEqual(["BNB"]);
+    // Never counted as zero or as one USD: the total is simply incomplete.
+    expect(daily.commissionUsd).toBe(0);
+    expect(daily.nonUsdCommissionAssets).toEqual(["BNB"]);
+
+    const errors = checkRisk(
+      cfg,
+      { ...snapshot(daily.netUsd), commissionAssetsUnpriced: daily.commissionPricesMissing },
+      order,
+      "50000",
+    );
+    expect(errors).toContain("EXECUTION_UNHEALTHY: commission asset price unavailable (BNB)");
+
+    // Protective, reduce-only and close paths never carry an exposure risk check.
+    const unpriced = { ...snapshot(daily.netUsd), commissionAssetsUnpriced: daily.commissionPricesMissing };
+    expect(checkRisk(cfg, unpriced, { ...order, reduceOnly: true }, "50000")).toEqual([]);
+    expect(checkRisk(cfg, unpriced, { ...order, closePosition: true }, "50000")).toEqual([]);
+    expect(checkRisk(cfg, unpriced, { ...order, emergencyClose: true }, "50000")).toEqual([]);
+    expect(checkRisk(cfg, unpriced, { ...order, isClose: true }, "50000")).toEqual([]);
+  });
+
+  test("a stale commission price is not used", () => {
     const { addFill } = setup();
     addFill({ realized: "0", fee: "0.02", feeAsset: "BNB" });
+    recordCommissionPrice("BNB", 600, Date.now() - COMMISSION_PRICE_MAX_AGE_MS - 1);
     const daily = dailyPnlSinceUtcMidnight(Date.now());
-    expect(daily.commissionUsd).toBeCloseTo(0.02);
-    expect(daily.nonUsdCommissionAssets).toEqual(["BNB"]);
-    expect(daily.netUsd).toBeCloseTo(-0.02);
+    expect(daily.commissionPricesMissing).toEqual(["BNB"]);
+    expect(daily.commissionUsd).toBe(0);
+  });
+
+  test("conversion happens at evaluation time, not when the fill is recorded", () => {
+    const { addFill } = setup();
+    addFill({ realized: "0", fee: "0.02", feeAsset: "BNB" });
+    recordCommissionPrice("BNB", 600);
+    expect(dailyPnlSinceUtcMidnight(Date.now()).commissionUsd).toBeCloseTo(12);
+    recordCommissionPrice("BNB", 700);
+    expect(dailyPnlSinceUtcMidnight(Date.now()).commissionUsd).toBeCloseTo(14);
   });
 });
