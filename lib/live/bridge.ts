@@ -130,6 +130,23 @@ function onSseEvent(name: string, raw: string, expected: { status: ProfileRuntim
   try {
     const data = JSON.parse(raw) as Record<string, unknown>;
     switch (name) {
+      case "session-expired":
+        // The server revalidated the session on its heartbeat and found it
+        // gone; stop streaming and require a fresh sign-in.
+        stopSse();
+        redirectToLogin();
+        break;
+      case "stream-closed": {
+        stopSse();
+        const reason = (data as { reason?: unknown }).reason;
+        store.notify(
+          "error",
+          reason === "slow_client"
+            ? "Live updates stopped because this tab fell behind. Reload to resume."
+            : "Live updates stopped.",
+        );
+        break;
+      }
       case "state":
         store.applyState(data as unknown as LiveStateDto);
         break;
@@ -181,7 +198,19 @@ function onSseEvent(name: string, raw: string, expected: { status: ProfileRuntim
 function startSse(status: ProfileRuntimeStatusDto, epoch: number): void {
   if (es) return;
   es = new EventSource("/api/live/events");
-  const names = ["state", "health", "stream-status", "order-update", "account-update", "snapshot", "fills", "uncertainty-cleared", "mark-price"];
+  const names = [
+    "state",
+    "health",
+    "stream-status",
+    "order-update",
+    "account-update",
+    "snapshot",
+    "fills",
+    "uncertainty-cleared",
+    "mark-price",
+    "session-expired",
+    "stream-closed",
+  ];
   for (const name of names) {
     es.addEventListener(name, (event) => onSseEvent(name, (event as MessageEvent).data, { status, epoch }));
   }
