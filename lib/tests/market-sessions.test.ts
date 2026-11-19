@@ -33,7 +33,7 @@ describe("market sessions", () => {
   it("is the same three cash sessions for every instrument", () => {
     expect(names(MARKET_SESSIONS)).toEqual(["Tokyo", "London", "New York"]);
     expect(Object.fromEntries(MARKET_SESSIONS.map(({ name, color }) => [name, color]))).toEqual({
-      Tokyo: "#eab308",
+      Tokyo: "#f97316",
       London: "#22c55e",
       "New York": "#3b82f6",
     });

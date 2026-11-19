@@ -54,7 +54,7 @@ export const MARKET_SESSIONS: readonly SessionDef[] = [
     weekdaysOnly: true,
     lat: 35.7,
     lon: 139.7,
-    color: "#eab308",
+    color: "#f97316",
   },
   {
     name: "London",
