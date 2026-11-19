@@ -119,7 +119,12 @@ export interface EnvConfig {
    */
   historyBackfillMs: number;
   leaseTtlMs: number;
-  /** Maximum age of the last authoritative account/positions/orders snapshot. */
+  /**
+   * Maximum age of the last authoritative account/positions snapshot used by
+   * margin/liquidation checks (and by the execution gate). Default 60 s —
+   * short enough that a fill cannot slip between two snapshots. Override with
+   * MAWS_SNAPSHOT_MAX_AGE_MS when reconciliation cadence demands it.
+   */
   snapshotMaxAgeMs: number;
   /** Maximum age for automatically restoring an interrupted protection replacement. */
   protectionPendingMaxAgeMs: number;
@@ -424,7 +429,7 @@ export function loadEnvConfig(source: NodeJS.ProcessEnv = process.env): EnvConfi
     markPriceIntervalMs: num(source.MAWS_MARK_PRICE_INTERVAL_MS, 15_000),
     historyBackfillMs: num(source.MAWS_HISTORY_BACKFILL_MS, 3 * 24 * 60 * 60 * 1000),
     leaseTtlMs: num(source.MAWS_LEASE_TTL_MS, 5 * 60_000),
-    snapshotMaxAgeMs: num(source.MAWS_SNAPSHOT_MAX_AGE_MS, 5 * 60_000),
+    snapshotMaxAgeMs: num(source.MAWS_SNAPSHOT_MAX_AGE_MS, 60_000),
     protectionPendingMaxAgeMs: num(source.MAWS_PROTECTION_PENDING_MAX_AGE_MS, 2 * 60_000),
     alertWebhookUrl: source.MAWS_ALERT_WEBHOOK_URL?.trim() || null,
     missingProductionRiskLimitVariables,

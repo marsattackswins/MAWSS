@@ -37,7 +37,7 @@ import {
   updateIntent as updateIntentRecord,
   type OrderIntent,
 } from "./intents";
-import { liveState, rememberAlgoOrder, rememberOrder } from "./state";
+import { applyAccountSnapshot, applyPositionSnapshot, liveState, rememberAlgoOrder, rememberOrder } from "./state";
 import type { AccountResponse, AlgoCancelAck, BinanceAlgoOrder, BinanceOrder, PlaceAlgoOrderParams, PositionRiskRow } from "./types";
 import { trackOrderCanceled, trackOrderRejected, trackOrderSubmitted, trackOrderSubmissionDuration } from "../metrics/instrument";
 import { normalMutationBlock } from "../profile/admission";
@@ -834,10 +834,32 @@ export class OrderService {
       return { ok: false, clientOrderId, error: "Market data is stale; order rejected until quotes refresh" };
     }
     const effectivePrice = input.price ?? input.stopPrice ?? reference?.price ?? "0";
-    if (!input.closePosition && !input.emergencyClose && !input.reduceOnly && !input.isClose) {
+    const riskIncreasing = !input.closePosition && !input.emergencyClose && !input.reduceOnly && !input.isClose;
+    if (riskIncreasing) {
+      let riskSnapshot = reverseRisk?.snapshot;
+      if (!riskSnapshot) {
+        // Risk-increasing orders must not be authorised by a snapshot that may
+        // predate the last fills. Two extra signed reads (account +
+        // positionRisk) run inside the mutation queue, immediately before the
+        // check. Closes, reduce-only, closePosition and emergency paths skip
+        // this entirely (they need no new-exposure authorisation).
+        if (this.deps.fetchFreshRisk) {
+          try {
+            const fresh = await this.deps.fetchFreshRisk();
+            applyAccountSnapshot(fresh.account);
+            applyPositionSnapshot(fresh.positions);
+          } catch (err) {
+            const message = `RISK_DATA_UNAVAILABLE: fresh account/position data could not be fetched (${String(err)}); risk-increasing order rejected`;
+            audit("operator", "order.rejected.risk_data", { symbol: input.symbol, clientOrderId, error: String(err) });
+            trackOrderRejected(clientOrderId, input.symbol, message);
+            return { ok: false, clientOrderId, error: message };
+          }
+        }
+        riskSnapshot = this.deps.getRiskSnapshot();
+      }
       const riskErrors = checkRisk(
         cfg,
-        reverseRisk?.snapshot ?? this.deps.getRiskSnapshot(),
+        riskSnapshot,
         {
           type: input.type,
           qty: reverseRisk?.qty ?? input.qty ?? "0",
