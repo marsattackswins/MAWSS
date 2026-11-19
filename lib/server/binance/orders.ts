@@ -25,6 +25,7 @@ import {
 } from "./rest";
 import { TransportTimeoutError } from "./transport";
 import { CircuitBreakerOpenError } from "../resilience/circuit-breaker";
+import type { FreezeCode } from "./freeze";
 import type { SymbolConstraints } from "./filters";
 import { validateAgainstConstraints, validateMarketQty } from "./filters";
 import { checkRisk, type RiskSnapshot } from "./risk";
@@ -37,7 +38,7 @@ import {
   type OrderIntent,
 } from "./intents";
 import { liveState, rememberAlgoOrder, rememberOrder } from "./state";
-import type { AlgoCancelAck, BinanceAlgoOrder, BinanceOrder, PlaceAlgoOrderParams, PositionRiskRow } from "./types";
+import type { AccountResponse, AlgoCancelAck, BinanceAlgoOrder, BinanceOrder, PlaceAlgoOrderParams, PositionRiskRow } from "./types";
 import { trackOrderCanceled, trackOrderRejected, trackOrderSubmitted, trackOrderSubmissionDuration } from "../metrics/instrument";
 import { normalMutationBlock } from "../profile/admission";
 import { alert } from "../alerts/dispatch";
@@ -121,6 +122,8 @@ export interface ReferencePrice {
 
 /** Fail closed: refuse submissions when the best available quote is older than this. */
 export const STALE_REFERENCE_MS = 30_000;
+/** Minimum IP-ban freeze window when Binance does not send Retry-After. */
+export const DEFAULT_IP_BAN_MS = 5 * 60_000;
 export const PROTECTION_MARK_MAX_AGE_MS = 10_000;
 
 type ProtectionReplaceResult = OrderResult & {
@@ -199,7 +202,13 @@ export interface OrderServiceDeps {
     price: string;
     current: RiskSnapshot;
   }): Promise<RiskSnapshot | null> | RiskSnapshot | null;
-  freeze(reason: string): void;
+  freeze(reason: string, code?: FreezeCode, detail?: Record<string, unknown>): void;
+  /**
+   * Fresh account + positionRisk read used for risk-increasing orders only.
+   * Runs inside the mutation queue, before checkRisk, so a stale snapshot can
+   * never authorise new exposure.
+   */
+  fetchFreshRisk?(): Promise<{ account: AccountResponse; positions: PositionRiskRow[] }>;
   unfreeze?: () => void;
   emit(event: string, data: unknown): void;
   sleep?: (ms: number) => Promise<void>;
@@ -647,7 +656,7 @@ export class OrderService {
 
   private markReverseUncertain(symbol: string, clientOrderId: string, reason: string): void {
     if (this.findIntent(clientOrderId)) this.updateIntent(clientOrderId, { status: "UNCERTAIN", lastState: uncertainState(clientOrderId, { reason }, this.persistenceProfile) });
-    this.deps.freeze(`reverse position outcome uncertain for ${symbol}`);
+    this.deps.freeze(`reverse position outcome uncertain for ${symbol}`, "REVERSE_UNCERTAIN");
     audit("operator", "position.reverse.uncertain", { symbol, clientOrderId, reason }, undefined, this.persistenceProfile);
     alert(`position_reverse_uncertain:${symbol}`, { symbol, clientOrderId, reason, severity: "high" });
   }
@@ -826,7 +835,10 @@ export class OrderService {
   private async handleSubmissionFailure(clientOrderId: string, symbol: string, err: unknown): Promise<OrderResult> {
     if (err instanceof BinanceApiError && err.httpStatus === 418) {
       const message = "Binance returned HTTP 418 and may have IP-banned this client; all Binance requests are paused until the ban expires";
-      this.deps.freeze(message);
+      // The ban window comes from the exchange when it says so; otherwise use
+      // a conservative floor so the freeze cannot clear on the next probe.
+      const banExpiresAt = Date.now() + Math.max(err.retryAfterMs ?? 0, DEFAULT_IP_BAN_MS);
+      this.deps.freeze(message, "IP_BAN", { banExpiresAt });
       this.updateIntent(clientOrderId, {
         status: "REJECTED",
         lastState: JSON.stringify({ code: err.code, httpStatus: err.httpStatus, retryAfterMs: err.retryAfterMs }),
@@ -850,7 +862,7 @@ export class OrderService {
         status: "UNCERTAIN",
         lastState: uncertainState(clientOrderId, { code: (err as BinanceApiError).code, msg: (err as BinanceApiError).exchangeMsg, httpStatus: (err as BinanceApiError).httpStatus }, this.persistenceProfile),
       });
-      this.deps.freeze("order submission returned HTTP 5xx; outcome must be verified");
+      this.deps.freeze("order submission returned HTTP 5xx; outcome must be verified", "ORDER_HTTP_5XX");
       audit("operator", "order.unknown_outcome", { symbol, clientOrderId, httpStatus: (err as BinanceApiError).httpStatus });
       void this.resolveUnknownOutcome(clientOrderId);
       return {
@@ -888,7 +900,7 @@ export class OrderService {
       }
       if (err.code === ERR_INVALID_API_KEY) {
         // Fail closed: a rejected key usually means wrong environment scope.
-        this.deps.freeze("Binance rejected the API key (-2015); check environment/key scope");
+        this.deps.freeze("Binance rejected the API key (-2015); check environment/key scope", "KEY_REJECTED");
         this.updateIntent(clientOrderId, { status: "REJECTED", lastState: JSON.stringify({ code: err.code }) });
         audit("operator", "order.rejected.key", { symbol, clientOrderId, code: err.code });
         return {
@@ -914,7 +926,7 @@ export class OrderService {
     if (err instanceof TransportTimeoutError) {
       // Unknown outcome: never retry blindly. Persist uncertainty, freeze, resolve.
       this.updateIntent(clientOrderId, { status: "TIMEOUT_UNKNOWN", lastState: uncertainState(clientOrderId, {}, this.persistenceProfile) });
-      this.deps.freeze("submission timeout: order outcome unknown until resolved");
+      this.deps.freeze("submission timeout: order outcome unknown until resolved", "TIMEOUT_UNKNOWN");
       audit("operator", "order.timeout_unknown", { symbol, clientOrderId });
       void this.resolveUnknownOutcome(clientOrderId);
       return {
@@ -928,7 +940,7 @@ export class OrderService {
     // remain uncertain until a later exchange query proves the order absent.
     if (err instanceof CircuitBreakerOpenError) throw err;
     this.updateIntent(clientOrderId, { status: "UNCERTAIN", lastState: uncertainState(clientOrderId, { error: String(err) }, this.persistenceProfile) });
-    this.deps.freeze("order submission transport failed; outcome must be verified");
+    this.deps.freeze("order submission transport failed; outcome must be verified", "ORDER_TRANSPORT_UNKNOWN");
     audit("operator", "order.unknown_outcome", { symbol, clientOrderId, error: String(err) });
     void this.resolveUnknownOutcome(clientOrderId);
     return {
@@ -1178,7 +1190,7 @@ export class OrderService {
           status: "CANCEL_UNKNOWN",
           lastState: JSON.stringify({ code: (err as BinanceApiError).code, msg: (err as BinanceApiError).exchangeMsg, httpStatus: (err as BinanceApiError).httpStatus }),
         });
-        this.deps.freeze("cancel returned HTTP 5xx; outcome must be verified");
+        this.deps.freeze("cancel returned HTTP 5xx; outcome must be verified", "CANCEL_UNKNOWN");
         audit("operator", "order.cancel.unknown_outcome", { symbol, clientOrderId, httpStatus: (err as BinanceApiError).httpStatus });
         void this.resolveUnknownOutcome(clientOrderId);
         return { ok: false, clientOrderId, error: "Cancel returned an uncertain exchange response; outcome is being resolved" };
@@ -1230,7 +1242,7 @@ export class OrderService {
       }
       if (err instanceof TransportTimeoutError) {
         this.updateIntent(clientOrderId, { status: "CANCEL_UNKNOWN" });
-        this.deps.freeze("cancel request timed out; outcome unknown");
+        this.deps.freeze("cancel request timed out; outcome unknown", "CANCEL_UNKNOWN");
         audit("operator", "order.cancel.timeout_unknown", { symbol, clientOrderId });
         void this.resolveUnknownOutcome(clientOrderId);
         return { ok: false, clientOrderId, error: "Cancel timed out; outcome is being resolved" };

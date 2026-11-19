@@ -7,6 +7,7 @@ import type { StreamOwnerLease } from "./lease";
 import type { BinanceRestClient } from "./rest";
 import { brokerClients, type WsLike } from "./transport";
 import type { UserStreamEvent } from "./types";
+import type { FreezeCode } from "./freeze";
 import { getBinanceStreamBreaker } from "../resilience/breakers";
 import { trackWsError, trackWsLag, trackWsMessage, trackWsReconnect } from "../metrics/instrument";
 
@@ -34,7 +35,7 @@ export interface StreamDeps {
   processEvent(ev: UserStreamEvent): unknown;
   /** Optional escalation after a buffer overflow has proven data loss. */
   reconcile?(): Promise<unknown>;
-  freeze(reason: string): void;
+  freeze(reason: string, code?: FreezeCode): void;
   onStatus(status: StreamStatus): void;
   timers?: {
     setTimeout: (fn: () => void, ms: number) => unknown;
@@ -292,7 +293,7 @@ export class UserDataStream {
       this.buffering = false;
 
       if (overflowed) {
-        this.deps.freeze("user-data stream buffer overflow; account data was lost");
+        this.deps.freeze("user-data stream buffer overflow; account data was lost", "STREAM_OVERFLOW");
         if (this.deps.reconcile) {
           try {
             const result = await this.deps.reconcile();
@@ -318,7 +319,7 @@ export class UserDataStream {
       this.notify({ connected: true, phase: overflowed ? "reconciled" : "live" });
     } catch (err) {
       log.error("snapshot recovery failed; scheduling reconnect", { generation, error: String(err) });
-      this.deps.freeze("stream snapshot recovery failed");
+      this.deps.freeze("stream snapshot recovery failed", "SNAPSHOT_FAILED");
       this.notify({ connected: false, phase: "reconnecting" });
       this.scheduleReconnect();
     }
@@ -341,14 +342,14 @@ export class UserDataStream {
         this.buffer.push(parsed);
       } else if (!this.bufferOverflow) {
         this.bufferOverflow = true;
-        this.deps.freeze("user-data stream buffer overflow; account data was lost");
+        this.deps.freeze("user-data stream buffer overflow; account data was lost", "STREAM_OVERFLOW");
         this.notify({ connected: false, phase: "buffer-overflow" });
       }
       return;
     }
     void Promise.resolve(this.deps.processEvent(parsed)).catch((err) => {
       log.error("user-data stream event processing failed", { generation, error: String(err) });
-      this.deps.freeze("user-data event processing failed");
+      this.deps.freeze("user-data event processing failed", "EVENT_PROCESSING_FAILED");
     });
   }
 
@@ -359,7 +360,7 @@ export class UserDataStream {
     this.buffering = false;
     this.buffer = [];
     this.notify({ connected: false, phase: "reconnecting" });
-    this.deps.freeze("user-data stream disconnected; recovering");
+    this.deps.freeze("user-data stream disconnected; recovering", "STREAM_DOWN");
     trackWsError("user-data socket disconnected");
     void getBinanceStreamBreaker().execute(async () => {
       throw new Error("user-data socket disconnected");

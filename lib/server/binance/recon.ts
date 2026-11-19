@@ -14,6 +14,7 @@ import {
   type OrderIntent,
 } from "./intents";
 import { BinanceApiError, ERR_UNKNOWN_ORDER, type BinanceRestClient } from "./rest";
+import type { FreezeCode } from "./freeze";
 import { fillExists, isAlgoOrphanCleanupPending, isAlgoStateStale, isOrphanedAlgoOrder, liveState, persistFill, rememberFill, type LiveFill } from "./state";
 import { cancelOrphanedClosePositionAlgos } from "./algo-orphans";
 import { isTerminalStatus } from "./types";
@@ -48,7 +49,7 @@ export interface ReconDeps {
   rest: BinanceRestClient;
   /** Pulls account/positions/openOrders truth from the exchange into state. */
   snapshot(): Promise<void>;
-  freeze(reason: string): void;
+  freeze(reason: string, code?: FreezeCode): void;
   /** Lifts a recon/uncertainty freeze only if the caller confirms it is safe. */
   unfreeze(): void;
   /** Rejects callbacks from a manager generation that is no longer current. */
@@ -163,7 +164,7 @@ export class Reconciler {
       if (!this.isCurrent()) return this.cancelled();
       const finishedAt = Date.now();
       const result: ReconResult = { result: "error", diffs: [String(err)], startedAt: finishedAt, finishedAt };
-      this.deps.freeze("reconciliation circuit is open or failed to start");
+      this.deps.freeze("reconciliation circuit is open or failed to start", "RECON_UNAVAILABLE");
       assertPersistenceProfile(this.persistenceProfile);
       getDb()
         .prepare(`INSERT INTO reconciliation_runs (profile_id, started_at, finished_at, trigger, result, details) VALUES (?, ?, ?, ?, ?, ?)`)
@@ -208,7 +209,7 @@ export class Reconciler {
 
       if (!this.isCurrent()) return this.cancelled();
       if (result === "drift") {
-        this.deps.freeze(`reconciliation drift: ${diffs.join("; ").slice(0, 300)}`);
+        this.deps.freeze(`reconciliation drift: ${diffs.join("; ").slice(0, 300)}`, "RECON_DRIFT");
       } else {
         this.deps.unfreeze();
       }
@@ -216,7 +217,7 @@ export class Reconciler {
       if (!this.isCurrent()) return this.cancelled();
       result = "error";
       diffs.push(String(err));
-      this.deps.freeze("reconciliation failed to complete");
+      this.deps.freeze("reconciliation failed to complete", "RECON_FAILED");
       log.error("reconciliation error", { trigger, error: String(err) });
     }
     if (!this.isCurrent()) return this.cancelled();

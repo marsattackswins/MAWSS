@@ -272,6 +272,39 @@ export const MIGRATIONS: Migration[] = [
           AND CAST(CAST(exchange_order_id AS INTEGER) AS TEXT) || '.0' = exchange_order_id`,
     ],
   },
+  {
+    version: 12,
+    name: "M0012 typed, concurrent submission freezes",
+    up: [
+      // Additive only: the legacy runtime `frozen`/`frozen_reason` pair keeps
+      // working (the execution gate reads it); typed rows join it so several
+      // causes can be active at once and each clears under its own rule.
+      `CREATE TABLE IF NOT EXISTS freeze_reasons (
+         id INTEGER PRIMARY KEY AUTOINCREMENT,
+         profile_id TEXT NOT NULL CHECK (profile_id IN ('paper', 'binance-testnet', 'binance-production', 'shadow', 'legacy-unknown')),
+         code TEXT NOT NULL,
+         reason TEXT NOT NULL,
+         detail TEXT,
+         set_at INTEGER NOT NULL,
+         cleared_at INTEGER,
+         cleared_by TEXT
+       )`,
+      `CREATE UNIQUE INDEX IF NOT EXISTS idx_freeze_active
+         ON freeze_reasons(profile_id, code) WHERE cleared_at IS NULL`,
+      `CREATE INDEX IF NOT EXISTS idx_freeze_profile
+         ON freeze_reasons(profile_id, cleared_at)`,
+      // A profile frozen before this migration keeps a LEGACY row, so it stays
+      // frozen until a clean reconciliation and an operator unfreeze.
+      `INSERT INTO freeze_reasons (profile_id, code, reason, detail, set_at, cleared_at, cleared_by)
+       SELECT f.profile_id, 'LEGACY',
+              COALESCE(NULLIF(r.value, ''), 'frozen before typed freeze reasons'),
+              NULL, f.updated_at, NULL, NULL
+         FROM runtime_config f
+         LEFT JOIN runtime_config r
+           ON r.profile_id = f.profile_id AND r.key = 'frozen_reason'
+        WHERE f.key = 'frozen' AND f.value = 'true'`,
+    ],
+  },
 ];
 
 const PROFILE_CHECK =

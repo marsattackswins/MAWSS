@@ -9,7 +9,6 @@ import {
   persistenceProfileFromConfig,
   type PersistenceProfile,
 } from "../profile/context";
-import { getRuntime, setRuntime, RUNTIME_KEYS } from "../runtime/flags";
 import { healthSignals, setHealthSignal } from "../health/state";
 import { log } from "../log/logger";
 import { syncClock, type ClockState } from "./clock";
@@ -58,6 +57,15 @@ import { StreamLeaseUnavailableError, UserDataStream } from "./stream";
 import { MARK_STALE_AFTER_MS, MarkPriceStream } from "./mark-price-stream";
 import type { AccountUpdateEvent, AlgoUpdateEvent, BinanceAlgoOrder, BinanceOrder, OrderTradeUpdateEvent, UserStreamEvent } from "./types";
 import { getDb } from "../db/connection";
+import {
+  activeFreezes,
+  describeActiveFreezes,
+  evaluateFreezes,
+  lastCleanReconAt,
+  registerFreeze,
+  type FreezeClearContext,
+  type FreezeCode,
+} from "./freeze";
 import { trackFillReceived, trackFreezeTriggered, trackOrderFilled, trackSystemStart, trackSystemStop, trackUnfreezeCleared, updateTradingGauges } from "../metrics/instrument";
 
 export type ManagerStatus = "idle" | "starting" | "ready" | "error";
@@ -153,7 +161,14 @@ export class BinanceLiveManager {
         return { price: mark.markPrice, at: mark.time ?? Date.now() };
       },
       getRiskSnapshot: () => this.getRiskSnapshot(),
-      freeze: (reason) => this.freeze(reason),
+      fetchFreshRisk: async () => {
+        const [account, positions] = await Promise.all([
+          this.rest.getAccount(),
+          this.rest.getPositionRisk(),
+        ]);
+        return { account, positions };
+      },
+      freeze: (reason, code) => this.freeze(reason, code),
       unfreeze: () => this.unfreezeIfClear(),
       emit: (event, data) => publishLive(event, data),
     });
@@ -874,7 +889,7 @@ export class BinanceLiveManager {
         },
       });
     } catch (err) {
-      this.freeze("user-data event processing failed; event remains unprocessed");
+      this.freeze("user-data event processing failed; event remains unprocessed", "EVENT_PROCESSING_FAILED");
       log.error("user-data event processing failed", { error: String(err), eventId });
       throw err;
     }
@@ -982,29 +997,82 @@ export class BinanceLiveManager {
     if (symbol) this.scheduleAlgoOrderRefresh(symbol);
   }
 
-  /** Mark submissions frozen until the named condition clears. */
-  freeze(reason: string): void {
-    if (getRuntime(RUNTIME_KEYS.frozen, "", this.persistenceProfile) === "true" && getRuntime(RUNTIME_KEYS.frozenReason, "", this.persistenceProfile) === reason) return;
+  /**
+   * Marks submissions frozen for one typed reason. Freezes stack: a second
+   * code never overwrites an active one, and clearing one leaves the others.
+   * `code` defaults to UNCERTAIN_INTENT only for legacy call sites.
+   */
+  freeze(reason: string, code: FreezeCode = "UNCERTAIN_INTENT", detail?: Record<string, unknown>): void {
+    const inserted = registerFreeze(code, reason, { detail, profile: this.persistenceProfile });
+    if (!inserted) return;
     trackFreezeTriggered(reason);
-    setRuntime(RUNTIME_KEYS.frozen, "true", Date.now(), this.persistenceProfile);
-    setRuntime(RUNTIME_KEYS.frozenReason, reason, Date.now(), this.persistenceProfile);
-    audit("system", "live.freeze", { reason }, undefined, this.persistenceProfile);
-    alert("freeze", { reason });
-    publishLive("health", { frozen: true, reason });
-    log.warn("submissions frozen", { reason });
+    audit("system", "live.freeze", { reason, code, detail: detail ?? null }, undefined, this.persistenceProfile);
+    alert("freeze", { reason, code });
+    publishLive("health", { frozen: true, reason, code });
+    log.warn("submissions frozen", { reason, code });
   }
 
-  /** Lifts the freeze only when nothing uncertain remains. */
+  /**
+   * Re-evaluates every active freeze against its own clear rule. An order
+   * event can only settle the intent reasons; recon/stream/ban reasons need
+   * their own evidence (see lib/server/binance/freeze.ts).
+   */
   unfreezeIfClear(): void {
-    if (getRuntime(RUNTIME_KEYS.frozen, "", this.persistenceProfile) !== "true") return;
-    if (intentsInUncertainStates(this.persistenceProfile).length > 0) return;
-    setRuntime(RUNTIME_KEYS.frozen, "false", Date.now(), this.persistenceProfile);
-    setRuntime(RUNTIME_KEYS.frozenReason, "", Date.now(), this.persistenceProfile);
-    trackUnfreezeCleared();
-    audit("system", "live.unfreeze", {}, undefined, this.persistenceProfile);
-    alert("unfreeze", {});
-    publishLive("health", { frozen: false });
-    log.info("submissions unfrozen");
+    if (activeFreezes(this.persistenceProfile).length === 0) return;
+    void this.evaluateFreezesNow(false).catch((err: unknown) => {
+      log.warn("freeze evaluation failed", { error: String(err) });
+    });
+  }
+
+  /**
+   * Explicit operator unfreeze: clears OPERATOR and KEY_REJECTED outright, and
+   * a migrated LEGACY row once a clean reconciliation has run since the freeze.
+   */
+  operatorUnfreeze(): void {
+    void this.evaluateFreezesNow(true).catch((err: unknown) => {
+      log.warn("operator unfreeze failed", { error: String(err) });
+    });
+  }
+
+  private async evaluateFreezesNow(operatorAction: boolean): Promise<void> {
+    const active = activeFreezes(this.persistenceProfile);
+    if (active.length === 0) return;
+    const stream = this.stream?.status();
+    const ctx: FreezeClearContext = {
+      now: Date.now(),
+      hasUncertainIntents: intentsInUncertainStates(this.persistenceProfile).length > 0,
+      lastCleanReconAt: lastCleanReconAt(this.persistenceProfile),
+      // recover() only reports live/reconciled after the snapshot was applied.
+      streamRecovered: stream != null && stream.connected && (stream.phase === "live" || stream.phase === "reconciled"),
+      operatorAction,
+    };
+    // The ban window is read from REST only when an IP_BAN row exists, so the
+    // normal path pays no extra request.
+    if (active.some((row) => row.code === "IP_BAN")) {
+      try {
+        await this.rest.getTime();
+        ctx.restProbeOk = true;
+      } catch {
+        ctx.restProbeOk = false;
+      }
+    }
+    const result = evaluateFreezes(ctx, this.persistenceProfile);
+    if (result.cleared.length === 0) return;
+    const remaining = activeFreezes(this.persistenceProfile);
+    if (remaining.length === 0) {
+      trackUnfreezeCleared();
+      audit("system", "live.unfreeze", { cleared: result.cleared, by: operatorAction ? "operator" : "automatic" }, undefined, this.persistenceProfile);
+      alert("unfreeze", { cleared: result.cleared });
+      publishLive("health", { frozen: false });
+      log.info("submissions unfrozen", { cleared: result.cleared });
+      return;
+    }
+    audit("system", "live.freeze.partial_unfreeze", {
+      cleared: result.cleared,
+      remaining: remaining.map((row) => row.code),
+    }, undefined, this.persistenceProfile);
+    publishLive("health", { frozen: true, reason: describeActiveFreezes(this.persistenceProfile), cleared: result.cleared });
+    log.info("submissions remain frozen after partial unfreeze", { cleared: result.cleared, remaining: remaining.map((row) => row.code) });
   }
 
   /** Mark/last price for collars and market-order notional, tagged with observation time. */
