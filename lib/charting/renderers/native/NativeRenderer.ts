@@ -16,6 +16,7 @@ import type {
     DataWindowOHLC,
     DataWindowGroup,
     DataWindowReadout,
+    ChartLoadingContext,
 } from '../../core/ports/IChartRenderer';
 import type { VelaTheme } from '../../core/options';
 import type { OHLCV } from '../../core/model/ohlcv';
@@ -43,6 +44,7 @@ import { isLineLikeSeries, seriesShownOn, type SeriesSurface } from '../../core/
 import { legendValuesOn } from '../../core/native-indicators/legend-settings';
 import { InputsUI, type LegendPlotValue } from '../shared/InputsUI';
 import { PaneControls } from './chrome/PaneControls';
+import { LoadingAffordance } from './chrome/LoadingAffordance';
 import { AxisScaleButtons, type AxisScaleView } from './chrome/AxisScaleButtons';
 import { NATIVE_CAPABILITIES, supportsWebGL2 } from './capabilities';
 import { WebGL2Backend } from './backend/WebGL2Backend';
@@ -279,6 +281,7 @@ export class NativeRenderer implements IChartRenderer {
      *  flight with nothing painted (first load, market switch). Rebuilt per show, so it
      *  picks up the current theme without a setTheme hook. */
     private loadingEl: HTMLElement | null = null;
+    private loadingAffordance: LoadingAffordance | null = null;
     private modelAlpha = 1; // indicator-model opacity: 0 during the candle reveal, fades to 1 after
     private targetBarSpacing = 0; // eased zoom target
     private zoomAnchorLogical = 0; // logical kept pinned under the cursor while zooming
@@ -707,40 +710,30 @@ export class NativeRenderer implements IChartRenderer {
 
     /**
      * The host reports a bar load in flight with nothing painted (first load, market switch —
-     * see the port): three small dots pulse at the center of the plot. Web-Animations-driven,
-     * so no stylesheet crosses the renderer boundary; pointer-transparent, and removed (not
-     * hidden) on clear so a re-show picks up the current theme.
+     * see the port): seven small candles with a "Loading SYMBOL · TF" caption at the center of
+     * the plot. Web-Animations-driven, so no stylesheet crosses the renderer boundary;
+     * pointer-transparent, and removed (not hidden) on clear so a re-show picks up the
+     * current theme. A superseding load re-aims the caption instead of rebuilding the mark.
      */
-    setLoading(loading: boolean): void {
+    setLoading(loading: boolean, context?: ChartLoadingContext): void {
         // Tables need no special handling here: they paint through the interleave slices,
         // and the backend paints nothing on an emptied (bar-less) chart.
         if (!loading || !this.wrapper) {
             this.loadingEl?.remove();
             this.loadingEl = null;
+            this.loadingAffordance = null;
             return;
         }
-        if (this.loadingEl) return;
-        const doc = this.wrapper.ownerDocument;
-        const el = doc.createElement('div');
-        el.className = 'vela-loading'; // stable hook for probes and host styling
-        Object.assign(el.style, {
-            position: 'absolute',
-            inset: '0',
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'center',
-            gap: '7px',
-            pointerEvents: 'none',
-        });
-        for (let i = 0; i < 3; i += 1) {
-            const dot = doc.createElement('span');
-            Object.assign(dot.style, { width: '7px', height: '7px', borderRadius: '50%', background: this.chromeTheme().textColor, opacity: '0.15' });
-            // Staggered phases via negative delays — every dot animates from the first frame.
-            dot.animate([{ opacity: 0.12 }, { opacity: 0.55 }], { duration: 800, iterations: Infinity, direction: 'alternate', easing: 'ease-in-out', delay: -i * 260 });
-            el.appendChild(dot);
+        if (this.loadingAffordance) {
+            this.loadingAffordance.setCaption(context);
+            return;
         }
-        this.wrapper.appendChild(el); // appended last ⇒ above the canvases, still under dialogs
-        this.loadingEl = el;
+        // The mark sits on the PLOT, so it takes the plot's ink and surface — not the
+        // chrome surface the panels use.
+        const affordance = new LoadingAffordance(this.wrapper.ownerDocument, this.plotSurface(), context);
+        this.wrapper.appendChild(affordance.el); // appended last ⇒ above the canvases, still under dialogs
+        this.loadingAffordance = affordance;
+        this.loadingEl = affordance.el;
     }
 
     /**
@@ -1030,6 +1023,8 @@ export class NativeRenderer implements IChartRenderer {
         // Re-theme the docked drawing toolbar on the STABLE chrome surface, so editing the
         // plot background (layout.background) never bleeds into the toolbar.
         this.userDrawings?.setTheme(this.chromeTheme());
+        // A load in flight keeps its mark, re-tinted for the new palette.
+        this.loadingAffordance?.retheme(this.plotSurface());
         // The open settings dialog is NOT rebuilt here — re-seeding mid-edit would
         // steal focus from the control being dragged/typed. It re-themes on next open.
         this.refreshScrollButtonTheme();
@@ -1410,6 +1405,11 @@ export class NativeRenderer implements IChartRenderer {
      *  plotcandle defaults, and the current-price line direction all follow them). */
     private deriveTheme(theme: VelaTheme): VelaTheme {
         return { ...theme, upColor: this.candleUp, downColor: this.candleDown };
+    }
+
+    /** The plot's own ink and background — what the overlay draws against. */
+    private plotSurface(): { textColor: string; background: string } {
+        return { textColor: this.theme.textColor, background: this.theme.background };
     }
 
     /** The theme the chrome (drawing toolbar / settings popups) paints with: the live theme
@@ -1844,6 +1844,7 @@ export class NativeRenderer implements IChartRenderer {
         s.borderColor = theme.borderColor;
         s.separatorColor = theme.borderColor;
         if (this.wrapper) applyChromeTokens(this.wrapper, this.chromeTheme());
+        this.loadingAffordance?.retheme(this.plotSurface());
         this.applyBackground();
         this.inputsUI.setTheme(theme);
         this.paneControls?.setTheme(this.theme);

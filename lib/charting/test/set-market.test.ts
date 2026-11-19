@@ -133,6 +133,8 @@ class FakeRenderer implements IChartRenderer {
     mountedModels: IndicatorModel[] = [];
     /** Whether the loading affordance is up right now. */
     loading = false;
+    /** What each setLoading call carried — the caption's raw material. */
+    loadingContexts: Array<{ loading: boolean; symbol?: string; timeframe?: string }> = [];
     /** Interleaved series/loading timeline — the ORDER is what the load-state tests pin. */
     timeline: string[] = [];
     applyFeature(): void {}
@@ -146,9 +148,10 @@ class FakeRenderer implements IChartRenderer {
         this.setBarsCalls.push({ n: bars.length, close: bars[0]?.close, preserveView: !!opts?.preserveView });
         this.timeline.push(`bars:${bars.length}`);
     }
-    setLoading(loading: boolean): void {
+    setLoading(loading: boolean, context?: { symbol?: string; timeframe?: string }): void {
         if (loading !== this.loading) this.timeline.push(`loading:${loading}`);
         this.loading = loading;
+        this.loadingContexts.push({ loading, symbol: context?.symbol, timeframe: context?.timeframe });
     }
     updateBar(bar: OHLCV): void { this.bars.push(bar); }
     setNativeData(type: string, data: unknown): void { this.nativePushes.push([type, data]); }
@@ -907,6 +910,22 @@ describe('load states — the cleared chart + the loading affordance', () => {
         await done;
         expect(seen[1]).toEqual({ ev: 'end', symbol: 'SLOW', barsPainted: 50, payloadBars: 50 });
         expect(seen).toHaveLength(2); // exactly one end per start
+    });
+
+    it('the affordance is told which symbol and timeframe it is covering', async () => {
+        const feed = new SwitchFeed();
+        feed.gatedLoads.add('SLOW');
+        const renderer = new FakeRenderer();
+        const chart = make({ symbol: 'AAA', timeframe: '60', volume: false }, { renderer, engines: [], dataFeed: feed });
+        await chart.ready();
+
+        const done = chart.setMarket({ symbol: 'SLOW', timeframe: '240' });
+        // Raised for the NEW market, synchronously — the caption names what is coming.
+        expect(renderer.loadingContexts.at(-1)).toEqual({ loading: true, symbol: 'SLOW', timeframe: '240' });
+
+        feed.release();
+        await done;
+        expect(renderer.loadingContexts.at(-1)).toMatchObject({ loading: false });
     });
 
     it('load:end fires alone (bars: 0) for a failed load and for a parked symbol', async () => {

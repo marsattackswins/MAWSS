@@ -11,6 +11,21 @@ Layout is upstream's `src/` flattened into this folder (`Vela.ts`, `core/`,
 
 Local changes on top of upstream v0.8.1:
 
+- **Loading affordance names the load.** While a bar load is in flight with
+  nothing painted, the chart shows a seven-candle mark — wicks plus hollow/filled
+  bodies, each at its own level — with a `Loading SYMBOL ·
+  TF` caption instead of three pulsing dots. The load's identity rides
+  `IChartRenderer.setLoading(loading, context)` (the orchestrator passes
+  `config.market`), so a symbol/timeframe switch re-aims the caption without
+  rebuilding the mark. Its ink is the theme's own plot text colour held inside a
+  4:1–7:1 contrast band against the plot background (`loadingAccent`), so the
+  mark reads the same weight on OLED black, the dim default dark, classic,
+  gruvbox and light without losing the palette's hue; a theme swap under a live
+  load re-tints it in place (`retheme`). Styles and motion are inline plus Web
+  Animations (no stylesheet crosses the renderer boundary). `renderers/native/`
+  `chrome/LoadingAffordance.ts`, covered by `test/loading-affordance.test.ts`
+  and the load-context case in `test/set-market.test.ts`.
+
 - **Position drawing placement and resizing.** The long/short tool now uses a
   press-drag-release placement gesture. Dragging its entry handle moves the full
   position; stop and target handles share one right edge, which stays aligned

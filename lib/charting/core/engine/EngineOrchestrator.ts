@@ -423,8 +423,8 @@ export class EngineOrchestrator implements IndicatorController, PaneController, 
     private beginLoad(firstLoad: boolean): void {
         if (this.loadingUp) return;
         this.loadingUp = true;
-        this.renderer.setLoading?.(true);
         const m = this.config.market;
+        this.renderer.setLoading?.(true, { symbol: m.symbol, timeframe: m.timeframe });
         this.events.emit('load:start', { symbol: m.symbol ?? 'TEST', timeframe: m.timeframe ?? '60', firstLoad });
     }
 

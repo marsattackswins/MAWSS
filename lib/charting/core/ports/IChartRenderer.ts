@@ -56,6 +56,12 @@ export interface IndicatorRenderHandle {
 /** An indicator's live status, shown in its legend row. */
 export type IndicatorStatus = 'idle' | 'loading' | 'live';
 
+/** What a bar load is fetching — lets a renderer name the work it is showing. */
+export interface ChartLoadingContext {
+    symbol?: string;
+    timeframe?: string;
+}
+
 /**
  * One host-contributed legend-row action, as the renderer consumes it: pure data plus a
  * thunk. The shell resolves the plugin descriptor (its `when` gate, the context, the
@@ -298,7 +304,7 @@ export interface IChartRenderer {
      * fails or parks) — the core also mirrors this state to plugins as `load:start`/`load:end`.
      * Optional.
      */
-    setLoading?(loading: boolean): void;
+    setLoading?(loading: boolean, context?: ChartLoadingContext): void;
 
     ensurePane(pane: Pane): void;
     removePane(id: string): void;
