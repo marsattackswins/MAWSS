@@ -197,4 +197,3 @@ app already fetches — no new provider, no new key:
 - `theme` exclusion from templates matches Vela's own persistence (verified in
   settings dialog: theme rows live under Canvas).
 
-Generated with Codebuff — audit artifacts live in this report.
