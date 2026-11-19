@@ -79,22 +79,25 @@ describe("timer liveness after startup", () => {
 
     const reconBefore = http.callsTo("/fapi/v2/positionRisk").length;
     events.length = 0;
-    const pnlSeen = await sleepWatchingPnl("BTCUSDT", 7_500);
+    await sleepWatchingPnl("BTCUSDT", 7_500);
 
     // Reconciliation interval: positionRisk is refetched on each run.
     const reconRuns = http.callsTo("/fapi/v2/positionRisk").length - reconBefore;
-    // Mark-price poller: premiumIndex is fetched per position per tick.
     const markFetches = http.callsTo("/fapi/v1/premiumIndex").length;
 
     // eslint-disable-next-line no-console
     console.log(`timer-liveness: reconRuns=${reconRuns} markFetches=${markFetches} sse=${events.map((e) => e.event).join(",")}`);
 
     expect(reconRuns).toBeGreaterThanOrEqual(2); // ~3 ticks in 7.5s at 2s cadence
-    expect(markFetches).toBeGreaterThanOrEqual(3); // ~5 ticks in 7.5s at 1.5s cadence
-    expect(events.some((e) => e.event === "account-update")).toBe(true);
-
-    // PnL actually moved from the seeded snapshot value.
-    expect(pnlSeen.some((pnl) => pnl !== "0")).toBe(true);
+    // Deliberate change (request budget): the REST mark poll is now a fallback
+    // that fetches only positions whose stream mark is missing or older than
+    // 10 s. The startup snapshot is fresh, so the poll must stay quiet here;
+    // its stale-mark path is covered by tests/live-tests/request-budget.test.ts.
+    expect(markFetches).toBe(0);
+    // No poll means no revalued-mark publishes: while the stream is the
+    // primary source the SSE channel stays quiet instead of pushing a mark
+    // refresh every tick.
+    expect(events.some((e) => e.event === "account-update")).toBe(false);
   }, 20_000);
 
   test("overlapping ensureStarted calls (connect racing switch) keep timers alive", async () => {
@@ -132,7 +135,7 @@ describe("timer liveness after startup", () => {
     expect(manager.status).toBe("ready");
 
     const reconBefore = http.callsTo("/fapi/v2/positionRisk").length;
-    const pnlSeen = await sleepWatchingPnl("BTCUSDT", 6_000);
+    await sleepWatchingPnl("BTCUSDT", 6_000);
 
     const reconRuns = http.callsTo("/fapi/v2/positionRisk").length - reconBefore;
     const markFetches = http.callsTo("/fapi/v1/premiumIndex").length;
@@ -141,7 +144,8 @@ describe("timer liveness after startup", () => {
     console.log(`race-liveness: reconRuns=${reconRuns} markFetches=${markFetches}`);
 
     expect(reconRuns).toBeGreaterThanOrEqual(1); // interval alive after the race
-    expect(markFetches).toBeGreaterThanOrEqual(2); // poller alive after the race
-    expect(pnlSeen.some((pnl) => pnl !== "0")).toBe(true);
+    // The fallback mark poll is quiet while the snapshot mark is fresh (see
+    // the request-budget tests for the stale path).
+    expect(markFetches).toBe(0);
   }, 20_000);
 });

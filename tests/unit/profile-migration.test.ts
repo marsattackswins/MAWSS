@@ -89,7 +89,7 @@ describe("profile-scoped database migration", () => {
   test("fresh schema includes profile columns and the migration is idempotent", () => {
     const db = new Database(":memory:");
     runMigrations(db);
-    expect(currentVersion(db)).toBe(12); // M0012 typed freeze reasons
+    expect(currentVersion(db)).toBe(13); // M0013 alert outbox
     for (const table of PROFILE_TABLES) expect(columnNames(db, table)).toContain("profile_id");
     expect(columnNames(db, "audit_log")).toContain("profile_id");
     expect(columnNames(db, "protection_intents")).toContain("profile_id");
@@ -118,7 +118,7 @@ describe("profile-scoped database migration", () => {
 
     const countsBefore = Object.fromEntries([...PROFILE_TABLES, "audit_log"].map((table) => [table, rowCount(db, table)]));
     runMigrations(db);
-    expect(currentVersion(db)).toBe(12); // idempotent re-run
+    expect(currentVersion(db)).toBe(13); // idempotent re-run
     expect(Object.fromEntries([...PROFILE_TABLES, "audit_log"].map((table) => [table, rowCount(db, table)]))).toEqual(countsBefore);
     db.close();
   });
