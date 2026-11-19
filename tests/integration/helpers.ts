@@ -172,6 +172,7 @@ export function loadTestnetConfig(): EnvConfig {
     retentionAuditLogDays: 180,
     dbSizeWarnBytes: 2 * 1024 ** 3,
     alertWebhookUrl: null,
+    heartbeatUrl: null,
     risk: {
       maxOrderNotionalUsd: 500, // testnet limits
       maxGrossExposureUsd: 2000,

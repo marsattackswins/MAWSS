@@ -136,6 +136,7 @@ function buildSafetyConfig(): EnvConfig {
     retentionAuditLogDays: 180,
     dbSizeWarnBytes: 2 * 1024 ** 3,
     alertWebhookUrl: null,
+    heartbeatUrl: null,
     missingProductionRiskLimitVariables: [],
     risk: {
       maxOrderNotionalUsd: 200,

@@ -2,6 +2,7 @@ import "server-only";
 
 import { serverConfig } from "../env/config";
 import { log } from "../log/logger";
+import { enqueueAlert, isCriticalAlert } from "./outbox";
 
 const RATE_WINDOW_MS = 60_000;
 const lastSent = new Map<string, number>();
@@ -18,6 +19,13 @@ export function alert(event: string, detail: Record<string, unknown>): void {
     return;
   }
   if (!url) return;
+
+  // Critical events are durable: a transient webhook failure must not drop an
+  // unprotected position, a freeze or a listen-key fault.
+  if (isCriticalAlert(event)) {
+    enqueueAlert(event, detail, serverConfig().env);
+    return;
+  }
 
   const now = Date.now();
   const prev = lastSent.get(event);

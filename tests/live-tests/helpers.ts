@@ -83,6 +83,7 @@ export function makeCfg(overrides: Partial<EnvConfig> = {}): EnvConfig {
     retentionAuditLogDays: 180,
     dbSizeWarnBytes: 2 * 1024 ** 3,
     alertWebhookUrl: null,
+    heartbeatUrl: null,
     missingProductionRiskLimitVariables: [],
     risk: {
       maxOrderNotionalUsd: 50,

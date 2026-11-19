@@ -305,6 +305,24 @@ export const MIGRATIONS: Migration[] = [
         WHERE f.key = 'frozen' AND f.value = 'true'`,
     ],
   },
+  {
+    version: 13,
+    name: "M0013 durable critical alert outbox",
+    up: [
+      `CREATE TABLE IF NOT EXISTS alert_outbox (
+         id INTEGER PRIMARY KEY AUTOINCREMENT,
+         created_at INTEGER NOT NULL,
+         event TEXT NOT NULL,
+         payload TEXT NOT NULL,
+         attempts INTEGER NOT NULL DEFAULT 0,
+         next_attempt_at INTEGER NOT NULL,
+         delivered_at INTEGER,
+         last_error TEXT
+       )`,
+      `CREATE INDEX IF NOT EXISTS idx_alert_outbox_pending
+         ON alert_outbox(delivered_at, next_attempt_at)`,
+    ],
+  },
 ];
 
 const PROFILE_CHECK =

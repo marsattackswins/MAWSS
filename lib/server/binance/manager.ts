@@ -64,6 +64,7 @@ import { MARK_STALE_AFTER_MS, MarkPriceStream } from "./mark-price-stream";
 import type { AccountUpdateEvent, AlgoUpdateEvent, BinanceAlgoOrder, BinanceOrder, OrderTradeUpdateEvent, UserStreamEvent } from "./types";
 import { getDb } from "../db/connection";
 import { runRetentionPass } from "../db/retention";
+import { createHeartbeatMonitor, type HeartbeatMonitor } from "../heartbeat";
 import {
   activeFreezes,
   describeActiveFreezes,
@@ -156,6 +157,8 @@ export class BinanceLiveManager {
   private markPriceTimer: ReturnType<typeof setTimeout> | null = null;
   /** Daily, batched log retention. Runs outside the risk mutation queue. */
   private retentionTimer: ReturnType<typeof setTimeout> | null = null;
+  /** Optional dead-man's-switch pings while attached. */
+  private heartbeatMonitor: HeartbeatMonitor | null = null;
   private _markPriceStream: MarkPriceStream | null = null;
   /** Public mark-price stream (no credentials); drives per-second PnL updates. */
   get markPriceStream(): MarkPriceStream {
@@ -253,6 +256,8 @@ export class BinanceLiveManager {
       clearTimeout(this.retentionTimer);
       this.retentionTimer = null;
     }
+    this.heartbeatMonitor?.stop();
+    this.heartbeatMonitor = null;
     if (this.accountUpdateSnapshotTimer) {
       clearTimeout(this.accountUpdateSnapshotTimer);
       this.accountUpdateSnapshotTimer = null;
@@ -443,6 +448,11 @@ export class BinanceLiveManager {
       );
       this.status = "ready";
       this.scheduleRetention(RETENTION_INITIAL_DELAY_MS);
+      this.heartbeatMonitor?.stop();
+      this.heartbeatMonitor = createHeartbeatMonitor({
+        url: this.cfg.heartbeatUrl,
+        isActive: () => this.status === "ready" && this.isGenerationCurrent(generation),
+      });
       this.startClockRefresh(generation);
       updateTradingGauges();
       trackSystemStart(this.cfg.env);

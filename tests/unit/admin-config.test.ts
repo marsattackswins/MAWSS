@@ -50,6 +50,7 @@ jest.mock("@/lib/server/env/config", () => ({
     retentionAuditLogDays: 180,
     dbSizeWarnBytes: 2 * 1024 ** 3,
     alertWebhookUrl: "https://example.com/webhook",
+    heartbeatUrl: null,
     risk: {
       maxOrderNotionalUsd: 50,
       maxGrossExposureUsd: 100,

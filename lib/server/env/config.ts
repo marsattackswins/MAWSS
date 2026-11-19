@@ -142,6 +142,8 @@ export interface EnvConfig {
   /** Health warns above this total database size (default 2 GiB). */
   dbSizeWarnBytes: number;
   alertWebhookUrl: string | null;
+  /** Optional dead-man's-switch URL pinged every 60 s while attached. */
+  heartbeatUrl: string | null;
   /** Production risk variables absent from the source environment. */
   missingProductionRiskLimitVariables?: string[];
   risk: {
@@ -449,6 +451,7 @@ export function loadEnvConfig(source: NodeJS.ProcessEnv = process.env): EnvConfi
     retentionAuditLogDays: num(source.MAWS_RETENTION_AUDIT_LOG_DAYS, 180),
     dbSizeWarnBytes: num(source.MAWS_DB_SIZE_WARN_BYTES, 2 * 1024 ** 3),
     alertWebhookUrl: source.MAWS_ALERT_WEBHOOK_URL?.trim() || null,
+    heartbeatUrl: source.MAWS_HEARTBEAT_URL?.trim() || null,
     missingProductionRiskLimitVariables,
     risk: {
       maxOrderNotionalUsd: num(source.MAWS_RISK_MAX_ORDER_NOTIONAL, 50),
