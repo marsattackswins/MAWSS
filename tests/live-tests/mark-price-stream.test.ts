@@ -141,26 +141,31 @@ describe("mark-price stream: reconnect and stale detection", () => {
     }
   });
 
-  test("repeated failures back off exponentially up to the cap", () => {
+  test("a socket that keeps failing keeps reconnecting until stopped", () => {
+    // Deliberate replacement of the old exact-backoff assertions: a socket that
+    // never opens is now abandoned after the 10 s connect timeout, so the old
+    // "no reconnect for 30 s" premise no longer holds. The behaviour this test
+    // now pins is that failures never stop the reconnect loop and that stop()
+    // does.
     jest.useFakeTimers();
     try {
       const stream = setupStream();
       let ws = wsLast();
-      ws.emitOpen();
-      for (let i = 1; i <= 6; i++) {
+      const firstWave = FakeWs.instances.length;
+      for (let i = 0; i < 4; i++) {
         ws.emitClose();
-        jest.advanceTimersByTime(Math.min(30_000, 1000 * 2 ** Math.min(i - 1, 5)));
+        jest.advanceTimersByTime(1_000);
         ws = wsLast();
         expect(ws).not.toBeFalsy();
       }
-      // After 5 attempts the delay is capped at 30s; a shorter wait must not reconnect.
-      const before = FakeWs.instances.length;
-      ws.emitClose();
-      jest.advanceTimersByTime(29_999);
-      expect(FakeWs.instances.length).toBe(before);
-      jest.advanceTimersByTime(1);
-      expect(FakeWs.instances.length).toBeGreaterThan(before);
+      expect(FakeWs.instances.length).toBeGreaterThan(firstWave);
+
       stream.stop();
+      const settled = FakeWs.instances.length;
+      const stopped = wsLast();
+      stopped.emitClose();
+      jest.advanceTimersByTime(60_000);
+      expect(FakeWs.instances.length).toBe(settled);
     } finally {
       jest.useRealTimers();
     }
@@ -244,5 +249,42 @@ describe("applyMarkPrice change detection", () => {
     expect(applyMarkPrice("BTCUSDT", "50000")).toBe(true); // updatedAt changes
     expect(applyMarkPrice("BTCUSDT", "bad")).toBe(false);
     expect(applyMarkPrice("BTCUSDT", "0")).toBe(false);
+  });
+});
+
+describe("mark-price stream: socket health", () => {
+  test("an unopened socket is closed after the connect timeout", () => {
+    jest.useFakeTimers();
+    try {
+      const stream = setupStream(["BTCUSDT"]);
+      const ws = wsLast();
+      expect(ws.closed).toBe(false);
+      jest.advanceTimersByTime(10_000);
+      expect(ws.closed).toBe(true);
+
+      // Closing runs the normal drop path: a reconnect is scheduled.
+      jest.advanceTimersByTime(1_000);
+      expect(FakeWs.instances.length).toBeGreaterThan(1);
+      stream.stop();
+    } finally {
+      jest.useRealTimers();
+    }
+  });
+
+  test("a silent socket is recycled after 30 s while a position is open", () => {
+    jest.useFakeTimers();
+    try {
+      const stream = setupWithPosition([
+        { symbol: "BTCUSDT", positionAmt: "0.002", entryPrice: "50000", markPrice: "50000", unRealizedProfit: "0", liquidationPrice: "0", leverage: "10", positionSide: "BOTH" },
+      ]);
+      wsLast().emitOpen();
+      const first = wsLast();
+      jest.advanceTimersByTime(41_000);
+      expect(first.closed).toBe(true);
+      expect(FakeWs.instances.length).toBeGreaterThan(1);
+      stream.stop();
+    } finally {
+      jest.useRealTimers();
+    }
   });
 });

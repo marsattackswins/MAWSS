@@ -2267,6 +2267,15 @@ function validateOrderInput(input: SubmitOrderInput, constraints: SymbolConstrai
       qty: input.closePosition ? undefined : input.qty,
     });
     if (!input.closePosition && !input.qty) errors.push("qty is required");
+    // The exchange publishes a per-symbol MAX_NUM_ORDERS filter where it
+    // applies; the local open-order view is the same truth reconciliation
+    // maintains.
+    if (constraints?.maxNumOrders != null) {
+      const openForSymbol = [...liveState().openOrders.values()].filter((order) => order.symbol === input.symbol).length;
+      if (openForSymbol >= constraints.maxNumOrders) {
+        errors.push(`MAX_NUM_ORDERS: ${input.symbol} already has ${openForSymbol} open orders (exchange limit ${constraints.maxNumOrders})`);
+      }
+    }
     return errors.length > 0 ? { errors, recordRejection: true } : null;
   }
   if (!input.qty || input.closePosition || (!input.reduceOnly && !input.isClose) || input.type !== "MARKET") {

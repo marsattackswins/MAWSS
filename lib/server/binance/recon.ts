@@ -37,6 +37,36 @@ import {
   type PersistenceProfile,
 } from "../profile/context";
 
+/**
+ * Protection restore retry policy.
+ *
+ * A failed restore used to be attempted once and abandoned (the pending
+ * replacement then expired). While the position still exists and the intent
+ * is still PENDING_REPLACE, it is retried with exponential backoff for up to
+ * ten minutes; from the third failure the alert is escalated to critical.
+ * Every existing guard (uncertain intents, protection lock, expiry) still
+ * applies.
+ */
+export const PROTECTION_RESTORE_RETRY_MAX_MS = 10 * 60_000;
+const RESTORE_RETRY_BASE_MS = 15_000;
+const RESTORE_RETRY_MAX_DELAY_MS = 2 * 60_000;
+
+interface RestoreRetryState {
+  startedAt: number;
+  attempts: number;
+  nextAttemptAt: number;
+}
+
+const restoreRetries = new Map<string, RestoreRetryState>();
+
+export function resetProtectionRestoreRetriesForTests(): void {
+  restoreRetries.clear();
+}
+
+function restoreRetryDelayMs(attempts: number): number {
+  return Math.min(RESTORE_RETRY_MAX_DELAY_MS, RESTORE_RETRY_BASE_MS * 2 ** Math.max(0, attempts - 1));
+}
+
 export interface ReconResult {
   result: "ok" | "drift" | "error";
   diffs: string[];
@@ -576,8 +606,14 @@ export async function checkPositionProtection(
   log.error("position protection missing during reconciliation", { symbol, missing });
 
   if (intent.status !== "PENDING_REPLACE") return;
+  const retryKey = `${deps.persistenceProfile.id}:${symbol}`;
+  const retry = restoreRetries.get(retryKey);
   const ageMs = Date.now() - intent.createdAt;
-  const maxAgeMs = serverConfig().protectionPendingMaxAgeMs;
+  // A retry chain extends the window it covers; the plain pending-replace
+  // expiry still applies to the first attempt and to abandoned chains.
+  const maxAgeMs = retry
+    ? Math.max(PROTECTION_RESTORE_RETRY_MAX_MS, serverConfig().protectionPendingMaxAgeMs)
+    : serverConfig().protectionPendingMaxAgeMs;
   if (ageMs < 0 || ageMs > maxAgeMs) {
     const expiredReason = `Pending protection replacement expired after ${Math.max(0, ageMs)}ms; automatic restore limit is ${maxAgeMs}ms`;
     setProtectionStatus(symbol, "UNPROTECTED", expiredReason, deps.persistenceProfile);
@@ -587,18 +623,48 @@ export async function checkPositionProtection(
     }
     return;
   }
-  if (intent.restoreAttemptedAt >= intent.createdAt) return;
+  if (!retry && intent.restoreAttemptedAt >= intent.createdAt) return;
   if (intentsInUncertainStates(deps.persistenceProfile).some((order) => order.symbol === symbol)) return;
   if (!deps.restoreProtection) return;
-  markProtectionRestoreAttempted(symbol, Date.now(), deps.persistenceProfile);
+  const now = Date.now();
+  if (retry && now < retry.nextAttemptAt) return;
+  // Retries only make sense while the position still exists: a flat symbol's
+  // protection intent no longer needs restoring.
+  if (Number(liveState().positions.get(symbol)?.qty ?? "0") === 0) {
+    restoreRetries.delete(retryKey);
+    return;
+  }
+  markProtectionRestoreAttempted(symbol, now, deps.persistenceProfile);
   try {
     await deps.restoreProtection(intent);
+    restoreRetries.delete(retryKey);
   } catch (err) {
-    const restoreError = `Protection restore attempt failed: ${String(err)}`;
+    const attempts = (retry?.attempts ?? 0) + 1;
+    const startedAt = retry?.startedAt ?? now;
+    const severity = attempts >= 3 ? "critical" : "high";
+    const restoreError = `Protection restore attempt ${attempts} failed: ${String(err)}`;
     setProtectionStatus(symbol, "UNPROTECTED", restoreError, deps.persistenceProfile);
-    audit("operator", "position.protection.restore_failed", { symbol, error: String(err) }, undefined, deps.persistenceProfile);
-    alert(`position_protection_restore_failed:${symbol}`, { symbol, error: String(err) });
-    log.error("position protection restore failed", { symbol, error: String(err) });
+    audit("operator", "position.protection.restore_failed", { symbol, attempts, severity, error: String(err) }, undefined, deps.persistenceProfile);
+    alert(`position_protection_restore_failed:${symbol}`, { symbol, attempts, severity, error: String(err) });
+    log.error("position protection restore failed", { symbol, attempts, severity, error: String(err) });
+    if (now - startedAt >= PROTECTION_RESTORE_RETRY_MAX_MS) {
+      // Ten minutes of retries exhausted: stop, and say so in the audit trail.
+      restoreRetries.delete(retryKey);
+      setProtectionStatus(
+        symbol,
+        "UNPROTECTED",
+        `Protection restore gave up after ${attempts} attempts in ${Math.round((now - startedAt) / 1000)}s: ${String(err)}`,
+        deps.persistenceProfile,
+      );
+      audit("operator", "position.protection.restore_abandoned", { symbol, attempts, error: String(err) }, undefined, deps.persistenceProfile);
+      log.error("position protection restore abandoned", { symbol, attempts });
+    } else {
+      restoreRetries.set(retryKey, {
+        startedAt,
+        attempts,
+        nextAttemptAt: now + restoreRetryDelayMs(attempts),
+      });
+    }
   }
 }
 

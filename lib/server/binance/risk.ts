@@ -281,7 +281,12 @@ export function checkRisk(
       `RISK_MAX_ORDER_NOTIONAL: order notional ${notionalUsd.toFixed(2)} USD exceeds max ${risk.maxOrderNotionalUsd} USD`,
     );
   }
-  const pendingExposureUsd = pendingExposure(snap.workingOrders) + pendingExposure(snap.uncertainIntents);
+  const workingPending = pendingExposure(snap.workingOrders);
+  const uncertainPending = pendingExposure(snap.uncertainIntents);
+  if (workingPending.unreadable + uncertainPending.unreadable > 0) {
+    errors.push("EXECUTION_UNHEALTHY: pending exposure unreadable");
+  }
+  const pendingExposureUsd = workingPending.usd + uncertainPending.usd;
   const proposedGrossExposureUsd = snap.grossExposureUsd + pendingExposureUsd + notionalUsd;
   if (proposedGrossExposureUsd > risk.maxGrossExposureUsd) {
     errors.push(
@@ -347,21 +352,36 @@ export function checkRisk(
   return errors;
 }
 
-function pendingExposure(items: PendingRiskExposure[] | undefined): number {
-  return (items ?? []).reduce((total, item) => {
+/** Sums pending exposure, counting any unreadable decimal instead of guessing. */
+function pendingExposure(items: PendingRiskExposure[] | undefined): { usd: number; unreadable: number } {
+  let usd = 0;
+  let unreadable = 0;
+  for (const item of items ?? []) {
     try {
-      return total + decToNumber(abs(mul(parseDec(item.effectivePrice), parseDec(item.qty))));
+      usd += decToNumber(abs(mul(parseDec(item.effectivePrice), parseDec(item.qty))));
     } catch {
-      // Invalid pending data is not silently treated as exposure. The exchange
-      // snapshot/reconciliation path will repair it; current-order checks stay
-      // fail-closed through the authoritative snapshot freeze.
-      return total;
+      // Never treat an unreadable pending amount as zero: checkRisk rejects
+      // risk-increasing orders with EXECUTION_UNHEALTHY instead.
+      unreadable += 1;
     }
-  }, 0);
+  }
+  return { usd, unreadable };
 }
 
 export function pendingExposureUsd(items: PendingRiskExposure[] | undefined): number {
-  return pendingExposure(items);
+  return pendingExposure(items).usd;
+}
+
+/**
+ * Commission assets charged today with no fresh USD price. Health shows this
+ * so a day-long block is diagnosable, and it empties by itself once a price
+ * arrives (the risk path refreshes quotes before every evaluation).
+ */
+export function unpricedCommissionAssets(
+  now = Date.now(),
+  profile: PersistenceProfile = activePersistenceProfile(),
+): string[] {
+  return commissionAssetsSinceUtcMidnight(now, profile).filter((asset) => commissionPriceFor(asset, now) == null);
 }
 
 function decToNumber(d: Dec): number {

@@ -13,6 +13,7 @@ import { databaseStats, type DbStats } from "../db/stats";
 import { healthSignals, type HealthSignals } from "./state";
 import { circuitRegistry } from "../resilience/circuit-registry";
 import { unprotectedProtectionSymbols } from "../binance/protection";
+import { unpricedCommissionAssets } from "../binance/risk";
 
 export interface HealthStatus {
   env: string;
@@ -30,6 +31,8 @@ export interface HealthStatus {
   frozenReasons: string[];
   protectionHealthy: boolean;
   unprotectedPositions: string[];
+  /** Non-USD fee assets charged today with no fresh USD price. */
+  commissionAssetsUnpriced: string[];
   /** Size and row counts; `sizeWarning` is set above MAWS_DB_SIZE_WARN_BYTES. */
   database: DbStats;
   healthy: boolean;
@@ -90,6 +93,7 @@ export function buildHealthStatus(cfg: EnvConfig): HealthStatus {
   const protectionHealthy = unprotectedPositions.length === 0;
 
   const now = Date.now();
+  const commissionAssetsUnpriced = unpricedCommissionAssets(now, persistenceProfileFromConfig(cfg));
   const circuitStats = circuitRegistry.getAllStats();
   const circuitBreakerStates = Object.fromEntries(Object.entries(circuitStats).map(([name, stats]) => [name, stats.state]));
   const unhealthyCircuits = Object.entries(circuitBreakerStates).filter(([, state]) => state !== "closed").map(([name]) => name);
@@ -121,6 +125,9 @@ export function buildHealthStatus(cfg: EnvConfig): HealthStatus {
 
   const frozenReasons = [...execution.reasons];
   if (!protectionHealthy) frozenReasons.push(`Unprotected positions: ${unprotectedPositions.join(", ")}`);
+  if (commissionAssetsUnpriced.length > 0) {
+    frozenReasons.push(`Commission asset price unavailable: ${commissionAssetsUnpriced.join(", ")}; risk-increasing orders are rejected until a fresh price arrives`);
+  }
   if (!circuitBreakersHealthy) {
     frozenReasons.push(`Circuit breakers degraded: ${unhealthyCircuits.join(", ")}`);
   }
@@ -142,6 +149,7 @@ export function buildHealthStatus(cfg: EnvConfig): HealthStatus {
     frozenReasons,
     protectionHealthy,
     unprotectedPositions,
+    commissionAssetsUnpriced,
     database: databaseStats(now),
     healthy: signals.managerRunning && signals.brokerStatus === "ready" && clockHealthy && streamHealthy && reconHealthy && positionModeHealthy && circuitBreakersHealthy && protectionHealthy && !submissionsFrozen,
   };

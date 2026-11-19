@@ -31,6 +31,8 @@ const RECONNECT_BASE_MS = 1_000;
 const RECONNECT_MAX_MS = 30_000;
 /** No mark event for this long ⇒ the stream is considered stale. */
 export const MARK_STALE_AFTER_MS = 10_000;
+/** Silence this long while positions exist ⇒ recycle the socket. */
+export const MARK_RECYCLE_AFTER_MS = 30_000;
 
 interface MarkPriceEvent {
   e: string;
@@ -133,6 +135,8 @@ export class MarkPriceStream {
   private rotate(): void {
     const generation = ++this.generation;
     this.closeSocket();
+    // The previous socket's freshness says nothing about the new one.
+    this.lastEventAt = null;
     if (this.reconnectTimer) {
       clearTimeout(this.reconnectTimer);
       this.reconnectTimer = null;
@@ -162,7 +166,19 @@ export class MarkPriceStream {
       return;
     }
     this.ws = ws;
+    // A socket that never opens would otherwise sit silent forever: close it
+    // after the connect timeout so the normal drop/reconnect path runs.
+    const connectTimer = setTimeout(() => {
+      if (generation !== this.generation || this.stopped || this.ws !== ws) return;
+      log.warn("mark-price stream connect timed out", { timeoutMs: CONNECT_TIMEOUT_MS });
+      try {
+        ws.close();
+      } catch {
+        // Already closed.
+      }
+    }, CONNECT_TIMEOUT_MS);
     ws.on("open", () => {
+      clearTimeout(connectTimer);
       if (generation !== this.generation || this.stopped) return;
       this.reconnectAttempt = 0;
       this.lastEventAt = Date.now();
@@ -244,7 +260,15 @@ export class MarkPriceStream {
       if (this.stopped) return;
       if (this.symbols.length === 0) return;
       const status = this.status();
-      if (status.stale) log.debug("mark-price stream stale", { lastEventAt: this.lastEventAt });
+      if (!status.stale) return;
+      log.debug("mark-price stream stale", { lastEventAt: this.lastEventAt });
+      // Silence while positions are open means the socket is half-dead: it
+      // reports "connected" but delivers nothing. Recycle it so a fresh
+      // subscription can recover instead of trusting the open socket.
+      if (this.lastEventAt != null && Date.now() - this.lastEventAt > MARK_RECYCLE_AFTER_MS) {
+        log.warn("mark-price stream silent; recycling socket", { lastEventAt: this.lastEventAt });
+        this.rotate();
+      }
     }, MARK_STALE_AFTER_MS);
   }
 }

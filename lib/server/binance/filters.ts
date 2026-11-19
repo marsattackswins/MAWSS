@@ -67,7 +67,9 @@ export function extractConstraints(info: ExchangeSymbolInfo): SymbolConstraints 
         else if (f.minNotional) c.minNotional = parseDec(f.minNotional);
         break;
       case "MAX_NUM_ORDERS":
+        // Binance publishes `limit`; older payloads used maxNumOrders.
         if (f.maxNumOrders != null) c.maxNumOrders = f.maxNumOrders;
+        else if (f.limit != null) c.maxNumOrders = f.limit;
         break;
       default:
         break;
@@ -139,6 +141,16 @@ export function validateAgainstConstraints(c: SymbolConstraints, input: Validati
     if (lte(q, parseDec("0"))) errors.push("qty must be positive");
     if (lt(q, c.minQty)) errors.push(`qty below minQty ${toStr(c.minQty)}`);
     if (gt(q, c.maxQty)) errors.push(`qty above maxQty ${toStr(c.maxQty)}`);
+
+    // MIN_NOTIONAL applies to every order that carries a quantity: a LIMIT at
+    // its price, a quantity-based STOP/TAKE_PROFIT at its trigger price. A
+    // closePosition leg has no qty and is skipped above.
+    const notionalPrice = input.type === "LIMIT" ? input.price : isStopType ? input.stopPrice : undefined;
+    if (c.minNotional && notionalPrice) {
+      if (lt(orderNotional(notionalPrice, input.qty), c.minNotional)) {
+        errors.push(`order notional below minNotional ${toStr(c.minNotional)}`);
+      }
+    }
   }
   return errors;
 }
