@@ -5,6 +5,7 @@ import { log } from "../log/logger";
 import { extractConstraints, type SymbolConstraints } from "./filters";
 import type { BinanceRestClient } from "./rest";
 import type { ExchangeSymbolInfo } from "./types";
+import type { ExchangeRateLimit } from "./types";
 import {
   activePersistenceProfile,
   assertPersistenceProfile,
@@ -17,6 +18,8 @@ const REFRESH_MS = 60 * 60 * 1000;
 export class MetadataCache {
   private constraints = new Map<string, SymbolConstraints>();
   private loadedAt = 0;
+  /** exchangeInfo `rateLimits` from the newest live fetch (null when absent). */
+  private rateLimits: ExchangeRateLimit[] | null = null;
 
   constructor(
     private readonly rest: BinanceRestClient,
@@ -46,6 +49,7 @@ export class MetadataCache {
     }
 
     const info = await this.rest.getExchangeInfo();
+    this.rateLimits = Array.isArray(info.rateLimits) && info.rateLimits.length > 0 ? info.rateLimits : null;
     const insert = db.prepare(
       `INSERT INTO exchange_symbol_filters (profile_id, symbol, status, base_asset, quote_asset, filters, updated_at)
        VALUES (?, ?, ?, ?, ?, ?, ?)
@@ -92,6 +96,11 @@ export class MetadataCache {
 
   getConstraints(symbol: string): SymbolConstraints | null {
     return this.constraints.get(symbol) ?? null;
+  }
+
+  /** Per-minute REST budget published by the exchange, if any. */
+  exchangeRateLimits(): ExchangeRateLimit[] | null {
+    return this.rateLimits;
   }
 
   symbolCount(): number {

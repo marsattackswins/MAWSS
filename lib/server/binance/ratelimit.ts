@@ -1,5 +1,33 @@
 import "server-only";
 
+import type { ExchangeRateLimit } from "./types";
+
+/** Local fallbacks, used only when exchangeInfo does not publish limits. */
+export const FALLBACK_WEIGHT_LIMIT_1M = 2400;
+export const FALLBACK_ORDER_LIMIT_1M = 1200;
+
+export interface ExchangeLimits {
+  weightLimit1m?: number;
+  orderLimit1m?: number;
+}
+
+/**
+ * Reads the per-minute REST budget from exchangeInfo `rateLimits`. Returns
+ * null when the payload carries no usable REQUEST_WEIGHT / ORDERS entry, so
+ * the caller can fall back to the constants and raise a health warning.
+ */
+export function readExchangeRateLimits(limits: ExchangeRateLimit[] | undefined): ExchangeLimits | null {
+  if (!Array.isArray(limits) || limits.length === 0) return null;
+  const perMinute = (entry: ExchangeRateLimit): boolean =>
+    entry.interval === "MINUTE" && (entry.intervalNum == null || entry.intervalNum === 1);
+  const weight = limits.find((entry) => entry.rateLimitType === "REQUEST_WEIGHT" && perMinute(entry));
+  const orders = limits.find((entry) => entry.rateLimitType === "ORDERS" && perMinute(entry));
+  const result: ExchangeLimits = {};
+  if (weight && Number.isFinite(weight.limit) && weight.limit > 0) result.weightLimit1m = weight.limit;
+  if (orders && Number.isFinite(orders.limit) && orders.limit > 0) result.orderLimit1m = orders.limit;
+  return result.weightLimit1m == null && result.orderLimit1m == null ? null : result;
+}
+
 /**
  * Two-layer limiter:
  *  1. Internal rolling budget (MAWS_RATE_INTERNAL_PER_MIN requests/min) that
@@ -11,11 +39,37 @@ export class RateLimiter {
   private window: number[] = [];
   private usedWeight1m: number | null = null;
   private orderCount1m: number | null = null;
-  private orderCountLimit1m = 1200;
-  private weightLimit1m = 2400;
+  private orderCountLimit1m = FALLBACK_ORDER_LIMIT_1M;
+  private weightLimit1m = FALLBACK_WEIGHT_LIMIT_1M;
+  /** True once a limit came from exchangeInfo rather than the fallback. */
+  private exchangeLimits = false;
   private lastObservedAt = 0;
 
   constructor(private readonly internalPerMin: number) {}
+
+  /**
+   * Adopts exchangeInfo limits. Returns false (keeping the fallbacks) when the
+   * payload carries none, so the caller can surface a health warning.
+   */
+  applyExchangeLimits(limits: ExchangeRateLimit[] | undefined): boolean {
+    const read = readExchangeRateLimits(limits);
+    if (!read) {
+      this.exchangeLimits = false;
+      return false;
+    }
+    if (read.weightLimit1m != null) this.weightLimit1m = read.weightLimit1m;
+    if (read.orderLimit1m != null) this.orderCountLimit1m = read.orderLimit1m;
+    this.exchangeLimits = true;
+    return true;
+  }
+
+  limits(): { weightLimit1m: number; orderCountLimit1m: number; source: "exchange" | "fallback" } {
+    return {
+      weightLimit1m: this.weightLimit1m,
+      orderCountLimit1m: this.orderCountLimit1m,
+      source: this.exchangeLimits ? "exchange" : "fallback",
+    };
+  }
 
   private prune(now: number): void {
     const cutoff = now - 60_000;

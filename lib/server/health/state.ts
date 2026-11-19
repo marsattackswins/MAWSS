@@ -55,6 +55,15 @@ export interface HealthSignals {
   recon: ReconSignal;
   positionMode: PositionModeSignal;
   markPrice: MarkPriceSignal | null;
+  /** Where the REST request budget came from, and a warning when it fell back. */
+  rateLimits: RateLimitSignal | null;
+}
+
+export interface RateLimitSignal {
+  source: "exchange" | "fallback";
+  weightLimit1m: number;
+  orderCountLimit1m: number;
+  warning: string | null;
 }
 
 const signals: HealthSignals = {
@@ -67,6 +76,7 @@ const signals: HealthSignals = {
   recon: { lastRunAt: null, lastResult: null, driftCount: 0 },
   positionMode: { mode: "unknown", checkedAt: null, error: null },
   markPrice: null,
+  rateLimits: null,
 };
 
 export function healthSignals(): HealthSignals {
@@ -86,6 +96,7 @@ export function resetHealthSignals(): void {
   signals.snapshot = null;
   signals.recon = { lastRunAt: null, lastResult: null, driftCount: 0 };
   signals.positionMode = { mode: "unknown", checkedAt: null, error: null };
+  signals.rateLimits = null;
 }
 
 export function resetHealthSignalsForTests(): void {

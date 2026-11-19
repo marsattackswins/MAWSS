@@ -27,6 +27,15 @@ export interface ExchangeSymbolInfo {
 
 export interface ExchangeInfo {
   symbols: ExchangeSymbolInfo[];
+  /** Present on real exchangeInfo responses; used for the REST budget. */
+  rateLimits?: ExchangeRateLimit[];
+}
+
+export interface ExchangeRateLimit {
+  rateLimitType: string;
+  interval: string;
+  intervalNum?: number;
+  limit: number;
 }
 
 export interface ServerTime {

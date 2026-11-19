@@ -52,6 +52,7 @@ import {
   balanceUsd,
   grossExposureUsd,
   liveState,
+  type LivePosition,
   markAlgoStateFresh,
   markAlgoStateStale,
   openPositionCount,
@@ -87,6 +88,27 @@ const MARK_PRICE_REFRESH_MS_FALLBACK = 15_000;
 const CLOCK_REFRESH_MS = 2.5 * 60 * 1000;
 const ACCOUNT_UPDATE_SNAPSHOT_DEBOUNCE_MS = 50;
 const ACCOUNT_UPDATE_SNAPSHOT_RETRY_MS = 2_000;
+
+/**
+ * Positions the fallback REST mark poll must refresh.
+ *
+ * The public mark-price stream is primary, so a poll only heals a position
+ * whose mark is missing or older than the stream's own staleness bound. A
+ * healthy stream therefore makes every poll a no-op: zero REST requests for
+ * any number of open positions. Exported for the request-budget test.
+ */
+export function positionsNeedingMarkRefresh(
+  positions: Iterable<LivePosition>,
+  now = Date.now(),
+  staleAfterMs = MARK_STALE_AFTER_MS,
+): LivePosition[] {
+  return [...positions].filter((position) => {
+    if (Number(position.qty) === 0) return false;
+    if (position.markPriceSource !== "exchange") return true;
+    if (!(Number(position.markPrice) > 0)) return true;
+    return now - position.updatedAt > staleAfterMs;
+  });
+}
 
 /** Single retry for a failed post-ALGO_UPDATE conditional-order refresh. */
 const ALGO_ORDER_REFRESH_RETRY_MS = 2_000;
@@ -304,6 +326,7 @@ export class BinanceLiveManager {
       this.assertGeneration(generation);
       await this.metadata.ensureLoaded(true);
       this.assertGeneration(generation);
+      this.applyExchangeRateLimits();
 
       // The manager is constructed only with an attached profile config, so
       // startup always runs the full authenticated path. Position mode is an
@@ -502,7 +525,7 @@ export class BinanceLiveManager {
    * failures are logged and left to the next tick or a reconciliation.
    */
   private async refreshPositionMarkPrices(generation: number): Promise<void> {
-    const positions = [...liveState().positions.values()].filter((p) => Number(p.qty) !== 0);
+    const positions = positionsNeedingMarkRefresh(liveState().positions.values());
     if (positions.length === 0) return;
     let changed = false;
     for (const pos of positions) {
@@ -526,6 +549,29 @@ export class BinanceLiveManager {
     this.markPriceStream.syncSymbols([...liveState().positions.keys()]);
     setHealthSignal({ markPrice: this.markPriceSignal() });
     publishLive("mark-price", this.markPriceSignal());
+  }
+
+  /**
+   * Adopts exchangeInfo's per-minute weights/order caps when published and
+   * falls back to the local constants with a health warning when they are not.
+   */
+  private applyExchangeRateLimits(): void {
+    this.limiter.applyExchangeLimits(this.metadata.exchangeRateLimits() ?? undefined);
+    const limits = this.limiter.limits();
+    setHealthSignal({
+      rateLimits: {
+        source: limits.source,
+        weightLimit1m: limits.weightLimit1m,
+        orderCountLimit1m: limits.orderCountLimit1m,
+        warning:
+          limits.source === "exchange"
+            ? null
+            : `exchangeInfo published no rate limits; using local fallback limits (${limits.weightLimit1m} weight/min, ${limits.orderCountLimit1m} orders/min)`,
+      },
+    });
+    if (limits.source === "fallback") {
+      log.warn("exchange rate limits unavailable; using local fallback limits", limits);
+    }
   }
 
   /**
