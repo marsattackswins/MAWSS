@@ -19,6 +19,8 @@ import { useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 
 const AXIS_W = 56;
+/** Button edge (`h-6`); half of it centres the button on the crosshair line. */
+const PLUS_SIZE = 24;
 /** Estimated rendered height of the open menu (4 rows + padding) — used to keep
  *  the menu on screen: it flips above the button near the bottom edge. */
 const MENU_H = 176;
@@ -90,14 +92,16 @@ export function CrosshairPlus({ pane, suppress }: { pane: ChartPaneState; suppre
       const handle = getChart(pane.id);
       if (!handle) return;
       const rect = handle.el.getBoundingClientRect();
+      // Ride the cursor: centre the button ON the crosshair line, so its middle
+      // sits on the price the crosshair reads (the button's `top` is its edge,
+      // which is why half its height comes back off). Fall back to the pane's
+      // vertical center when the crosshair moved without a pointer (keyboard).
+      const cursorY = pointerYRef.current ?? rect.top + rect.height / 2;
       const next: PlusAnchor = {
         price: h.price,
         time: h.time,
         left: rect.right - AXIS_W - 28,
-        // Ride the cursor: center the 24px button on the pointer's Y (client
-        // coords — the button is position:fixed). Fall back to the pane's
-        // vertical center when the crosshair moved without a pointer (keyboard).
-        top: pointerYRef.current ?? rect.top + rect.height / 2 - 12,
+        top: cursorY - PLUS_SIZE / 2,
       };
       setPlus((prev) =>
         prev &&
