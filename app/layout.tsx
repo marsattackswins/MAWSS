@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import type { ReactNode } from "react";
 import { MAWS, MAWS_FULL_NAME } from "@/lib/maws/brand";
+import { AppTooltipLayer } from "@/components/ui/AppTooltipLayer";
 import "./globals.css";
 
 export const metadata: Metadata = {
@@ -14,7 +15,10 @@ export default function RootLayout({ children }: { children: ReactNode }) {
     // applyAppTheme() writes CSS custom properties onto <html> at runtime, so the
     // client attribute set can never match the server-rendered one.
     <html lang="en" className="h-full" suppressHydrationWarning>
-      <body className="h-full overflow-hidden antialiased">{children}</body>
+      <body className="h-full overflow-hidden antialiased">
+        {children}
+        <AppTooltipLayer />
+      </body>
     </html>
   );
 }

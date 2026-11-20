@@ -256,7 +256,9 @@ function makeBarButton(key: string, label: string, html: string, onClick: () => 
   b.className = "toolbar-btn";
   b.dataset.dragKey = key;
   b.dataset.own = "app";
-  b.title = label;
+  // No `title`: a native OS bubble would clash with the chart's themed tip.
+  // `data-app-tip` is read by AppTooltipLayer, which draws that same bubble.
+  b.dataset.appTip = label;
   b.setAttribute("aria-label", label);
   b.innerHTML = html;
   b.addEventListener("click", onClick);
@@ -334,7 +336,7 @@ interface MoreButtonUi {
 
 function paintFavoriteButton(button: HTMLButtonElement, favorite: boolean): void {
   const label = favorite ? "Remove from favorites" : "Add to favorites";
-  button.title = label;
+  button.dataset.appTip = label;
   button.setAttribute("aria-label", label);
   button.setAttribute("aria-pressed", String(favorite));
   button.style.color = favorite ? "var(--app-accent)" : "var(--app-muted)";
@@ -367,7 +369,7 @@ function mountMoreButton(root: HTMLElement, host: HTMLElement, sections: MoreSec
   btn.className = "toolbar-btn";
   btn.dataset.dragKey = "app:more";
   btn.dataset.own = "app";
-  btn.title = "More tools";
+  btn.dataset.appTip = "More tools";
   btn.setAttribute("aria-label", "More tools");
   btn.innerHTML = MORE_ICON;
 
@@ -535,6 +537,38 @@ function mountAppButtons(root: HTMLElement): void {
   root.insertBefore(undo, anchor);
   root.insertBefore(redo, anchor);
   // Nothing to unsubscribe: these buttons die with the bar root.
+}
+
+/** Hand the bar's tooltips to the shell.
+ *
+ * Vela's toolbar attaches its own chrome tip to every cell/button
+ * (`attachChromeTooltip`), and that tip is painted in the CHART's font —
+ * `sans-serif` — while the shell's `AppTooltipLayer` uses the app font. On the
+ * same row that read as a second, foreign-looking bubble (the one the user
+ * called "native"), so the bar opts out of Vela's tips entirely: a capture
+ * `pointerenter` listener swallows the event Vela arms its tips from (it never
+ * reaches the cell's own listener), and every `aria-label` in the row is
+ * mirrored onto `data-app-tip`, which is the shell layer's label source.
+ *
+ * The `MutationObserver` keeps that up to date — `setDefinition`, a favorites
+ * repaint or a theme rebuild all replace the cells, and their labels with them. */
+function useAppTips(root: HTMLElement): () => void {
+  const stopVelaTips = (event: Event): void => event.stopPropagation();
+  const tag = (): void => {
+    for (const el of root.querySelectorAll<HTMLElement>("[aria-label]")) {
+      if (el.dataset.appTip) continue; // the MAWS extras carry their own label
+      const label = el.getAttribute("aria-label")?.trim();
+      if (label) el.dataset.appTip = label;
+    }
+  };
+  root.addEventListener("pointerenter", stopVelaTips, true);
+  tag();
+  const observer = new MutationObserver(tag);
+  observer.observe(root, { childList: true, subtree: true });
+  return () => {
+    root.removeEventListener("pointerenter", stopVelaTips, true);
+    observer.disconnect();
+  };
 }
 
 /** Tag the bar's own (visible) buttons with their drag keys and return them:
@@ -987,9 +1021,11 @@ export function VelaDrawingBar() {
     let moreUi: MoreButtonUi | undefined;
     let disposeReorder: (() => void) | undefined;
     let disposeOrient: (() => void) | undefined;
+    let disposeTips: (() => void) | undefined;
     if (root) {
       disposeOrient = orientHorizontal(root, host);
       mountAppButtons(root);
+      disposeTips = useAppTips(root);
       favoriteUi = mountFavoriteButtons(root, allMenuTools, directTypes);
       moreUi = mountMoreButton(root, host, moreSections);
       favoriteUiRef.current = favoriteUi;
@@ -1006,6 +1042,7 @@ export function VelaDrawingBar() {
       moreUi?.destroy();
       favoriteUiRef.current = null;
       moreUiRef.current = null;
+      disposeTips?.();
       disposeOrient?.();
       barRef.current = null;
       try {

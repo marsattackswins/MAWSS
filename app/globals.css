@@ -967,6 +967,44 @@ select:-webkit-autofill {
   box-shadow: 0 0 0 1px color-mix(in srgb, var(--auth-accent, var(--app-accent)) 45%, transparent);
 }
 
+/* ── Tooltips ───────────────────────────────────────────────────────────────
+ * One tip for the whole shell: AppTooltipLayer adopts every plain `title` and
+ * renders this bubble, the same look as the chart's chrome tooltip
+ * (lib/charting/renderers/shared/chrome-tooltip.ts) so a toolbar control and a
+ * drawing tool no longer show two different tooltips.
+ *
+ * Every colour is a live `--app-*` token (applyAppTheme writes them onto <html>
+ * per theme), so the tip is the selected theme's surface/border/text — not a
+ * fixed dark bubble — and it re-colours the moment the theme changes.
+ *
+ * The spec is copied from chrome-tooltip.ts on purpose, colour for colour: the
+ * chart's tip paints the theme BACKGROUND (`--vela-bg` ⇒ `--app-bg`) with the
+ * theme border on top — not the lighter card surface — so using `--app-bg` here
+ * is what makes an app tip and a drawing-tool tip the same bubble. */
+.app-tooltip {
+  position: fixed;
+  /* Above menus (60) and dialogs (81). */
+  z-index: 100;
+  max-width: 320px;
+  padding: 4px 9px;
+  border: 1px solid var(--app-border);
+  border-radius: 6px;
+  background: var(--app-bg);
+  color: var(--app-text);
+  box-shadow: var(--app-shadow-menu);
+  font-family: inherit;
+  font-size: 12px;
+  line-height: 1.4;
+  pointer-events: none;
+}
+
+/* Chip surfaces are near-white on the light palettes, so the menu shadow alone
+ * can leave the tip without a visible edge against a white panel. */
+html[data-theme="light"] .app-tooltip,
+html[data-theme="classic"] .app-tooltip {
+  border-color: var(--app-faint);
+}
+
 /* ── Row density ────────────────────────────────────────────────────────────
  * One preference for the watchlist, positions and orders. Unlayered on purpose:
  * it has to beat the per-cell `py-2` and `h-[36px]` utilities, so a dense list
