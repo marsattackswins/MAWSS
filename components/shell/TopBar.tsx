@@ -1143,7 +1143,12 @@ export function TopBar() {
       {/* Vela's native drawing bar (horizontal, top-docked) — one shared bar for the
           active pane, Vela-owned state; the MAWS extras (undo/redo/hide/Clear) ride
           in its row and are all drag-reorderable with the tools. */}
-      <div className="relative z-[2] mx-1 flex min-w-fit flex-1 items-center">
+      {/* The slot asks for no width of its own (flex-basis 0): the bar yields space
+          to the fixed blocks beside it and trims its row into the "More tools"
+          flyout (`fitBarToSlot`), so the header stays on one line. 190px is the
+          width its pinned controls need — below that the header wraps rather than
+          letting the row paint over the icon cluster. */}
+      <div className="relative z-[2] mx-1 flex min-w-[190px] flex-1 items-center">
         <VelaDrawingBar />
       </div>
 

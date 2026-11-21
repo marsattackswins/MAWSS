@@ -552,7 +552,7 @@ function mountAppButtons(root: HTMLElement): void {
  *
  * The `MutationObserver` keeps that up to date — `setDefinition`, a favorites
  * repaint or a theme rebuild all replace the cells, and their labels with them. */
-function useAppTips(root: HTMLElement): () => void {
+function attachAppTips(root: HTMLElement): () => void {
   const stopVelaTips = (event: Event): void => event.stopPropagation();
   const tag = (): void => {
     for (const el of root.querySelectorAll<HTMLElement>("[aria-label]")) {
@@ -568,6 +568,132 @@ function useAppTips(root: HTMLElement): () => void {
   return () => {
     root.removeEventListener("pointerenter", stopVelaTips, true);
     observer.disconnect();
+  };
+}
+
+/** Keys that stay in the row at every width: the app's own controls and modes,
+ *  plus the aggregator the overflow drains into. Everything else — the quick
+ *  tools, the promoted tools and the catalog representatives — is expendable. */
+const PINNED_BAR_KEYS: ReadonlySet<string> = new Set([
+  "app:undo",
+  "app:redo",
+  "app:more",
+  "mode:cursor",
+  "mode:measure",
+  "mode:magnet",
+]);
+/** The bar root's own column gap (`orientHorizontal` sets 2px), and the slack
+ *  that keeps a kept cell from sitting flush against the row's edge. */
+const BAR_GAP_PX = 2;
+const FIT_SLACK_PX = 6;
+
+/**
+ * Collapse the row into the "More tools" flyout when the top bar's slot for it
+ * shrinks (narrow window, big trade block, maximised pane).
+ *
+ * The row is fixed-width chrome in a wrapping header, so before this it kept a
+ * hard 600px floor and pushed whole blocks onto extra header lines. Now the
+ * slot may shrink, and this effect trims the row to what fits: pinned controls
+ * stay, and reading left → right the last cells that no longer fit are hidden —
+ * their tools are already listed in the "more" flyout (its sections are built
+ * from the full catalog), so nothing becomes unreachable. The more button gains
+ * a marker dot and says how many tools it is holding.
+ *
+ * Measured and applied inside one frame: the row is un-hidden, every cell is
+ * read, and the losers are hidden again before the browser paints, so a resize
+ * never flickers. `ResizeObserver` covers the slot; the `MutationObserver`
+ * covers rebuilds (theme, favorites, drag-reorder) that replace the cells.
+ */
+function fitBarToSlot(root: HTMLElement): () => void {
+  const host = root.parentElement; // .vela-dtb-host
+  const slot = host?.parentElement; // the top bar's flex slot
+  if (!host || !slot) return () => {};
+  let frame = 0;
+
+  const apply = (): void => {
+    frame = 0;
+    const cells = [...root.children].filter(
+      (el): el is HTMLElement => el instanceof HTMLElement && el.dataset.dragKey !== undefined,
+    );
+    if (cells.length === 0) return;
+    for (const el of cells) el.removeAttribute("data-fit-hidden");
+    const measured = cells.map((el) => ({
+      el,
+      width: el.offsetWidth,
+      pinned: PINNED_BAR_KEYS.has(el.dataset.dragKey!),
+    }));
+    // The pinned controls sit at the END of the row (the magnet/tool modes and
+    // "more"), so their width is reserved before the expendable cells are
+    // handed what is left — otherwise the row overflows by exactly their size.
+    const pinnedWidth = measured
+      .filter((cell) => cell.pinned)
+      .reduce((sum, cell) => sum + cell.width + BAR_GAP_PX, 0);
+    const roomForTools = slot.clientWidth - FIT_SLACK_PX - pinnedWidth;
+
+    const keep = new Set<HTMLElement>();
+    let used = 0;
+    for (const cell of measured) {
+      if (cell.pinned) {
+        keep.add(cell.el);
+        continue;
+      }
+      const next = used + cell.width + BAR_GAP_PX;
+      if (next > roomForTools) continue;
+      used = next;
+      keep.add(cell.el);
+    }
+
+    // Hide through an attribute, not inline `display`: the stylesheet above
+    // forces `display:inline-flex !important` on every cell/button, which would
+    // beat an inline declaration.
+    let hidden = 0;
+    for (const el of cells) {
+      const hide = !keep.has(el);
+      if (hide) hidden++;
+      if (el.hasAttribute("data-fit-hidden") !== hide) {
+        if (hide) el.setAttribute("data-fit-hidden", "1");
+        else el.removeAttribute("data-fit-hidden");
+      }
+    }
+
+    const more = root.querySelector<HTMLElement>('[data-drag-key="app:more"]');
+    if (more) {
+      const label = hidden > 0 ? `More tools — ${hidden} hidden` : "More tools";
+      if (more.dataset.appTip !== label) {
+        more.dataset.appTip = label;
+        more.setAttribute("aria-label", label);
+      }
+      more.dataset.overflow = hidden > 0 ? "1" : "";
+    }
+  };
+
+  let timer = 0;
+  const run = (): void => {
+    if (frame) cancelAnimationFrame(frame);
+    if (timer) window.clearTimeout(timer);
+    frame = 0;
+    timer = 0;
+    apply();
+  };
+  const schedule = (): void => {
+    if (frame || timer) return;
+    frame = requestAnimationFrame(run);
+    // A hidden tab never delivers rAF (the bar mounts in a background tab, or
+    // the window is minimised): measure from a task as well, so the row is
+    // already trimmed the first time it is shown.
+    timer = window.setTimeout(run, 120);
+  };
+  const ro = new ResizeObserver(schedule);
+  ro.observe(slot);
+  const mo = new MutationObserver(schedule);
+  mo.observe(root, { childList: true });
+  schedule();
+
+  return () => {
+    if (frame) cancelAnimationFrame(frame);
+    if (timer) window.clearTimeout(timer);
+    ro.disconnect();
+    mo.disconnect();
   };
 }
 
@@ -786,6 +912,16 @@ function orientHorizontal(root: HTMLElement, host: HTMLElement): () => void {
 .vela-dtb-host .vela-dtb-cell[data-active='1'] .vela-dtb-icon .vela-dtb-hit{background:transparent !important;}
 /* MAWS extra buttons. */
 .vela-dtb-host .toolbar-btn[data-on='1']{background:transparent !important;color:#fff !important;}
+/* Row cells that did not fit (fitBarToSlot) — !important because the cell rules
+   above force display:inline-flex. */
+.vela-dtb-host .vela-dtb [data-fit-hidden]{display:none !important;}
+/* "More tools" holding row cells that did not fit: a corner marker, so a row
+   that collapsed is visible without hovering. */
+.vela-dtb-host .toolbar-btn[data-overflow='1']{position:relative !important;}
+.vela-dtb-host .toolbar-btn[data-overflow='1']::after{
+  content:'';position:absolute;right:4px;bottom:4px;width:3px;height:3px;
+  border-radius:50%;background:var(--app-accent);
+}
 /* One-shot buttons flash pure white while pressed. */
 .vela-dtb-host .toolbar-btn:active{color:#fff !important;}
 
@@ -1022,10 +1158,11 @@ export function VelaDrawingBar() {
     let disposeReorder: (() => void) | undefined;
     let disposeOrient: (() => void) | undefined;
     let disposeTips: (() => void) | undefined;
+    let disposeFit: (() => void) | undefined;
     if (root) {
       disposeOrient = orientHorizontal(root, host);
       mountAppButtons(root);
-      disposeTips = useAppTips(root);
+      disposeTips = attachAppTips(root);
       favoriteUi = mountFavoriteButtons(root, allMenuTools, directTypes);
       moreUi = mountMoreButton(root, host, moreSections);
       favoriteUiRef.current = favoriteUi;
@@ -1035,8 +1172,10 @@ export function VelaDrawingBar() {
       favoriteUi.setFavorites(favorites);
       moreUi.setFavorites(favorites);
       disposeReorder = enableReorder(root, def);
+      disposeFit = fitBarToSlot(root);
     }
     return () => {
+      disposeFit?.();
       disposeReorder?.();
       favoriteUi?.destroy();
       moreUi?.destroy();
@@ -1055,7 +1194,9 @@ export function VelaDrawingBar() {
   }, []);
 
   return (
-    <div className="relative z-[2] flex shrink-0 items-center">
+    // The bar may be narrower than its content: `fitBarToSlot` hides the cells
+    // that do not fit (their tools stay in the "more" flyout).
+    <div className="relative z-[2] flex min-w-0 flex-1 items-center">
       <div ref={hostRef} className="vela-dtb-host flex" data-vela-drawing-bar />
     </div>
   );
