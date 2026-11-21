@@ -581,11 +581,12 @@ const PINNED_BAR_KEYS: ReadonlySet<string> = new Set([
   "mode:cursor",
   "mode:measure",
   "mode:magnet",
+  "position",
 ]);
 /** The bar root's own column gap (`orientHorizontal` sets 2px), and the slack
  *  that keeps a kept cell from sitting flush against the row's edge. */
 const BAR_GAP_PX = 2;
-const FIT_SLACK_PX = 6;
+const FIT_SLACK_PX = 4;
 
 /**
  * Collapse the row into the "More tools" flyout when the top bar's slot for it
@@ -868,12 +869,14 @@ function orientHorizontal(root: HTMLElement, host: HTMLElement): () => void {
     st.textContent = `
 .vela-dtb-host{position:relative;flex:none;}
 .vela-dtb-host .vela-dtb{overflow:visible !important;align-items:center !important;}
-/* Every button/cell: uniform 28 px tall, centred content, no extra padding. */
+/* Every button/cell: uniform 28 px tall, centred content, no extra padding.
+   26 px wide so the pinned controls (undo, redo, cursor, measure, magnet,
+   position, more) still fit the top bar's narrowest slot. */
 .vela-dtb-host .vela-dtb-btn,
 .vela-dtb-host .vela-dtb-cell{
   width:auto !important;
   height:28px !important;
-  min-width:28px !important;
+  min-width:26px !important;
   padding:0 !important;
   display:inline-flex !important;
   align-items:center !important;
@@ -951,7 +954,7 @@ html[data-theme="classic"] .vela-dtb-host .vela-dtb-cell[data-active='1'] .vela-
 html[data-theme="classic"] .vela-dtb-host .toolbar-btn[data-on='1']{background:var(--app-hover) !important;color:var(--app-text) !important;}
 .vela-dtb-host .toolbar-btn{
   height:28px !important;
-  min-width:28px !important;
+  min-width:26px !important;
   display:inline-flex !important;
   align-items:center !important;
   justify-content:center !important;
