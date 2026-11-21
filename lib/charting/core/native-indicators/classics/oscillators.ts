@@ -1,6 +1,6 @@
 import type { InputSchema, InputValue } from '../../model/inputs';
 import type { LineStyle } from '../../model/series';
-import { INFO, BULLISH, BEARISH, NEUTRAL, WARNING } from '../../palette';
+import { ACCENT, INFO, BULLISH, BEARISH, NEUTRAL, WARNING } from '../../palette';
 import type { ClassicBand, ClassicIndicatorSpec, ClassicLevel, ClassicOutput, ClassicPlot } from './define';
 import { bool, num, str } from './define';
 import { higherTimeframe } from './htf';
@@ -137,17 +137,20 @@ function styleRow(opts: {
     style?: string;
     styleDefval?: string;
     level?: { key: string; defval: number; tooltip: string };
+    /** Section heading the row nests under (`inline=` only pairs rows within one group). */
+    group?: string;
 }): InputSchema[] {
     const inline = opts.row;
+    const section = opts.group != null ? { group: opts.group } : {};
     const decls: InputSchema[] = [
-        { key: opts.show, title: opts.label, type: 'bool', defval: true, tab: STYLE_TAB, inline },
-        { key: opts.color, title: '', type: 'color', defval: opts.colorDefval, tab: STYLE_TAB, inline },
+        { key: opts.show, title: opts.label, type: 'bool', defval: true, tab: STYLE_TAB, inline, ...section },
+        { key: opts.color, title: '', type: 'color', defval: opts.colorDefval, tab: STYLE_TAB, inline, ...section },
     ];
     if (opts.style) {
-        decls.push({ key: opts.style, title: '', type: 'string', defval: opts.styleDefval ?? 'Solid', options: LINE_STYLES, tab: STYLE_TAB, inline });
+        decls.push({ key: opts.style, title: '', type: 'string', defval: opts.styleDefval ?? 'Solid', options: LINE_STYLES, tab: STYLE_TAB, inline, ...section });
     }
     if (opts.level) {
-        decls.push({ key: opts.level.key, title: '', type: 'float', defval: opts.level.defval, min: 0, max: 100, step: 1, tab: STYLE_TAB, inline, tooltip: opts.level.tooltip });
+        decls.push({ key: opts.level.key, title: '', type: 'float', defval: opts.level.defval, min: 0, max: 100, step: 1, tab: STYLE_TAB, inline, tooltip: opts.level.tooltip, ...section });
     }
     return decls;
 }
@@ -260,6 +263,156 @@ const stochastic: ClassicIndicatorSpec = {
         const d = sma(k, num(inputs, 'dLength', 3));
         const project = htf ? htf.project : (values: readonly number[]) => [...values];
         return stochasticPlots(project(k), project(d), inputs);
+    },
+};
+
+// ── Stochastic x 3 — three stochastic sets in one pane ───────────────────────
+// LOCAL (MAWS): one study carrying three %K/%D pairs (fast / base / slow) over a
+// shared band, so the three readings are compared without stacking three studies.
+// The maths are the plain Stochastic's: %K = SMA(stoch(close, high, low, len),
+// %K smoothing), %D = SMA(%K, %D smoothing). See lib/charting/README.md.
+
+type StochX3Set = {
+    key: string;
+    title: string;
+    length: number;
+    kSmoothing: number;
+    dSmoothing: number;
+    kColor: string;
+    dColor: string;
+};
+
+const STOCH_X3_SETS: readonly StochX3Set[] = [
+    { key: 'fast', title: 'Fast', length: 5, kSmoothing: 3, dSmoothing: 3, kColor: INFO, dColor: WARNING },
+    { key: 'base', title: 'Base', length: 14, kSmoothing: 3, dSmoothing: 3, kColor: BULLISH, dColor: BEARISH },
+    { key: 'slow', title: 'Slow', length: 21, kSmoothing: 3, dSmoothing: 3, kColor: ACCENT, dColor: NEUTRAL },
+];
+
+/** One set's three calculation inputs, each section under its set's heading on the
+ *  Inputs tab (kept out of the legend name: nine numbers would swamp the chip). */
+function stochX3Inputs(): InputSchema[] {
+    return STOCH_X3_SETS.flatMap((set) => [
+        {
+            ...lengthInput(set.length, `kLength_${set.key}`, '%K Length', 5000, `Number of bars used for the highest high / lowest low range of the ${set.title.toLowerCase()} stochastic.`),
+            group: set.title,
+            legend: false,
+        },
+        { ...lengthInput(set.kSmoothing, `kSmoothing_${set.key}`, '%K Smoothing', 500, `Simple moving average length applied to the raw ${set.title.toLowerCase()} %K.`), group: set.title, legend: false },
+        { ...lengthInput(set.dSmoothing, `dLength_${set.key}`, '%D Smoothing', 500, `Simple moving average length of the ${set.title.toLowerCase()} %D signal line.`), group: set.title, legend: false },
+    ]);
+}
+
+/** Six lines over the shared band, each behind its own Style-tab row; the band levels
+ *  are the Stochastic's own — editable, switchable, and drawn in their row's ink. */
+function stochX3Output(
+    series: ReadonlyArray<{ set: StochX3Set; k: number[]; d: number[] }>,
+    inputs: Record<string, InputValue>,
+): ClassicOutput {
+    const overbought = num(inputs, 'overbought', 80);
+    const oversold = num(inputs, 'oversold', 20);
+    const length = series[0]?.k.length ?? 0;
+    const plots: ClassicPlot[] = [];
+    for (const { set, k, d } of series) {
+        plots.push({
+            key: `k_${set.key}`,
+            title: `%K ${set.title}`,
+            values: k,
+            color: str(inputs, `kColor_${set.key}`, set.kColor),
+            lineStyle: lineStyleOf(inputs, `kStyle_${set.key}`, 'solid'),
+            display: { pane: bool(inputs, `kVisible_${set.key}`, true) },
+        });
+        plots.push({
+            key: `d_${set.key}`,
+            title: `%D ${set.title}`,
+            values: d,
+            color: str(inputs, `dColor_${set.key}`, set.dColor),
+            lineStyle: lineStyleOf(inputs, `dStyle_${set.key}`, 'solid'),
+            display: { pane: bool(inputs, `dVisible_${set.key}`, true) },
+        });
+    }
+    plots.push(anchorPlot('obAnchor', 'Upper Band Anchor', length, overbought));
+    plots.push(anchorPlot('osAnchor', 'Lower Band Anchor', length, oversold));
+    return {
+        plots,
+        bands: bool(inputs, 'backgroundVisible', true)
+            ? [{ key: 'background', from: 'obAnchor', to: 'osAnchor', color: str(inputs, 'fillColor', transp(INFO, 90)) }]
+            : [],
+        levels: stochBandLevels(inputs),
+    };
+}
+
+const stochasticX3: ClassicIndicatorSpec = {
+    type: 'stochastic-x-3',
+    title: 'Stochastic x 3',
+    shortTitle: 'Stochastic x 3',
+    overlay: false,
+    inputs: [
+        // Inputs tab — the three calculation sections, then the shared calculation block.
+        ...stochX3Inputs(),
+        {
+            key: 'timeframe',
+            title: 'Timeframe',
+            type: 'timeframe',
+            defval: '',
+            group: CALCULATION,
+            tooltip: 'Candle interval the study calculates on; Chart keeps the chart\u2019s own timeframe.',
+        },
+        {
+            key: 'waitForTimeframeCloses',
+            title: 'Wait for timeframe closes',
+            type: 'bool',
+            defval: false,
+            group: CALCULATION,
+            tooltip: 'On a higher timeframe, hold the previous value until that interval\u2019s candle closes instead of following the forming one.',
+        },
+        // Style tab — one row per line under its set's heading, then the shared band.
+        ...STOCH_X3_SETS.flatMap((set) => [
+            ...styleRow({
+                row: `k_${set.key}`,
+                group: set.title,
+                label: '%K',
+                show: `kVisible_${set.key}`,
+                color: `kColor_${set.key}`,
+                colorDefval: set.kColor,
+                style: `kStyle_${set.key}`,
+            }),
+            ...styleRow({
+                row: `d_${set.key}`,
+                group: set.title,
+                label: '%D',
+                show: `dVisible_${set.key}`,
+                color: `dColor_${set.key}`,
+                colorDefval: set.dColor,
+                style: `dStyle_${set.key}`,
+            }),
+        ]),
+        ...STOCH_BANDS.flatMap((band) =>
+            styleRow({
+                row: band.show,
+                label: band.title,
+                show: band.show,
+                color: band.color,
+                colorDefval: NEUTRAL,
+                style: band.style,
+                styleDefval: band.lineStyle,
+                level: { key: band.level, defval: band.defval, tooltip: 'Level of the ' + band.title.toLowerCase() + '.' },
+            }),
+        ),
+        ...styleRow({ row: 'bg', label: 'Background', show: 'backgroundVisible', color: 'fillColor', colorDefval: transp(INFO, 90) }),
+    ],
+    compute: (bars, inputs) => {
+        const htf = higherTimeframe(bars, str(inputs, 'timeframe', ''), bool(inputs, 'waitForTimeframeCloses', false));
+        const source = htf ? htf.bars : bars;
+        const close = closes(source);
+        const high = highs(source);
+        const low = lows(source);
+        const project = htf ? htf.project : (values: readonly number[]) => [...values];
+        const series = STOCH_X3_SETS.map((set) => {
+            const k = sma(stoch(close, high, low, num(inputs, `kLength_${set.key}`, set.length)), num(inputs, `kSmoothing_${set.key}`, set.kSmoothing));
+            const d = sma(k, num(inputs, `dLength_${set.key}`, set.dSmoothing));
+            return { set, k: project(k), d: project(d) };
+        });
+        return stochX3Output(series, inputs);
     },
 };
 
@@ -1191,6 +1344,7 @@ const ttmSqueeze: ClassicIndicatorSpec = {
 export const oscillatorSpecs: ClassicIndicatorSpec[] = [
     rsiSpec,
     stochastic,
+    stochasticX3,
     stochasticRsi,
     macd,
     ppo,

@@ -64,6 +64,7 @@ export const VELA_INDICATOR_CATALOG: VelaCatalogEntry[] = [
   // Oscillators (vela classics/oscillators.ts)
   { type: "rsi", title: "Relative Strength Index", category: "Oscillators" },
   { type: "stochastic", title: "Stochastic", category: "Oscillators" },
+  { type: "stochastic-x-3", title: "Stochastic x 3", category: "Oscillators" },
   { type: "stochastic-rsi", title: "Stochastic RSI", category: "Oscillators" },
   { type: "macd", title: "MACD", category: "Oscillators" },
   { type: "ppo", title: "Percentage Price Oscillator", category: "Oscillators" },

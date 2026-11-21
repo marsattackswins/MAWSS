@@ -11,6 +11,17 @@ Layout is upstream's `src/` flattened into this folder (`Vela.ts`, `core/`,
 
 Local changes on top of upstream v0.8.1:
 
+- **Stochastic x 3 joins the catalog.** A momentum study that overlays three
+  stochastic sets — fast 5/3/3, base 14/3/3, slow 21/3/3 — as six %K/%D lines
+  over one shared 80/50/20 band, so a fast cross reads against the base and slow
+  readings without stacking three studies. The maths are the plain Stochastic's
+  (`sma(stoch(close, high, low, len), %K smoothing)`, then `sma(%K, %D smoothing)`);
+  each set keeps its own lengths, %K/%D inks and a `%D` switch, and its calculation
+  inputs stay out of the legend name so the chip reads `Stochastic x 3`. Declared
+  as `stochastic-x-3` in `core/native-indicators/classics/oscillators.ts`, listed
+  in `../vela-indicator-catalog.ts`, short title in
+  `test/classic-indicators.test.ts`.
+
 - **Loading affordance names the load.** While a bar load is in flight with
   nothing painted, the chart shows a seven-candle mark — wicks plus hollow/filled
   bodies, each at its own level — with a `Loading SYMBOL ·

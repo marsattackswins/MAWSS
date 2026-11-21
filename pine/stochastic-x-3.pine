@@ -1,0 +1,70 @@
+//@version=5
+// Stochastic x 3 — three stochastics in one pane.
+//
+// The maths match the app's Stochastic study (lib/charting Classics):
+//   raw %K = stoch(close, high, low, length)      → highest high / lowest low range
+//   %K     = SMA(raw %K, %K smoothing)
+//   %D     = SMA(%K, %D smoothing)
+// Three independent sets (fast / base / slow) share one set of band levels, so the
+// three readings can be compared on the same 0–100 scale.
+indicator("Stochastic x 3", shorttitle = "Stoch x 3", overlay = false, precision = 2)
+
+// ── Inputs ──────────────────────────────────────────────────────────────────
+grpFast = "Fast stochastic"
+grpBase = "Base stochastic"
+grpSlow = "Slow stochastic"
+grpBand = "Bands & style"
+
+lenF  = input.int(5,  "Length",        minval = 1, maxval = 5000, group = grpFast, inline = "fast")
+kSmF  = input.int(3,  "%K smoothing", minval = 1, maxval = 500,  group = grpFast, inline = "fast")
+dSmF  = input.int(3,  "%D smoothing", minval = 1, maxval = 500,  group = grpFast, inline = "fast")
+colKF = input.color(#2962ff, "%K", group = grpFast, inline = "fastStyle")
+colDF = input.color(#f7931a, "%D", group = grpFast, inline = "fastStyle")
+showDF = input.bool(true, "Show %D", group = grpFast)
+
+lenB  = input.int(14, "Length",        minval = 1, maxval = 5000, group = grpBase, inline = "base")
+kSmB  = input.int(3,  "%K smoothing", minval = 1, maxval = 500,  group = grpBase, inline = "base")
+dSmB  = input.int(3,  "%D smoothing", minval = 1, maxval = 500,  group = grpBase, inline = "base")
+colKB = input.color(#089981, "%K", group = grpBase, inline = "baseStyle")
+colDB = input.color(#f23645, "%D", group = grpBase, inline = "baseStyle")
+showDB = input.bool(true, "Show %D", group = grpBase)
+
+lenS  = input.int(21, "Length",        minval = 1, maxval = 5000, group = grpSlow, inline = "slow")
+kSmS  = input.int(3,  "%K smoothing", minval = 1, maxval = 500,  group = grpSlow, inline = "slow")
+dSmS  = input.int(3,  "%D smoothing", minval = 1, maxval = 500,  group = grpSlow, inline = "slow")
+colKS = input.color(#9c27b0, "%K", group = grpSlow, inline = "slowStyle")
+colDS = input.color(#787b86, "%D", group = grpSlow, inline = "slowStyle")
+showDS = input.bool(true, "Show %D", group = grpSlow)
+
+obLevel   = input.float(80, "Overbought", minval = 0, maxval = 100, group = grpBand, inline = "levels")
+osLevel   = input.float(20, "Oversold",   minval = 0, maxval = 100, group = grpBand, inline = "levels")
+midLevel  = input.float(50, "Middle",     minval = 0, maxval = 100, group = grpBand, inline = "levels")
+showBands = input.bool(true, "Show levels", group = grpBand)
+showFill  = input.bool(true, "Shade overbought/oversold", group = grpBand)
+colLevel  = input.color(#787b86, "Level color", group = grpBand, inline = "bandStyle")
+colFill   = input.color(color.new(#2962ff, 92), "Band fill", group = grpBand, inline = "bandStyle")
+
+// ── Calculation ─────────────────────────────────────────────────────────────
+stochSeries(int kLen, int kSmooth, int dSmooth) =>
+    rawK = ta.stoch(close, high, low, kLen)
+    k = ta.sma(rawK, kSmooth)
+    d = ta.sma(k, dSmooth)
+    [k, d]
+
+[kFast, dFast] = stochSeries(lenF, kSmF, dSmF)
+[kBase, dBase] = stochSeries(lenB, kSmB, dSmB)
+[kSlow, dSlow] = stochSeries(lenS, kSmS, dSmS)
+
+// ── Bands first, so the stochastics draw over them ──────────────────────────
+pOverbought = plot(showBands ? obLevel : na, "Overbought", color = colLevel, linewidth = 1)
+pOversold   = plot(showBands ? osLevel : na, "Oversold",   color = colLevel, linewidth = 1)
+plot(showBands ? midLevel : na, "Middle", color = colLevel, linewidth = 1, style = plot.style_dotted)
+fill(pOverbought, pOversold, color = showFill ? colFill : color.new(colLevel, 100))
+
+// ── The three stochastics ───────────────────────────────────────────────────
+plot(kFast, "%K fast", color = colKF, linewidth = 1)
+plot(showDF ? dFast : na, "%D fast", color = colDF, linewidth = 1)
+plot(kBase, "%K base", color = colKB, linewidth = 1)
+plot(showDB ? dBase : na, "%D base", color = colDB, linewidth = 1)
+plot(kSlow, "%K slow", color = colKS, linewidth = 1)
+plot(showDS ? dSlow : na, "%D slow", color = colDS, linewidth = 1)

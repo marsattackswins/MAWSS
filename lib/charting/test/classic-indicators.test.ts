@@ -170,6 +170,7 @@ describe('classic catalog registration', () => {
             'smi-ergodic': 'SMIE',
             'standard-deviation': 'StdDev',
             stochastic: 'Stoch',
+            'stochastic-x-3': 'Stochastic x 3',
             'stochastic-rsi': 'Stoch RSI',
             supertrend: 'SuperTrend',
             trix: 'TRIX',
