@@ -31,6 +31,9 @@ const eslintConfig = defineConfig([
     // Absorbed charting engine (LuxAlgo vela, Apache-2.0) — keeps its own
     // conventions and vitest suite; the app's lint rules don't apply.
     "lib/charting/**",
+    // Committed third-party Trade Journal app (MIT) with its own config and
+    // pnpm workspace; linted by its own toolchain, not this one.
+    "vendor/**",
   ]),
 ]);
 

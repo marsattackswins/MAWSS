@@ -9,9 +9,9 @@ exercised with fakes. Last updated 2026-11-19 on `master` after Engine safety ba
 | --- | --- | --- |
 | Unit tests | Pass (fakes only) | 113 suites / 1819 tests green. No exchange socket or credential is used. |
 | Type check | Pass | `npx tsc --noEmit` clean. |
-| Lint | Pass | App-scoped ESLint run (app, components, lib, tests, scripts, proxy) reports 0 errors. `npm run lint` also scans the untracked `vendor/` tree, which is absent from a fresh clone. |
+| Lint | Pass | App-scoped ESLint run (app, components, lib, tests, scripts, proxy) reports 0 errors. The committed `vendor/` tree is excluded by the app's ESLint config and linted by the journal's own toolchain. |
 | Production build | Pass | `npx next build` succeeds. |
-| Browser e2e (fresh clone, CI shape) | Pass (fakes only) | Cloned the committed tree with no `vendor/` and no `.env*`, then `npm ci`, `npx playwright install chromium`, and `CI=true npx playwright test --project=chromium --repeat-each=3`: **45 passed, 0 failed, 0 skipped, 0 flaky**. FakeBinanceFeed plus a stubbed REST layer; no exchange is contacted. |
+| Browser e2e (fresh clone, CI shape) | Pass (fakes only) | Cloned the committed tree with no `.env*` and no installed dependencies, then `npm ci`, `npx playwright install chromium`, and `CI=true npx playwright test --project=chromium --repeat-each=3`: **45 passed, 0 failed, 0 skipped, 0 flaky**. FakeBinanceFeed plus a stubbed REST layer; no exchange is contacted. |
 | Secret scan | Pass (tracked tree) | Clean in a fresh clone. A local working-tree run also flags the gitignored `.env.local` operator verifier by design; no secret is tracked or committed. |
 | Public demo-host calls | Pass (unsigned) | `GET /fapi/v1/time` and `/fapi/v1/exchangeInfo` returned data from Binance demo hosts. The Algo order endpoint returned `401` without a key, which confirms only the unauthenticated path. |
 

@@ -18,8 +18,9 @@ const nextConfig: NextConfig = {
     incomingRequests: false,
   },
   // Same-origin proxy for the vendored LuxAlgo Trade Journal (vendor/trade-journal,
-  // built+started separately with `npm run journal:build` && `npm run journal` on
-  // port 3400, basePath "/journal"). Keeping it under the MAWS origin makes it an
+  // committed source whose dependencies `npm run journal:setup` installs; the dev
+  // launcher also does that automatically on a fresh clone). It is built and served
+  // on port 3400, basePath "/journal". Keeping it under the MAWS origin makes it an
   // internal page — same-origin iframe in the JournalOverlay, no cross-port issues.
   async rewrites() {
     const journalUpstream = process.env.MAWS_JOURNAL_UPSTREAM ?? "http://127.0.0.1:3400";

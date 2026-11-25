@@ -59,8 +59,9 @@ testnet-verification-report.md
 /MAWS/
 screenshots/
 
-# vendored third-party apps (LuxAlgo trade-journal checkout)
-/vendor/
+# No /vendor/ rule: the LuxAlgo trade-journal source under vendor/trade-journal
+# (MIT) is committed. Its own .gitignore keeps node_modules, .next, its trade
+# database and env files out.
 
 # agent/cloud attachment staging
 /.cloud-attachments/

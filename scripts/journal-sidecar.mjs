@@ -6,14 +6,16 @@
 // connection into an "Internal Server Error" on the journal button — so the
 // sidecar needs an owner, not a manual `npm run journal` step that never comes
 // back after a restart. Both entry points call into here and own it identically:
-// reuse an instance that is already up, otherwise start it (one-time build on a
-// fresh checkout) and respawn it if it dies, then stop it when the launcher
-// itself exits so an old sidecar never strands the port.
+// install the journal's dependencies on a fresh clone (its node_modules is not
+// committed), reuse an instance that is already up, otherwise start it (with a
+// one-time build when nothing is built) and respawn it if it dies, then stop it
+// when the launcher itself exits so an old sidecar never strands the port.
 
 import { exec, spawn } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { platform } from "node:os";
+import { buildJournal, ensureJournalDependencies, journalPaths } from "./journal-setup.mjs";
 
 export const JOURNAL_PORT = 3400;
 
@@ -30,14 +32,7 @@ let stopping = false;
 let respawns = 0;
 
 function sidecarPaths(root) {
-  const dir = path.join(root, "vendor", "trade-journal", "apps", "web");
-  const nextBin = path.join(dir, "node_modules", "next", "dist", "bin", "next");
-  return {
-    dir,
-    nextBin,
-    buildId: path.join(dir, ".next", "BUILD_ID"),
-    logFile: path.join(root, ".next", "journal.log"),
-  };
+  return { ...journalPaths(root), logFile: path.join(root, ".next", "journal.log") };
 }
 
 export async function journalReady() {
@@ -80,6 +75,12 @@ function spawnServer({ root, log, error }) {
   child.stderr.pipe(stream);
   proc = child;
 
+  child.on("error", (err) => {
+    proc = null;
+    stream.end();
+    error(`[journal] could not start the server: ${err.message}`);
+  });
+
   child.on("exit", (code, signal) => {
     proc = null;
     stream.end();
@@ -110,15 +111,22 @@ export function ensureJournalSidecar({ root = process.cwd(), log = () => {}, err
       log(`[journal] reusing the already-running Trade Journal on :${JOURNAL_PORT}.`);
       return;
     }
-    const { dir, nextBin, buildId, logFile } = sidecarPaths(root);
-    // A missing production build only happens on a fresh checkout: `next start`
+    const { logFile } = sidecarPaths(root);
+    // The journal's source is committed, but its dependencies are not: install
+    // them from the committed lockfile before anything else.
+    try {
+      await ensureJournalDependencies({ root, log: (message) => log(`[journal] ${message}`) });
+    } catch (err) {
+      error(`[journal] setup failed: ${err.message}`);
+      return;
+    }
+    // A missing production build only happens on a fresh clone: `next start`
     // needs one. Build once (slow), then start.
-    if (!fs.existsSync(buildId)) {
-      log("[journal] no build found — running a one-time journal build (this can take a minute)…");
-      await new Promise((resolve) => {
-        const build = spawn(process.execPath, [nextBin, "build"], { cwd: dir, stdio: "inherit" });
-        build.on("exit", resolve);
-      });
+    try {
+      await buildJournal({ root, log: (message) => log(`[journal] ${message}`) });
+    } catch (err) {
+      error(`[journal] ${err.message} — check ${logFile}`);
+      return;
     }
     spawnServer({ root, log, error });
     const deadline = Date.now() + READY_TIMEOUT_MS;

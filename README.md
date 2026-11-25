@@ -72,6 +72,35 @@ For retired configuration, follow the explicit [migration steps](docs/OPERATIONS
 
 The browser stores workspace preferences in origin-scoped local storage. Server-side trading and audit data uses SQLite at `.maws/maws.db` by default. Keep both local working data and `.env.local` out of source control.
 
+### Trade journal (`/journal`)
+
+`/journal` is a second, separately built Next app: the LuxAlgo Trade Journal (MIT),
+whose source is committed under `vendor/trade-journal` from upstream commit
+`834e7b6` and proxied same-origin to `http://127.0.0.1:3400` (see `next.config.ts`).
+Only its source is committed — its `node_modules`, `.next` build output and trade
+database stay out of Git. The committed copy is upstream plus this integration's own
+changes (the `/journal` base path, the MAWS mark, and the upstream prop-firm pages
+removed), so it is not byte-identical to upstream `834e7b6`.
+
+`npm run dev` makes it runnable automatically the first time: it installs the
+journal's workspace dependencies with pnpm and runs its production build once (a few
+minutes on a fresh machine). The work lives in `scripts/journal-setup.mjs` and can
+also be run on its own:
+
+```bash
+npm run journal:setup
+```
+
+Setup needs network access and Node.js 22 or newer (the journal's own engine
+requirement); Git is not needed. pnpm is used when it is installed; otherwise the
+setup falls back to `npx pnpm@11.0.8`. After setup, the dev launcher and the
+supervisor keep the sidecar running for their own lifetime and restart it if it dies.
+
+The journal needs no environment variables — its `.env.example` lists the optional ones
+(password, broker-credential encryption key, AI keys, data directory). To use a journal
+that runs somewhere else instead of the local sidecar, set `MAWS_JOURNAL_UPSTREAM`; no
+local copy is started then.
+
 ## Configure a server-managed Binance runtime
 
 For an exchange-connected environment, set `MAWS_ENV=testnet` or `MAWS_ENV=production` and configure the matching profile's API key and secret in the server environment. Set `MAWS_OPERATOR_AUTH` to the generated scrypt credential; the plain password is entered at login and is not stored in the environment file.
